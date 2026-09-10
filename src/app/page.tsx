@@ -58,12 +58,8 @@ function parsePeriod(value: string | undefined): FeedFilters["period"] {
   return value === "today" || value === "all" || value === "week" ? value : "week";
 }
 
-/** Blok başlığında dönemin adı geçsin diye; sayı hangi aralığa ait, belli olsun. */
-const DONEM_ETIKETLERI: Record<"today" | "week" | "all", string> = {
-  today: "Bugün",
-  week: "Bu hafta",
-  all: "Tüm zamanlarda",
-};
+import { getTranslations } from "@/server/i18n/server";
+import type { TranslateFunction } from "@/shared/i18n";
 
 /** Ana ekrandaki önizlemede kaç kayıt gösterilir. */
 const ONIZLEME = 5;
@@ -71,12 +67,12 @@ const ONIZLEME = 5;
 /** Grafik kaç günü gösteriyor. İki hafta, iki hafta sonu demek. */
 const TREND_GUN = 14;
 
-function selamlama(now: Date): string {
+function selamlama(now: Date, t: TranslateFunction): string {
   const saat = companyHour(now);
 
-  if (saat < 12) return "Günaydın";
-  if (saat < 18) return "İyi günler";
-  return "İyi akşamlar";
+  if (saat < 12) return t("dashboard.greetingMorning");
+  if (saat < 18) return t("dashboard.greetingAfternoon");
+  return t("dashboard.greetingEvening");
 }
 
 export default async function DashboardPage({
@@ -86,6 +82,8 @@ export default async function DashboardPage({
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const t = await getTranslations();
 
   const params = await searchParams;
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
@@ -168,22 +166,28 @@ export default async function DashboardPage({
   // şeyin eksikliği hatırlatılmaz.
   const faaliyetYazar = user.writesActivities;
 
+  const periodLabels: Record<"today" | "week" | "all", string> = {
+    today: t("dashboard.periodToday"),
+    week: t("dashboard.periodWeek"),
+    all: t("dashboard.periodAll"),
+  };
+
   const akisAdresi = `/feed?${new URLSearchParams({ period: donem }).toString()}`;
 
   return (
     <AppShell user={shellUser}>
       <Page isaret="ana-ekran">
         <PageHeader
-          marker="Bugün"
-          title={`${selamlama(now)}, ${user.fullName}`}
+          marker={t("nav.today")}
+          title={`${selamlama(now, t)}, ${user.fullName}`}
           description={
             [
               !faaliyetYazar
                 ? null
                 : todayCount === 0
-                  ? "Bugün henüz faaliyet girmediniz."
-                  : `Bugün ${todayCount} faaliyet girdiniz.`,
-              bekleyen > 0 ? `${bekleyen} iş sizi bekliyor.` : null,
+                  ? t("dashboard.noActivityToday")
+                  : t("dashboard.youWroteCount", { count: todayCount }),
+              bekleyen > 0 ? t("dashboard.pendingTasksCount", { count: bekleyen }) : null,
             ]
               .filter(Boolean)
               .join(" ") || undefined
@@ -207,19 +211,19 @@ export default async function DashboardPage({
         >
           <div className="flex items-end justify-between gap-4 border-b border-line pb-3">
             <div>
-              <span className="section-label">KİŞİSEL ÖZET</span>
+              <span className="section-label">{t("dashboard.personalSummary")}</span>
               <h2 id="benim-durumum" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
-                Benim durumum
+                {t("dashboard.myStatus")}
               </h2>
             </div>
             <p className="max-w-sm text-right text-[length:var(--text-sm)] text-muted">
-              Yalnızca sizin faaliyetleriniz.
+              {t("dashboard.onlyYourActivities")}
             </p>
           </div>
 
           <MetricStrip
             metrics={personalMetrics}
-            donemEtiketi={DONEM_ETIKETLERI[donem]}
+            donemEtiketi={periodLabels[donem]}
             period={donem}
             onaylayici={false}
             headingId="kisisel-olcum-basligi"
@@ -243,21 +247,21 @@ export default async function DashboardPage({
           >
             <div className="flex items-end justify-between gap-4 border-b border-line pb-3">
               <div>
-                <span className="section-label">YÖNETİLEN ALAN</span>
+                <span className="section-label">{t("dashboard.managedArea")}</span>
                 <h2 id="yonettigim-alan" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
-                  Yönettiğim alan
+                  {t("dashboard.myManagedArea")}
                 </h2>
               </div>
               <p className="max-w-sm text-right text-[length:var(--text-sm)] text-muted">
-                Bağlı olduğunuz birim ve alt birimlerin toplamı.
+                {t("dashboard.subordinatesAggregate")}
               </p>
             </div>
 
             <MetricStrip
               metrics={managedMetrics}
-              donemEtiketi={DONEM_ETIKETLERI[donem]}
+              donemEtiketi={periodLabels[donem]}
               period={donem}
-            onaylayici={user.isUnitManager}
+              onaylayici={user.isUnitManager}
               headingId="yonetilen-olcum-basligi"
             />
 
@@ -277,7 +281,7 @@ export default async function DashboardPage({
                 departments={departmentRows}
                 statuses={statuses}
                 period={donem}
-                donemEtiketi={DONEM_ETIKETLERI[donem]}
+                donemEtiketi={periodLabels[donem]}
               />
             ) : null}
 
@@ -292,8 +296,8 @@ export default async function DashboardPage({
               >
                 {onizleme.items.length === 0 ? (
                   <EmptyState
-                    title="Bu aralıkta kayıt yok."
-                    description="Dönemi genişletmeyi deneyin ya da akış sayfasından süzgeçleri değiştirin."
+                    title={t("dashboard.noActivitiesInRange")}
+                    description={t("dashboard.tryExpandingPeriod")}
                   />
                 ) : (
                   <ul className="divide-y divide-line">
@@ -317,15 +321,13 @@ export default async function DashboardPage({
             className="flex flex-col gap-(--spacing-block)"
           >
             <div className="border-b border-line pb-3">
-              <span className="section-label">YÖNETİLEN ALAN</span>
+              <span className="section-label">{t("dashboard.managedArea")}</span>
               <h2 id="yonettigim-alan" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
-                Yönettiğim alan
+                {t("dashboard.myManagedArea")}
               </h2>
             </div>
             <p className="prose-measure text-[length:var(--text-sm)] leading-[var(--leading-normal)] text-muted">
-              Bu ekranda kendi kayıtlarınızı görürsünüz. Başkalarının
-              faaliyetleri, yalnızca organizasyonda sizin altınızda kalan
-              kişilere aitse görünür.
+              {t("dashboard.noScopeDescription")}
             </p>
           </section>
         )}

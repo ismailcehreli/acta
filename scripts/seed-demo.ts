@@ -9,9 +9,9 @@ import { DEMO_DEFAULT_PASSWORD, installDemoData } from "@/server/demo/data";
 // yazılması, ikisinin zamanla ayrışması demek olurdu.
 
 async function main(): Promise<void> {
-  if (process.env.NODE_ENV === "production" && process.env.DEMO_FORCE !== "evet") {
+  if (process.env.NODE_ENV === "production" && process.env.DEMO_FORCE !== "yes" && process.env.DEMO_FORCE !== "evet") {
     console.log(
-      "[örnek veri] NODE_ENV=production: kurulmadı. Bilerek istiyorsanız DEMO_FORCE=evet verin.",
+      "[demo data] NODE_ENV=production: aborted. Set DEMO_FORCE=yes to force run.",
     );
     process.exitCode = 1;
     return;
@@ -23,22 +23,22 @@ async function main(): Promise<void> {
   try {
     const sonuc = await installDemoData(db, {
       password: parola,
-      onLog: (satir) => console.log(`[örnek veri] ${satir}`),
+      onLog: (satir) => console.log(`[demo data] ${satir}`),
     });
 
     if (!sonuc.ok) {
-      console.log("[örnek veri] Kök birim yok. Önce `pnpm kurulum` çalıştırın.");
+      console.log("[demo data] Root organizational unit missing. Run `pnpm setup` or `pnpm kurulum` first.");
       process.exitCode = 1;
       return;
     }
 
     console.log("");
-    console.log(`  Örnek kullanıcıların parolası: ${parola}`);
-    console.log("  Örnek giriş: emre.aslan@ornek.test (Genel Müdür — tüm şirketi görür)");
-    console.log("               fatma.kaliphane@ornek.test (Kalıphane Müdürü — kendi birimi)");
-    console.log("               yasin.meral@ornek.test (Sistem yöneticisi + Bilgi İşlem yöneticisi)");
-    console.log("               yigit.kaliphane@ornek.test (çalışan — yalnız kendi kayıtları)");
-    console.log("               yonetim.kurulu@ornek.test (takdir verebilen yönetici)");
+    console.log(`  Demo users password: ${parola}`);
+    console.log("  Sample logins: oguzhan.celik@ornek.test (General Manager — sees company-wide)");
+    console.log("                 ayse.kaliphane@ornek.test (Tooling Manager — department scope)");
+    console.log("                 okan.bozkurt@ornek.test (System Admin + IT Lead)");
+    console.log("                 onur.kaliphane@ornek.test (Team Member — individual activities)");
+    console.log("                 yonetim.kurulu@ornek.test (Board Member — executive appreciation)");
     console.log("");
   } finally {
     await db.$disconnect();

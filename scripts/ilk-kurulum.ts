@@ -19,12 +19,12 @@ import { createUser } from "@/server/users/create";
 // Parola argüman olarak alınmaz: komut satırı geçmişine ve süreç listesine
 // düşerdi.
 
-const EMAIL = process.env.ADMIN_EMAIL ?? "yonetici@ornek.test";
-const FULL_NAME = process.env.ADMIN_NAME ?? "Sistem Yöneticisi";
-const ROOT_NAME = process.env.ROOT_UNIT_NAME ?? "Şirket";
+const EMAIL = process.env.ADMIN_EMAIL ?? "admin@example.test";
+const FULL_NAME = process.env.ADMIN_NAME ?? "System Administrator";
+const ROOT_NAME = process.env.ROOT_UNIT_NAME ?? "Acme Corp";
 
 function log(message: string): void {
-  console.log(`[kurulum] ${message}`);
+  console.log(`[setup] ${message}`);
 }
 
 async function main(): Promise<void> {
@@ -37,36 +37,34 @@ async function main(): Promise<void> {
     });
 
     if (mevcutYonetici) {
-      log(`Zaten bir sistem yöneticisi var: ${mevcutYonetici.email}`);
-      log("Yeni hesap açmak için o hesapla /admin/users ekranını kullanın.");
+      log(`A system administrator already exists: ${mevcutYonetici.email}`);
+      log("Use that account to manage users via /admin/users.");
       return;
     }
 
     let root = await db.orgUnit.findFirst({ where: { parentId: null } });
 
     if (root) {
-      log(`Kök birim zaten var: "${root.name}"`);
+      log(`Root unit already exists: "${root.name}"`);
     } else {
       const olusan = await createOrgUnit(db, {
         name: ROOT_NAME,
-        type: "Kök",
+        type: "Root",
         parentId: null,
         sortOrder: 0,
-        // Sürüm 1'de yöneticiler onaya tabi değildir (§18.1); onay akışı
-        // Sürüm 2'dedir.
         requiresApproval: false,
         autoFlowsUp: true,
         attentionGroupId: null,
       });
 
       if (!olusan.ok) {
-        log(`Kök birim açılamadı: ${olusan.message}`);
+        log(`Failed to create root unit: ${olusan.message}`);
         process.exitCode = 1;
         return;
       }
 
       root = olusan.value;
-      log(`Kök birim açıldı: "${root.name}"`);
+      log(`Root unit created: "${root.name}"`);
     }
 
     // Parola verilmediyse üretilir. Üretilen parola **yalnız burada** görünür;
@@ -94,17 +92,17 @@ async function main(): Promise<void> {
     );
 
     if (!sonuc.ok) {
-      log(`Hesap açılamadı: ${sonuc.message}`);
+      log(`Failed to create account: ${sonuc.message}`);
       process.exitCode = 1;
       return;
     }
 
-    log("Sistem yöneticisi hesabı açıldı.");
+    log("System administrator account created.");
     console.log("");
-    console.log(`  E-posta: ${sonuc.user.email}`);
-    console.log(`  Parola : ${password}`);
+    console.log(`  Email   : ${sonuc.user.email}`);
+    console.log(`  Password: ${password}`);
     console.log("");
-    log("Bu parolayı ilk girişten sonra /parola ekranından değiştirin.");
+    log("Change this password after first login via /parola.");
   } finally {
     await db.$disconnect();
   }

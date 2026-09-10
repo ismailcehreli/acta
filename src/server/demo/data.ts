@@ -122,8 +122,8 @@ const KISILER: KisiTanimi[] = [
     canAppreciate: true,
   },
   {
-    ad: "Emre Aslan",
-    eposta: "emre.aslan@ornek.test",
+    ad: "Oğuzhan Çelik",
+    eposta: "oguzhan.celik@ornek.test",
     unvan: "Genel Müdür",
     birim: "Genel Müdürlük",
     yonetici: true,
@@ -131,55 +131,55 @@ const KISILER: KisiTanimi[] = [
     isScored: false,
   },
   {
-    ad: "Göktuğ Tezezer",
-    eposta: "goktug.tezezer@ornek.test",
+    ad: "Barış Koraltan",
+    eposta: "baris.koraltan@ornek.test",
     unvan: "Genel Müdür Yardımcısı",
     birim: "Genel Müdürlük",
     yazar: false,
     isScored: false,
   },
-  { ad: "Fehmi Erdoğan", eposta: "fehmi.erdogan@ornek.test", unvan: "Satın Alma ve İdari İşler Koordinatörü", birim: "Satın Alma ve İdari İşler Koordinatörlüğü", yonetici: true },
-  { ad: "Merve Kaya", eposta: "merve.satinalma@ornek.test", unvan: "Satın Alma Müdürü", birim: "Satın Alma", yonetici: true },
-  { ad: "Selim Demir", eposta: "selim.hukuk@ornek.test", unvan: "Hukuk Müdürü", birim: "Hukuk", yonetici: true },
-  { ad: "Burcu Acar", eposta: "burcu.idari@ornek.test", unvan: "İdari İşler Müdürü", birim: "İdari İşler", yonetici: true },
-  { ad: "Ahmet Çiftçi", eposta: "ahmet.ciftci@ornek.test", unvan: "Mali İşler Koordinatörü", birim: "Mali İşler Koordinatörlüğü", yonetici: true },
-  { ad: "Barış Erdem", eposta: "baris.globalfinans@ornek.test", unvan: "Global Finans Müdürü", birim: "Global Finans", yonetici: true },
-  { ad: "Nesrin Kılıç", eposta: "nesrin.muhasebe@ornek.test", unvan: "Muhasebe Müdürü", birim: "Muhasebe", yonetici: true },
-  { ad: "Ufuk Yalçın", eposta: "ufuk.finans@ornek.test", unvan: "Finans Müdürü", birim: "Finans", yonetici: true },
-  { ad: "Sevda Güneş", eposta: "sevda.denetim@ornek.test", unvan: "Denetim Müdürü", birim: "Denetim", yonetici: true },
-  { ad: "Tolga Eren", eposta: "tolga.cari@ornek.test", unvan: "Cari Hesaplar Müdürü", birim: "Cari Hesaplar", yonetici: true },
-  { ad: "İsmail Çehreli", eposta: "ismail.cehreli@ornek.test", unvan: "Lojistik Koordinatörü", birim: "Lojistik Koordinatörlüğü", yonetici: true },
+  { ad: "Tahir Güven", eposta: "tahir.guven@ornek.test", unvan: "Satın Alma ve İdari İşler Koordinatörü", birim: "Satın Alma ve İdari İşler Koordinatörlüğü", yonetici: true },
+  { ad: "Selin Varol", eposta: "selin.satinalma@ornek.test", unvan: "Satın Alma Müdürü", birim: "Satın Alma", yonetici: true },
+  { ad: "Kürşat Sezgin", eposta: "kursat.hukuk@ornek.test", unvan: "Hukuk Müdürü", birim: "Hukuk", yonetici: true },
+  { ad: "Gizem Taşer", eposta: "gizem.idari@ornek.test", unvan: "İdari İşler Müdürü", birim: "İdari İşler", yonetici: true },
+  { ad: "Mithat Tanrıkulu", eposta: "mithat.tanrikulu@ornek.test", unvan: "Mali İşler Koordinatörü", birim: "Mali İşler Koordinatörlüğü", yonetici: true },
+  { ad: "Alp Güngör", eposta: "alp.globalfinans@ornek.test", unvan: "Global Finans Müdürü", birim: "Global Finans", yonetici: true },
+  { ad: "Demet Akıncı", eposta: "demet.muhasebe@ornek.test", unvan: "Muhasebe Müdürü", birim: "Muhasebe", yonetici: true },
+  { ad: "Bülent Özsoy", eposta: "bulent.finans@ornek.test", unvan: "Finans Müdürü", birim: "Finans", yonetici: true },
+  { ad: "Melike Taner", eposta: "melike.denetim@ornek.test", unvan: "Denetim Müdürü", birim: "Denetim", yonetici: true },
+  { ad: "Semih Başaran", eposta: "semih.cari@ornek.test", unvan: "Cari Hesaplar Müdürü", birim: "Cari Hesaplar", yonetici: true },
+  { ad: "Kaan Bilgili", eposta: "kaan.lojistik@ornek.test", unvan: "Lojistik Koordinatörü", birim: "Lojistik Koordinatörlüğü", yonetici: true },
   {
-    ad: "Yasin Meral",
-    eposta: "yasin.meral@ornek.test",
+    ad: "Okan Bozkurt",
+    eposta: "okan.bozkurt@ornek.test",
     unvan: "Bilgi İşlem Sorumlusu",
     birim: "Bilgi İşlem",
     yonetici: true,
     sistemYoneticisi: true,
   },
-  { ad: "Tuna Kılıç", eposta: "tuna.dis.ticaret@ornek.test", unvan: "Dış Ticaret Müdürü", birim: "Dış Ticaret", yonetici: true },
-  { ad: "Bora Öztürk", eposta: "bora.depo@ornek.test", unvan: "Depo ve Sevkiyat Müdürü", birim: "Depo ve Sevkiyat", yonetici: true },
-  { ad: "Samet Arslan", eposta: "samet.arslan@ornek.test", unvan: "Satış, Pazarlama ve İş Geliştirme Müdürü", birim: "Satış, Pazarlama ve İş Geliştirme", yonetici: true },
-  { ad: "Eda Yıldız", eposta: "eda.yildiz@ornek.test", unvan: "İnsan Kaynakları Müdürü", birim: "İnsan Kaynakları", yonetici: true },
-  { ad: "Çağdaş Yancı", eposta: "cagdas.yanci@ornek.test", unvan: "Kalite Kontrol Müdürü", birim: "Kalite Kontrol", yonetici: true },
-  { ad: "Mustafa Karakurt", eposta: "mustafa.karakurt@ornek.test", unvan: "Sosyal Uygunluk ve Çevre Müdürü", birim: "Sosyal Uygunluk ve Çevre", yonetici: true },
-  { ad: "Volkan Şimşek", eposta: "volkan.simsek@ornek.test", unvan: "Teknik İmalat Müdürü", birim: "Teknik İmalat", yonetici: true },
-  { ad: "Fatma Şahin", eposta: "fatma.kaliphane@ornek.test", unvan: "Kalıphane Müdürü", birim: "Kalıphane", yonetici: true },
-  { ad: "Hakan Tunç", eposta: "hakan.cnc@ornek.test", unvan: "CNC Müdürü", birim: "CNC", yonetici: true },
-  { ad: "Derya Yılmaz", eposta: "derya.tasarim@ornek.test", unvan: "Tasarım Müdürü", birim: "Tasarım", yonetici: true },
-  { ad: "Kaan Şahin", eposta: "kaan.metal@ornek.test", unvan: "Metal İmalat Müdürü", birim: "Metal İmalat", yonetici: true },
-  { ad: "Sami Arslan", eposta: "sami.arslan@ornek.test", unvan: "Üretim Müdürü", birim: "Üretim", yonetici: true },
-  { ad: "Bayram Taştan", eposta: "bayram.tastan@ornek.test", unvan: "Planlama Müdürü", birim: "Planlama", yonetici: true },
-  { ad: "Deniz Altunbezer", eposta: "deniz.altunbezer@ornek.test", unvan: "Montaj Kontrol Müdürü", birim: "Montaj Kontrol", yonetici: true },
-  { ad: "Elif Aydın", eposta: "elif.satinalma@ornek.test", unvan: "Satın Alma Uzmanı", birim: "Satın Alma" },
-  { ad: "Berk Yıldırım", eposta: "berk.muhasebe@ornek.test", unvan: "Muhasebe Uzmanı", birim: "Muhasebe" },
-  { ad: "Selin Aksoy", eposta: "selin.dis.ticaret@ornek.test", unvan: "Dış Ticaret Uzmanı", birim: "Dış Ticaret" },
-  { ad: "Yiğit Kaya", eposta: "yigit.kaliphane@ornek.test", unvan: "Kalıp Teknisyeni", birim: "Kalıphane" },
-  { ad: "Hasan Demir", eposta: "hasan.planlamaci@ornek.test", unvan: "Üretim Planlama Uzmanı", birim: "Planlama" },
-  { ad: "Cenk Yavuz", eposta: "cenk.uretim@ornek.test", unvan: "Üretim Operatörü", birim: "Üretim" },
-  { ad: "Pelin Koç", eposta: "pelin.montaj@ornek.test", unvan: "Montaj Kontrol Uzmanı", birim: "Montaj Kontrol" },
+  { ad: "Emirhan Yalçın", eposta: "emirhan.disticaret@ornek.test", unvan: "Dış Ticaret Müdürü", birim: "Dış Ticaret", yonetici: true },
+  { ad: "Cem Doğan", eposta: "cem.depo@ornek.test", unvan: "Depo ve Sevkiyat Müdürü", birim: "Depo ve Sevkiyat", yonetici: true },
+  { ad: "Serdar Koçak", eposta: "serdar.kocak@ornek.test", unvan: "Satış, Pazarlama ve İş Geliştirme Müdürü", birim: "Satış, Pazarlama ve İş Geliştirme", yonetici: true },
+  { ad: "Zeynep Karahan", eposta: "zeynep.karahan@ornek.test", unvan: "İnsan Kaynakları Müdürü", birim: "İnsan Kaynakları", yonetici: true },
+  { ad: "Koray Sönmez", eposta: "koray.sonmez@ornek.test", unvan: "Kalite Kontrol Müdürü", birim: "Kalite Kontrol", yonetici: true },
+  { ad: "Erdem Bayrak", eposta: "erdem.bayrak@ornek.test", unvan: "Sosyal Uygunluk ve Çevre Müdürü", birim: "Sosyal Uygunluk ve Çevre", yonetici: true },
+  { ad: "Kerem Öztuna", eposta: "kerem.oztuna@ornek.test", unvan: "Teknik İmalat Müdürü", birim: "Teknik İmalat", yonetici: true },
+  { ad: "Ayşe Demirtaş", eposta: "ayse.kaliphane@ornek.test", unvan: "Kalıphane Müdürü", birim: "Kalıphane", yonetici: true },
+  { ad: "Uğur Keskin", eposta: "ugur.cnc@ornek.test", unvan: "CNC Müdürü", birim: "CNC", yonetici: true },
+  { ad: "Bahar Çetinkaya", eposta: "bahar.tasarim@ornek.test", unvan: "Tasarım Müdürü", birim: "Tasarım", yonetici: true },
+  { ad: "Tayfun Aydınlar", eposta: "tayfun.metal@ornek.test", unvan: "Metal İmalat Müdürü", birim: "Metal İmalat", yonetici: true },
+  { ad: "Levent Polat", eposta: "levent.polat@ornek.test", unvan: "Üretim Müdürü", birim: "Üretim", yonetici: true },
+  { ad: "Cüneyt Saraç", eposta: "cuneyt.sarac@ornek.test", unvan: "Planlama Müdürü", birim: "Planlama", yonetici: true },
+  { ad: "Sarp Tezcan", eposta: "sarp.tezcan@ornek.test", unvan: "Montaj Kontrol Müdürü", birim: "Montaj Kontrol", yonetici: true },
+  { ad: "Nilüfer Çetinel", eposta: "nilufer.satinalma@ornek.test", unvan: "Satın Alma Uzmanı", birim: "Satın Alma" },
+  { ad: "Doruk Alpan", eposta: "doruk.muhasebe@ornek.test", unvan: "Muhasebe Uzmanı", birim: "Muhasebe" },
+  { ad: "Melis Candan", eposta: "melis.disticaret@ornek.test", unvan: "Dış Ticaret Uzmanı", birim: "Dış Ticaret" },
+  { ad: "Onur Kocatürk", eposta: "onur.kaliphane@ornek.test", unvan: "Kalıp Teknisyeni", birim: "Kalıphane" },
+  { ad: "İlker Topuz", eposta: "ilker.planlama@ornek.test", unvan: "Üretim Planlama Uzmanı", birim: "Planlama" },
+  { ad: "Turgut Aygün", eposta: "turgut.uretim@ornek.test", unvan: "Üretim Operatörü", birim: "Üretim" },
+  { ad: "Nazlı Bilge", eposta: "nazli.montaj@ornek.test", unvan: "Montaj Kontrol Uzmanı", birim: "Montaj Kontrol" },
   // Pasifleştirilecek kişi: geçmiş kayıtları durur, giriş yapamaz.
-  { ad: "Mert Kaya", eposta: "mert.ayrilan@ornek.test", unvan: "Üretim Operatörü", birim: "Üretim" },
+  { ad: "Görkem Şentürk", eposta: "gorkem.ayrilan@ornek.test", unvan: "Üretim Operatörü", birim: "Üretim" },
 ];
 
 /** Kurulumun oluşturmayı beklediği birim adları; kök birim buna dahil değildir. */
@@ -609,7 +609,7 @@ export async function installDemoData(
 
     // --- Muhatap departmanlar --------------------------------------------
     // Kalıphane kayıtlarının bir kısmı Üretim'i muhatap gösterir (§8.3).
-    const kalipMudur = kisiler.get("fatma.kaliphane@ornek.test")!;
+    const kalipMudur = kisiler.get("ayse.kaliphane@ornek.test")!;
     const uretimId = birimler.get("Üretim")!;
     const kalipKayitlari = await activityMaintenanceReader(db).findMany({
       where: { authorId: kalipMudur.id },
@@ -627,7 +627,7 @@ export async function installDemoData(
     // --- Konuşmalar -------------------------------------------------------
     // Gerçek servisten geçer: görünürlük ve sorumluluk kuralları burada da
     // aynen işlesin.
-    const genelMudur = kisiler.get("emre.aslan@ornek.test")!;
+    const genelMudur = kisiler.get("oguzhan.celik@ornek.test")!;
     const mevcutKonusma = await db.conversation.count();
 
     if (mevcutKonusma === 0 && kalipKayitlari.length >= 2) {
@@ -667,7 +667,7 @@ export async function installDemoData(
     }
 
     // --- İptal edilmiş bir kayıt -----------------------------------------
-    const planlamaci = kisiler.get("hasan.planlamaci@ornek.test")!;
+    const planlamaci = kisiler.get("ilker.planlama@ornek.test")!;
     const iptalEdilecek = await activityMaintenanceReader(db).findFirst({
       where: { authorId: planlamaci.id, approvalStatus: "APPROVED" },
       select: { id: true },
@@ -727,8 +727,8 @@ export async function installDemoData(
     // --- Karar bekleyen ve karara bağlanmış kayıtlar ----------------------
     // Onay akışının dört hâli de ekranda görünsün: bekleyen, düzeltme
     // istenen, reddedilen ve onaylanan.
-    const kalipci = kisiler.get("yigit.kaliphane@ornek.test")!;
-    const planci = kisiler.get("hasan.planlamaci@ornek.test")!;
+    const kalipci = kisiler.get("onur.kaliphane@ornek.test")!;
+    const planci = kisiler.get("ilker.planlama@ornek.test")!;
     const bugun = companyDay(now);
 
     async function kararliKayit(
@@ -1007,8 +1007,8 @@ export async function installDemoData(
     // "Bugün yazmadı" listesinde izinli kişinin eksik görünmemesi için.
     const izinVar = await db.noActivityPeriod.count();
     if (izinVar === 0) {
-      const izinli = kisiler.get("pelin.montaj@ornek.test");
-      const montajMudur = kisiler.get("deniz.altunbezer@ornek.test");
+      const izinli = kisiler.get("nazli.montaj@ornek.test");
+      const montajMudur = kisiler.get("sarp.tezcan@ornek.test");
 
       if (izinli && montajMudur) {
         const baslangic = new Date(now.getTime() - 2 * 24 * 3_600_000);
@@ -1036,7 +1036,7 @@ export async function installDemoData(
     // gerekçesiyle reddedilmiş talep. Kayıtlar notlarına göre bulunur; kurulum
     // ikinci kez çalıştırıldığında mevcut kayıtların kararını değiştirmeyiz.
     const nazli = kisiler.get("yonetim.kurulu@ornek.test");
-    const kalipciCalisan = kisiler.get("yigit.kaliphane@ornek.test");
+    const kalipciCalisan = kisiler.get("onur.kaliphane@ornek.test");
 
     if (nazli) {
       const not = "Örnek: yönetici tarafından onaylandı";
@@ -1150,9 +1150,9 @@ export async function installDemoData(
     });
 
     if (vekaletVar === 0) {
-      const teknikMudurVekaleti = kisiler.get("volkan.simsek@ornek.test");
-      const vekil = kisiler.get("fatma.kaliphane@ornek.test");
-      const genelMudurVekalet = kisiler.get("emre.aslan@ornek.test");
+      const teknikMudurVekaleti = kisiler.get("kerem.oztuna@ornek.test");
+      const vekil = kisiler.get("ayse.kaliphane@ornek.test");
+      const genelMudurVekalet = kisiler.get("oguzhan.celik@ornek.test");
 
       if (teknikMudurVekaleti && vekil && genelMudurVekalet) {
         const vBas = new Date(now.getTime() - 1 * 24 * 3_600_000);
@@ -1174,7 +1174,7 @@ export async function installDemoData(
 
     // --- Pasif kullanıcı --------------------------------------------------
     // Hesap silinmez, pasifleştirilir: geçmiş kayıtları yerinde kalır.
-    const ayrilan = kisiler.get("mert.ayrilan@ornek.test");
+    const ayrilan = kisiler.get("gorkem.ayrilan@ornek.test");
     if (ayrilan) {
       await db.user.update({
         where: { id: ayrilan.id },

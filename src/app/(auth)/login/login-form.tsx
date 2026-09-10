@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef } from "react";
 
+import { useTranslations } from "@/components/i18n";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input } from "@/components/ui/form";
@@ -12,6 +13,7 @@ import { loginAction, type LoginFormState } from "./actions";
 const initialState: LoginFormState = { error: null };
 
 export function LoginForm({ rememberDays = 0 }: { rememberDays?: number }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(loginAction, initialState);
   const hata = useRef<HTMLDivElement>(null);
 
@@ -25,13 +27,13 @@ export function LoginForm({ rememberDays = 0 }: { rememberDays?: number }) {
     <form action={formAction} className="flex flex-col gap-5">
       {state.error ? (
         <div id="giris-hatasi" ref={hata} tabIndex={-1}>
-          <Alert tone="danger" title="Giriş yapılamadı">
+          <Alert tone="danger" title={t("auth.loginFailed")}>
             {state.error}
           </Alert>
         </div>
       ) : null}
 
-      <Field htmlFor="email" label="E-posta" required>
+      <Field htmlFor="email" label={t("common.email")} required>
         <Input
           id="email"
           name="email"
@@ -40,11 +42,11 @@ export function LoginForm({ rememberDays = 0 }: { rememberDays?: number }) {
           autoComplete="username"
           required
           autoFocus
-          placeholder="ad.soyad@sirket.com"
+          placeholder={t("auth.emailPlaceholder")}
         />
       </Field>
 
-      <Field htmlFor="password" label="Parola" required>
+      <Field htmlFor="password" label={t("auth.passwordLabel")} required>
         <PasswordInput
           id="password"
           name="password"
@@ -61,8 +63,8 @@ export function LoginForm({ rememberDays = 0 }: { rememberDays?: number }) {
       {rememberDays > 0 ? (
         <Checkbox
           name="remember"
-          label="Beni hatırla"
-          description={`Bu tarayıcıda ${rememberDays} gün boyunca yeniden parola sorulmaz. Ortak bir bilgisayardaysanız işaretlemeyin.`}
+          label={t("auth.rememberMe")}
+          description={t("auth.rememberMeDesc", { days: rememberDays })}
         />
       ) : null}
 
@@ -73,7 +75,7 @@ export function LoginForm({ rememberDays = 0 }: { rememberDays?: number }) {
         disabled={pending}
         className="w-full"
       >
-        {pending ? "Giriş yapılıyor…" : "Giriş yap"}
+        {pending ? t("auth.signingIn") : t("auth.signIn")}
       </Button>
     </form>
   );

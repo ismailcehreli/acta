@@ -30,6 +30,7 @@
     "migrate:dev": "prisma migrate dev",
     "db:generate": "prisma generate",
     "node:kontrol": "node scripts/node-surumu-kontrol.mjs",
+    "setup": "node --import tsx scripts/ilk-kurulum.ts",
     "kurulum": "node --import tsx scripts/ilk-kurulum.ts",
     "seed:demo": "node --import tsx scripts/seed-demo.ts",
     "parola:sifirla": "node --import tsx scripts/parola-sifirla.ts"

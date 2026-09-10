@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getTranslations } from "@/server/i18n/server";
 import { prisma } from "@/server/db";
 import {
   readNumericSetting,
@@ -12,7 +13,7 @@ import { Alert } from "@/components/ui/alert";
 
 import { LoginForm } from "./login-form";
 
-export const metadata = { title: "Giriş" };
+export const metadata = { title: "Sign In" };
 
 export default async function LoginPage({
   searchParams,
@@ -25,6 +26,7 @@ export default async function LoginPage({
   }
 
   const { parola } = await searchParams;
+  const t = await getTranslations();
 
   // "Beni hatırla" süresi sistem ayarından; 0 ise kutu hiç çizilmez.
   const hatirlaGun = await readNumericSetting(
@@ -34,17 +36,17 @@ export default async function LoginPage({
 
   return (
     <AuthLayout
-      title="Giriş yap"
-      description="Şirket e-posta adresiniz ve parolanızla."
+      title={t("auth.signIn")}
+      description={t("auth.loginSubtitle")}
       footer={
         <Link href="/reset" className="text-primary hover:underline">
-          Parolamı unuttum
+          {t("auth.forgotPassword")}
         </Link>
       }
     >
       {parola === "degisti" ? (
         <div id="parola-degisti" role="status" className="mb-4">
-          <Alert tone="success">Parolanız değiştirildi. Yeni parolanızla giriş yapın.</Alert>
+          <Alert tone="success">{t("auth.passwordChanged")}</Alert>
         </div>
       ) : null}
 

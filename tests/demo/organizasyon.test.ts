@@ -59,11 +59,11 @@ describe("örnek organizasyon şeması", () => {
     );
 
     const board = await kullaniciId("yonetim.kurulu@ornek.test");
-    const gm = await kullaniciId("emre.aslan@ornek.test");
-    const logistics = await kullaniciId("ismail.cehreli@ornek.test");
-    const purchasing = await kullaniciId("merve.satinalma@ornek.test");
-    const purchasingEmployee = await kullaniciId("elif.satinalma@ornek.test");
-    const accountingEmployee = await kullaniciId("berk.muhasebe@ornek.test");
+    const gm = await kullaniciId("oguzhan.celik@ornek.test");
+    const logistics = await kullaniciId("kaan.lojistik@ornek.test");
+    const purchasing = await kullaniciId("selin.satinalma@ornek.test");
+    const purchasingEmployee = await kullaniciId("nilufer.satinalma@ornek.test");
+    const accountingEmployee = await kullaniciId("doruk.muhasebe@ornek.test");
 
     const boardSubordinates = new Set(await subordinateUserIds(testDb, board));
     const gmSubordinates = new Set(await subordinateUserIds(testDb, gm));
