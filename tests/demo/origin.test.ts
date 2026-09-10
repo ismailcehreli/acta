@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { AUDIT_ACTIONS } from "@/server/audit/log";
-import { DEMO_UNIT_NAMES, installDemoData } from "@/server/demo/data";
+import { DEMO_EMAIL_DOMAIN, DEMO_UNIT_NAMES, installDemoData } from "@/server/demo/data";
 import {
   classifyLegacyDemoOrgUnits,
   DEMO_OBJECT_ORG_UNIT,
@@ -30,7 +30,7 @@ async function kur(preexistingPlanlama = false) {
     isSystemAdmin: true,
   });
   const planlama = preexistingPlanlama
-    ? await createOrgUnit({ name: "Planlama", parentId: kok.id })
+    ? await createOrgUnit({ name: "Production Planning", parentId: kok.id })
     : null;
 
   const sonuc = await installDemoData(testDb);
@@ -42,10 +42,10 @@ async function kur(preexistingPlanlama = false) {
 async function sayilar() {
   return {
     users: await testDb.user.count({
-      where: { email: { endsWith: "@ornek.test" } },
+      where: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } },
     }),
     activities: await testDb.activity.count({
-      where: { author: { email: { endsWith: "@ornek.test" } } },
+      where: { author: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } } },
     }),
     units: await testDb.orgUnit.count({
       where: { name: { in: [...DEMO_UNIT_NAMES] } },
@@ -157,7 +157,7 @@ describe("örnek birim kökeni", () => {
   it("sahipli birimlerden biri silinemiyorsa önceki silmeleri de geri alır", async () => {
     const { yonetici } = await kur();
     const planlama = await testDb.orgUnit.findFirstOrThrow({
-      where: { name: "Planlama" },
+      where: { name: "Production Planning" },
       select: { id: true },
     });
     // Demo kurulumuna ait Planlama'nın altında gerçek bir birim doğmuş. Bu
@@ -172,7 +172,7 @@ describe("örnek birim kökeni", () => {
     if (sonuc.ok || sonuc.error !== "blocked") {
       throw new Error("temizlik gerçek alt birimde engellenmeliydi");
     }
-    expect(sonuc.detail).toContain("Planlama");
+    expect(sonuc.detail).toContain("Production Planning");
     expect(await sayilar()).toEqual(once);
     expect(await testDb.demoObject.count()).toBe(DEMO_UNIT_NAMES.length);
   });
@@ -226,7 +226,7 @@ describe("örnek birim kökeni", () => {
       await testDb.orgUnit.count({ where: { id: planlama!.id } }),
     ).toBe(1);
     expect(
-      await testDb.user.count({ where: { email: { endsWith: "@ornek.test" } } }),
+      await testDb.user.count({ where: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } } }),
     ).toBe(0);
     expect(await testDb.demoObject.count()).toBe(0);
   });

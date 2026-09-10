@@ -59,7 +59,7 @@ export function DemoForm({
               Kurulum <strong className="font-semibold text-ink">yalnızca eksik olanı</strong>{" "}
               ekler; mevcut verinize dokunmaz ve ikinci kez çalıştırmak
               zararsızdır. Örnek hesapların e-posta adresleri{" "}
-              <span className="mono">@ornek.test</span> ile biter — gerçek
+              <span className="mono">@example.test</span> ile biter — gerçek
               kullanıcılarınızla karışmaz.
             </p>
 
@@ -78,7 +78,7 @@ export function DemoForm({
             <div className="border-t border-line pt-5">
               <p className="section-label mb-2">Temizleme</p>
               <p className="prose-measure text-[length:var(--text-sm)] leading-[var(--leading-relaxed)] text-muted">
-                Örnek verinin tamamını kaldırır: <span className="mono">@ornek.test</span>{" "}
+                Örnek verinin tamamını kaldırır: <span className="mono">@example.test</span>{" "}
                 hesapları ve yalnızca onlara bağlı kayıtlar. Örnek bir kayda
                 gerçek veri bağlanmışsa (örneğin gerçek bir kullanıcı örnek bir
                 faaliyete soru sorduysa) işlem <strong className="font-semibold text-ink">reddedilir</strong>{" "}

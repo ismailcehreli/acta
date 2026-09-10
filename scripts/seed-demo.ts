@@ -34,11 +34,11 @@ async function main(): Promise<void> {
 
     console.log("");
     console.log(`  Demo users password: ${parola}`);
-    console.log("  Sample logins: oguzhan.celik@ornek.test (General Manager — sees company-wide)");
-    console.log("                 ayse.kaliphane@ornek.test (Tooling Manager — department scope)");
-    console.log("                 okan.bozkurt@ornek.test (System Admin + IT Lead)");
-    console.log("                 onur.kaliphane@ornek.test (Team Member — individual activities)");
-    console.log("                 yonetim.kurulu@ornek.test (Board Member — executive appreciation)");
+    console.log("  Sample logins: alex.morgan@example.test (Chief Executive Officer — company-wide scope)");
+    console.log("                 amanda.tooling@example.test (Tooling Manager — department scope)");
+    console.log("                 marcus.it@example.test (System Admin + IT Lead)");
+    console.log("                 oliver.tooling@example.test (Team Member — individual activities)");
+    console.log("                 board@example.test (Board Member — executive appreciation)");
     console.log("");
   } finally {
     await db.$disconnect();

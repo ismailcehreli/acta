@@ -310,7 +310,7 @@ export async function saveVapidAction(
 // bütün özelliklerini kapsayan bir örnek şirket kurar ve gerektiğinde temizler.
 //
 // **Silme, projedeki "fiziksel silme yok" kuralının dar bir istisnasıdır**
-// (ürün sahibi kararı, 20.08.2026) ve yalnızca `@ornek.test` damgalı satırlara
+// (ürün sahibi kararı, 20.08.2026) ve yalnızca `@example.test` damgalı satırlara
 // dokunur. Demo bir kayda gerçek veri bağlanmışsa yabancı anahtar işlemi
 // reddeder ve hiçbir şey silinmez.
 
@@ -346,9 +346,10 @@ export async function purgeDemoAction(
 
   // Yazarak onay: tek tıkla geri alınamaz bir temizlik yapılmaz.
   const onay = String(formData.get("onay") ?? "").trim();
-  if (onay.toLocaleUpperCase("tr-TR") !== "SİL") {
+  const upper = onay.toUpperCase();
+  if (upper !== "DELETE" && onay.toLocaleUpperCase("tr-TR") !== "SİL") {
     return {
-      error: "Silmek için onay kutusuna SİL yazmalısınız.",
+      error: "Silmek için onay kutusuna SİL veya DELETE yazmalısınız.",
       success: null,
     };
   }

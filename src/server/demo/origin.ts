@@ -4,7 +4,7 @@ import { AUDIT_ACTIONS, AUDIT_OBJECTS, recordAudit } from "@/server/audit/log";
 import type { DemoObjectOriginInput } from "@/shared/schemas/demo";
 
 export const DEMO_OBJECT_ORG_UNIT = "org_unit";
-export const DEMO_EMAIL_DOMAIN = "ornek.test";
+export const DEMO_EMAIL_DOMAIN = "example.test";
 export const DEMO_ORIGIN_CREATED = "CREATED_BY_INSTALLER" as const;
 export const DEMO_ORIGIN_REUSED = "REUSED_EXISTING" as const;
 

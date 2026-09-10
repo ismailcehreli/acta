@@ -16,10 +16,10 @@ afterAll(async () => {
 });
 
 async function kurulumYap() {
-  const kok = await createOrgUnit({ name: "Şirket", type: "Kök" });
+  const kok = await createOrgUnit({ name: "Acme Corp", type: "Root" });
   await createUser(kok.id, {
-    fullName: "Sistem Yöneticisi",
-    email: "yonetici@sirket.test",
+    fullName: "System Administrator",
+    email: "admin@company.test",
     isSystemAdmin: true,
   });
 
@@ -49,21 +49,21 @@ describe("örnek organizasyon şeması", () => {
         select: { parent: { select: { name: true } } },
       });
 
-    expect((await parent("Yönetim Kurulu")).parent?.name).toBe("Şirket");
-    expect((await parent("Genel Müdürlük")).parent?.name).toBe("Yönetim Kurulu");
+    expect((await parent("Board of Directors")).parent?.name).toBe("Acme Corp");
+    expect((await parent("Executive Management")).parent?.name).toBe("Board of Directors");
     expect(
-      (await parent("Kalıphane")).parent?.name,
-    ).toBe("Teknik İmalat");
-    expect((await parent("Muhasebe")).parent?.name).toBe(
-      "Mali İşler Koordinatörlüğü",
+      (await parent("Tooling & Prototyping")).parent?.name,
+    ).toBe("Engineering");
+    expect((await parent("Accounting")).parent?.name).toBe(
+      "Finance & Accounting",
     );
 
-    const board = await kullaniciId("yonetim.kurulu@ornek.test");
-    const gm = await kullaniciId("oguzhan.celik@ornek.test");
-    const logistics = await kullaniciId("kaan.lojistik@ornek.test");
-    const purchasing = await kullaniciId("selin.satinalma@ornek.test");
-    const purchasingEmployee = await kullaniciId("nilufer.satinalma@ornek.test");
-    const accountingEmployee = await kullaniciId("doruk.muhasebe@ornek.test");
+    const board = await kullaniciId("board@example.test");
+    const gm = await kullaniciId("alex.morgan@example.test");
+    const logistics = await kullaniciId("lucas.logistics@example.test");
+    const purchasing = await kullaniciId("emily.procurement@example.test");
+    const purchasingEmployee = await kullaniciId("rachel.procurement@example.test");
+    const accountingEmployee = await kullaniciId("daniel.accounting@example.test");
 
     const boardSubordinates = new Set(await subordinateUserIds(testDb, board));
     const gmSubordinates = new Set(await subordinateUserIds(testDb, gm));
@@ -110,7 +110,7 @@ describe("örnek organizasyon şeması", () => {
     ).toBe(0);
 
     const takdir = await testDb.activityAppreciation.findFirst({
-      where: { user: { email: "yonetim.kurulu@ornek.test" } },
+      where: { user: { email: "board@example.test" } },
       select: { activityId: true },
     });
     expect(takdir).not.toBeNull();

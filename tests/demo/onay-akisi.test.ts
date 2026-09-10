@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { approveActivity } from "@/server/activities/approval";
 import { createActivity } from "@/server/activities/write";
 import { openFollowUp } from "@/server/follow-ups/service";
-import { DEMO_UNIT_NAMES, installDemoData } from "@/server/demo/data";
+import { DEMO_EMAIL_DOMAIN, DEMO_UNIT_NAMES, installDemoData } from "@/server/demo/data";
 import {
   DEMO_ORIGIN_REUSED,
   rememberDemoOrgUnitOrigin,
@@ -97,7 +97,7 @@ describe("örnek veri onay akışı", () => {
 
     expect(await testDb.approvalRound.count()).toBe(0);
     expect(
-      await testDb.user.count({ where: { email: { endsWith: "@ornek.test" } } }),
+      await testDb.user.count({ where: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } } }),
     ).toBe(0);
     expect(
       await testDb.orgUnit.count({
@@ -124,7 +124,7 @@ describe("örnek veri onay akışı", () => {
     // uygulamalı (20.08.2026 kararı; denetim P3-R4-1).
     const ikinciMudur = await createUser(yazar.orgUnitId, {
       fullName: "İkinci Müdür",
-      email: "ikinci@ornek.test",
+      email: `ikinci@${DEMO_EMAIL_DOMAIN}`,
       isUnitManager: true,
     });
 
@@ -200,12 +200,12 @@ describe("örnek veri onay akışı", () => {
     await rememberDemoOrgUnitOrigin(testDb, birim.id, DEMO_ORIGIN_REUSED);
     await createUser(birim.id, {
       fullName: "Birim Müdürü",
-      email: `mudur@${"ornek.test"}`,
+      email: `mudur@${DEMO_EMAIL_DOMAIN}`,
       isUnitManager: true,
     });
     const demo = await createUser(birim.id, {
       fullName: "Demo Çalışan",
-      email: `calisan@${"ornek.test"}`,
+      email: `calisan@${DEMO_EMAIL_DOMAIN}`,
     });
 
     // Demo kullanıcı uygulamanın **gerçek** yolundan yazıyor: onaya tabi
@@ -265,7 +265,7 @@ describe("temizlik ile gerçek karar yarışı", () => {
     });
     const demo = await createUser(birim.id, {
       fullName: "Demo Çalışan",
-      email: "calisan@ornek.test",
+      email: `calisan@${DEMO_EMAIL_DOMAIN}`,
     });
 
     const yazildi = await createActivity(
@@ -354,7 +354,7 @@ describe("temizlik gerçek veriyi yarışta da korur", () => {
     });
     const demo = await createUser(birim.id, {
       fullName: "Demo Çalışan",
-      email: "calisan@ornek.test",
+      email: `calisan@${DEMO_EMAIL_DOMAIN}`,
     });
 
     const kayit = await fixtureFaaliyet(demo, {
@@ -414,9 +414,9 @@ describe("temizlik gerçek veriyi yarışta da korur", () => {
       isSystemAdmin: true,
     });
 
-    // Şirketin **gerçek** ve boş Planlama birimi; adı örnek veriyle aynı.
+    // Şirketin **gerçek** ve boş Production Planning birimi; adı örnek veriyle aynı.
     const gercekPlanlama = await createOrgUnit({
-      name: "Planlama",
+      name: "Production Planning",
       parentId: kok.id,
     });
 
