@@ -1,0 +1,25 @@
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.example
+docs
+# Tasarım, çalışma ve araç notları üretim imajına alınmaz.
+DESIGN-*/
+*.md
+AGENTS.md
+CLAUDE.md
+# Test kodu üretim imajına girmez: gereksiz yüzey ve gereksiz boyut.
+# Tip kontrolü `pnpm typecheck` ile ayrıca yapılır.
+e2e
+tests
+vitest.config.ts
+playwright.config.ts
+test-results
+playwright-report
+coverage
+*.xlsx
+*.xls
+*.log
+.DS_Store

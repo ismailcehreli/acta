@@ -1,0 +1,142 @@
+name: acta
+
+# Kurulum bileşenleri (§17.2). Ters vekil sunucu ve sertifika, kurulum
+# kılavuzuyla birlikte Görev 6.2'de eklenecek.
+#
+# Dış yüzey (§15.5): hiçbir servis makinenin tüm arayüzlerine açılmaz.
+# Veritabanı portları ve uygulama portu yalnızca 127.0.0.1'e bağlanır; sistem
+# dışarıya ters vekil üzerinden, yalnız HTTPS ile açılacaktır. Parolaların
+# varsayılanı yoktur: `.env` doldurulmadan yığın ayağa kalkmaz.
+# (Denetim 17.08.2026, bulgu 2.)
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER tanımlanmalı}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD tanımlanmalı}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB tanımlanmalı}
+      TZ: Europe/Istanbul
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Testlerin karşı koştuğu ayrı sunucu; iki veritabanı barındırır
+  # (faaliyet_test → Vitest, faaliyet_e2e → Playwright). Verisi tmpfs'te durur,
+  # kapanınca silinir. Üretimde çalışmaması için ayrı profildedir:
+  #   docker compose --profile test up -d test-postgres
+  test-postgres:
+    image: postgres:17-alpine
+    profiles: ["test"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${TEST_POSTGRES_USER:-faaliyet_test}
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:-faaliyet_test}
+      POSTGRES_DB: ${TEST_POSTGRES_DB:-faaliyet_test}
+      TZ: Europe/Istanbul
+    ports:
+      - "127.0.0.1:${TEST_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${TEST_POSTGRES_USER:-faaliyet_test} -d ${TEST_POSTGRES_DB:-faaliyet_test}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Veritabanı geçişleri uygulama açılışında değil, ayrı ve tek seferlik bir
+  # adımda koşar. Gerekçe: açılışta koşan geçiş, aynı anda açılan iki kopyada
+  # yarışa girer, uzun süren geçiş sağlık kontrolünü düşürür ve başarısız geçiş
+  # yeniden başlatma döngüsüne dönüşür. Burada app ve worker bu adımın başarıyla
+  # bitmesini bekler; geçiş başarısızsa uygulama hiç açılmaz.
+  # Elle çalıştırmak için: docker compose run --rm migrate
+  migrate:
+    build: .
+    image: acta:local
+    restart: "no"
+    command: ["node_modules/.bin/prisma", "migrate", "deploy"]
+    environment:
+      NODE_ENV: production
+      TZ: Europe/Istanbul
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    build: .
+    image: acta:local
+    restart: unless-stopped
+    # Süreç doğrudan başlatılır; araya paket yöneticisi girerse kapanma sinyali
+    # (SIGTERM) uygulamaya ulaşmaz ve konteyner zorla öldürülür.
+    command: ["node_modules/.bin/next", "start"]
+    init: true
+    environment:
+      NODE_ENV: production
+      TZ: Europe/Istanbul
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Okuma bileti (§10.2) bu anahtarla imzalanır; varsayılanı yoktur.
+      APP_SECRET: ${APP_SECRET:?APP_SECRET tanımlanmalı}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      ATTACHMENT_STORAGE_DIR: /veri/ekler
+      # Profil resimleri de diskte durur ve **kalıcı olmak zorunda**: değişken
+      # tanımlı değilken konteynerin içine (`/app/storage/avatars`) yazılıyor,
+      # her `docker compose up --build` sonrası bütün resimler kayboluyordu.
+      # Veritabanındaki `avatarExtension` kalır, dosya gider: her profil resmi
+      # 404 (Denetim 23.08.2026, bulgu 5).
+      AVATAR_STORAGE_DIR: /veri/avatarlar
+    volumes:
+      # Ekler kalıcı birimde durur. Konteyner içinde kalsalardı her güncellemede
+      # silinirlerdi — veritabanındaki kayıt kalır, dosya kaybolurdu (§15.4).
+      - attachment-data:/veri/ekler
+      # Avatarlar **ayrı birimde**: ek dosyalarıyla aynı birimi paylaşsalardı
+      # yedek/geri yükleme ikisini ayıramaz, birini geri yüklemek diğerini de
+      # geri alırdı.
+      - avatar-data:/veri/avatarlar
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    image: acta:local
+    restart: unless-stopped
+    command: ["node", "--import", "tsx", "src/worker/index.ts"]
+    init: true
+    environment:
+      NODE_ENV: production
+      TZ: Europe/Istanbul
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # İşleyici SMTP parolasını çözmek için aynı anahtara ihtiyaç duyar.
+      APP_SECRET: ${APP_SECRET:?APP_SECRET tanımlanmalı}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      ATTACHMENT_STORAGE_DIR: /veri/ekler
+    volumes:
+      - attachment-data:/veri/ekler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  attachment-data:
+  avatar-data:

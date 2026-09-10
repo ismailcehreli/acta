@@ -1,0 +1,70 @@
+{
+  "name": "acta",
+  "version": "0.1.0",
+  "description": "Open-source daily activity reporting, hierarchical approvals, and async team accountability platform",
+  "license": "MIT",
+  "homepage": "https://github.com/ismailcehreli/acta",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ismailcehreli/acta.git"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "pnpm node:kontrol && next build",
+    "start": "next start",
+    "worker": "node --import tsx src/worker/index.ts",
+    "worker:dev": "tsx watch src/worker/index.ts",
+    "lint": "eslint",
+    "typecheck": "pnpm node:kontrol && tsc --noEmit",
+    "test": "pnpm node:kontrol && vitest run",
+    "test:watch": "pnpm node:kontrol && vitest",
+    "e2e": "pnpm node:kontrol && playwright test --project=chromium && playwright test --project=chromium-ayar --workers=1",
+    "e2e:kabul": "pnpm node:kontrol && playwright test --project=kabul --workers=1",
+    "e2e:firefox": "pnpm node:kontrol && playwright test --project=firefox && playwright test --project=firefox-ayar --workers=1",
+    "e2e:webkit": "pnpm node:kontrol && playwright test --project=webkit && playwright test --project=webkit-ayar --workers=1",
+    "migrate": "prisma migrate deploy",
+    "migrate:dev": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "node:kontrol": "node scripts/node-surumu-kontrol.mjs",
+    "kurulum": "node --import tsx scripts/ilk-kurulum.ts",
+    "seed:demo": "node --import tsx scripts/seed-demo.ts",
+    "parola:sifirla": "node --import tsx scripts/parola-sifirla.ts"
+  },
+  "dependencies": {
+    "@ibm/plex-mono": "2.5.0",
+    "@ibm/plex-sans": "1.1.0",
+    "@node-rs/argon2": "^2.1.0",
+    "@prisma/client": "^6.3.1",
+    "file-type": "^22.0.2",
+    "next": "16.3.1",
+    "nodemailer": "^9.0.5",
+    "pg": "^8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "web-push": "^3.6.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/web-push": "^3.6.4",
+    "babel-plugin-react-compiler": "1.0.0",
+    "dotenv": "^17.4.2",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.1",
+    "prisma": "^6.3.1",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5",
+    "vitest": "^3.0.5"
+  }
+}

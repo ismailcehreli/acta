@@ -1,0 +1,1444 @@
+// Faaliyet Raporlama Sistemi — Sürüm 1 veri modeli.
+// Kaynak: tasarım §16 (kavramsal model). Alan adları orada Türkçe, burada
+// İngilizce (§17.5). Sürüm 2 tabloları (onay görevi, onay işlemi, yükseltme,
+// takip maddesi, vekâlet) bilinçli olarak açılmamıştır (§18.2); veri modeli
+// onları ileride bozulmadan alacak şekilde kurulmuştur.
+//
+// Genel kurallar (§16.6):
+//   - Fiziksel silme yoktur. Kullanıcı ve birim pasifleştirilir, faaliyet iptal
+//     edilir. Yabancı anahtarlar silmeyi engeller (onDelete: Restrict).
+//   - Saat içeren alanlar zaman dilimi bilgisiyle saklanır (timestamptz).
+//     Yalnızca güne ait alanlar (faaliyet tarihi, tatil, izin aralığı) `date`
+//     tipindedir; bunlar zaman dilimine bağlı değildir.
+//   - Veritabanı seviyesi kısıtların Prisma ile ifade edilemeyen kısmı (tek kök,
+//     döngü/derinlik, tek birim yöneticisi, pasif birim engeli, muhatap ≤5,
+//     durum geçişleri, çakışan izin aralığı) Görev 0.2b'de SQL ile eklenir.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Organizasyon ve kullanıcı (§16.1)
+// ---------------------------------------------------------------------------
+
+/// Organizasyon ağacı düğümü. Kademe sayısı ve isimleri serbesttir; kademeler
+/// koda gömülmez (İlke 1). Ağaç kuralları §4.2'de, veritabanı zorlaması 0.2b'de.
+model OrgUnit {
+  id        String  @id @default(uuid())
+  parentId  String?
+  /// Birim adı, örn. "Kalıphane".
+  name      String  @db.VarChar(150)
+  /// Kademe etiketi, örn. "Departman", "Direktörlük". Serbest metindir.
+  type      String  @db.VarChar(50)
+  /// Aynı üst altındaki görüntüleme sırası.
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  /// Bu düğümdeki kişilerin faaliyetleri bir üst tarafından onaylanır mı (§4.3).
+  /// Sürüm 1'de yöneticiler için false; davranış Sürüm 2'de bağlanır.
+  requiresApproval Boolean @default(false)
+  /// Faaliyetler süzgeçsiz olarak üst kademelerde öne çıkar mı (§4.3).
+  autoFlowsUp      Boolean @default(true)
+  /// Aynı değeri taşıyan düğümler yukarı taşımada tek hedef sayılır (§7.3).
+  /// Sürüm 1'de yalnızca veride durur, davranışa bağlanmaz.
+  attentionGroupId String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  parent   OrgUnit?  @relation("OrgUnitTree", fields: [parentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  children OrgUnit[] @relation("OrgUnitTree")
+
+  users              User[]
+  authoredActivities Activity[]           @relation("ActivityAuthorUnit")
+  targetedActivities ActivityTargetDept[]
+  workCalendar       OrgUnitWorkCalendar?
+
+  @@index([parentId])
+  @@index([isActive])
+}
+
+model User {
+  id        String  @id @default(uuid())
+  fullName  String  @db.VarChar(150)
+  /// Unvan ("Kalıphane Müdürü", "Üretim Planlama Uzmanı"). Serbest metin ve
+  /// **yetki değildir**: görünürlük ve onay yine ağaçtan gelir. Kayıtta kimin
+  /// yazdığını okuyanın "bu kişi ne iş yapıyor" sorusuna cevap verir.
+  title     String? @db.VarChar(100)
+  /// E-posta yalnızca bir özelliktir; iç kimlik ondan bağımsızdır (§15.3),
+  /// böylece ileride M365 SSO eşleştirmesi mümkün olur.
+  email     String  @unique @db.VarChar(255)
+  orgUnitId String
+
+  /// Birimin yöneticisi mi (§4.4).
+  ///
+  /// Bir birimde **birden fazla** yönetici olabilir (ürün sahibi kararı,
+  /// 20.08.2026). Hepsi birimin tamamını görür ve hepsi onaylayabilir; ilk
+  /// karar veren süreci kapatır.
+  isUnitManager Boolean @default(false)
+  /// İşlevsel yönetim yetkisi; içerik erişimi vermez (§15.1).
+  isSystemAdmin Boolean @default(false)
+  /// Organizasyon kapsamındaki toplu raporları görebilir. Rapor kapsamı bu
+  /// bayraktan bağımsız olarak kişinin bağlı olduğu birim ağacından çözülür.
+  canViewReports Boolean @default(false)
+  /// Skor ve takdir verilerini içeren hassas raporları görebilir.
+  canViewScoreReports Boolean @default(false)
+  /// İlk kurulumda belirlenen, tek ve korunmuş ana sistem yöneticisi.
+  /// Bu alan yalnız migration/ilk kurulum tarafından atanır; uygulama içinden
+  /// değiştirilemez.
+  isRoot       Boolean @default(false)
+  /// Bu kişinin skoru hesaplanır mı (Görev 11.10).
+  ///
+  /// Faaliyet yazan ama puanlanması anlamlı olmayan roller için `false`:
+  /// genel müdür, yeni başlayan ilk dönem, yarı zamanlı. `writesActivities`
+  /// ile aynı şey değil — o kişi faaliyet yazar, yalnız skorlanmaz.
+  isScored      Boolean @default(true)
+
+  /// Faaliyetlere takdir verebilir mi (Görev 11.11).
+  ///
+  /// Yönetim kurulu, genel müdür gibi roller için işaretlenir; sonradan
+  /// değiştirilebilir. Takdir kayda verilir; onaylanmış faaliyetlere verilen
+  /// geçerli takdirler, ayardaki puan kadar faaliyet sahibinin skoruna eklenir.
+  canAppreciate Boolean @default(false)
+
+  /// Profil resminin uzantısı ("png" / "jpg" / "webp"); boşsa baş harfler
+  /// gösterilir (Görev 11.5). Dosyanın kendisi diskte durur, veritabanında
+  /// değil — marka logosuyla aynı gerekçe: küçük de olsa ikili veriyi her
+  /// sayfa yüklemesinde satırla taşımak gereksiz.
+  avatarExtension String? @db.VarChar(8)
+
+  /// Olay başına e-posta yerine günde tek özet (§12.3).
+  /// Bildirim tercihi (Görev 10.8). Kişi kendi profilinden seçer.
+  notificationMode NotificationMode @default(INSTANT)
+  /// Bu kişiden günlük faaliyet **beklenir mi**? Yönetim Kurulu üyeleri gibi
+  /// faaliyet yazmayan roller için `false` yapılır (ürün sahibi kararı,
+  /// 19.08.2026). Yazmayı engellemez; yalnızca beklentiyi kaldırır:
+  /// hatırlatma gitmez, katılım hesabında sayılmaz, ana ekranda "bugün
+  /// yazmadınız" uyarısı çıkmaz.
+  writesActivities Boolean          @default(true)
+  isActive         Boolean          @default(true)
+  /// Son başarılı parola doğrulaması ve oturum oluşturma zamanı. Başarısız
+  /// girişler bu alanı değiştirmez.
+  lastLoginAt      DateTime?        @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  orgUnit    OrgUnit         @relation(fields: [orgUnitId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  credential UserCredential?
+  sessions   Session[]
+
+  activities                 Activity[]             @relation("ActivityAuthor")
+  drafts                     ActivityDraft[]
+  draftAttachments            ActivityDraftAttachment[] @relation("ActivityDraftAttachmentUploader")
+  approvals                  Activity[]             @relation("ActivityApprover")
+  approvalRounds             ApprovalRound[]        @relation("ApprovalRoundDecider")
+  /// Onayına düşmüş kayıtlar (birden fazla müdürlü birimde hepsine düşer).
+  eligibleApprovals          ActivityApprover[]
+  activityRevisions          ActivityRevision[]
+  cancellations              CancellationRecord[]
+  attachments                Attachment[]
+  askedConversations         Conversation[]         @relation("ConversationAsker")
+  ownedConversations         Conversation[]         @relation("ConversationResponsible")
+  closedConversations        Conversation[]         @relation("ConversationCloser")
+  conversationMessages       ConversationMessage[]
+  readReceipts               ReadReceipt[]
+  noActivityPeriods          NoActivityPeriod[]     @relation("NoActivityPeriodUser")
+  deputyForPeriods           NoActivityPeriod[]     @relation("NoActivityPeriodDeputy")
+  markedNoActivityPeriods    NoActivityPeriod[]     @relation("NoActivityPeriodMarker")
+  cancelledNoActivityPeriods NoActivityPeriod[]     @relation("NoActivityPeriodCanceller")
+  decidedNoActivityPeriods   NoActivityPeriod[]     @relation("NoActivityPeriodDecider")
+  notifications              NotificationQueue[]
+  pushSubscriptions          PushSubscription[]
+  followUpsOpened            FollowUpItem[]         @relation("FollowUpOpener")
+  followUpsOwned             FollowUpItem[]         @relation("FollowUpOwner")
+  followUpsClosed            FollowUpItem[]         @relation("FollowUpCloser")
+  followUpEvents             FollowUpItemEvent[]
+  scorePeriods               UserScorePeriod[]
+  appreciations              ActivityAppreciation[]
+  auditLogs                  AuditLog[]             @relation("AuditLogUser")
+  auditLogsAsActual          AuditLog[]             @relation("AuditLogActualUser")
+  backupRequests              BackupRequest[]        @relation("BackupRequestRequester")
+  systemResetRequests        SystemResetRequest[]   @relation("SystemResetRequester")
+  helpArticlesCreated        HelpArticle[]          @relation("HelpArticleCreator")
+  helpArticlesUpdated        HelpArticle[]          @relation("HelpArticleUpdater")
+  feedbackSubmitted          Feedback[]             @relation("FeedbackSubmitter")
+  feedbackRead               Feedback[]             @relation("FeedbackReader")
+  feedbackReviewed           Feedback[]             @relation("FeedbackReviewer")
+  feedbackResolved           Feedback[]             @relation("FeedbackResolver")
+
+  @@index([orgUnitId])
+  @@index([isActive])
+
+  /// Root olarak açtığı faaliyet silme talepleri (03.09.2026).
+  deletionRequests ActivityDeletionRequest[] @relation("DeletionRequester")
+}
+
+/// Parola ve kilitlenme bilgisi; kullanıcı kaydından ayrı tutulur ki kullanıcı
+/// listesi okunurken gizli veri taşınmasın (§15.3).
+model UserCredential {
+  userId            String    @id
+  passwordHash      String
+  passwordChangedAt DateTime  @default(now()) @db.Timestamptz(3)
+  /// İlk girişte kullanıcının kendi parolasını belirlemesi gerekir.
+  mustChangePassword Boolean @default(false)
+  /// Kimlik bilgisinin kuşağı. Parola her değiştiğinde atomik olarak artar;
+  /// oturumlar hangi kuşakta doğduklarını taşır. Kuşağı duvar saatiyle ölçmek
+  /// yetmiyordu: parola değişimi ile giriş isteği çakıştığında, değişimden
+  /// sonra biten bir giriş daha büyük bir zaman damgası taşıdığı için geçerli
+  /// sayılabiliyordu (denetim 17.08.2026, FAZ 2 bulgu 1).
+  version           Int       @default(0)
+  /// Ardışık başarısız giriş sayısı; başarılı girişte sıfırlanır.
+  failedLoginCount  Int       @default(0)
+  /// Doluysa bu ana kadar giriş kapalıdır (10 denemede geçici kilit).
+  lockedUntil       DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+/// Sunucu tarafında saklanan oturum. Belirtecin kendisi değil, özeti tutulur.
+model Session {
+  id                String    @id @default(uuid())
+  userId            String
+  tokenHash         String    @unique
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  lastUsedAt        DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt         DateTime  @db.Timestamptz(3)
+  /// Oturumun doğduğu kimlik kuşağı; güncel kuşaktan eskiyse oturum geçersizdir.
+  credentialVersion Int       @default(0)
+  /// Doluysa oturum iptal edilmiştir (parola değişimi, çıkış, yönetici iptali).
+  revokedAt         DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Faaliyet (§16.2)
+// ---------------------------------------------------------------------------
+
+/// Faaliyetin yaşam döngüsü (§5.4). Diyalog ve takip durumları buna karışmaz.
+/// Sürüm 1'de yöneticiler onaya tabi olmadığı için kayıt doğrudan APPROVED
+/// doğar; diğer durumlar Sürüm 2 onay akışıyla kullanılır.
+enum ActivityApprovalStatus {
+  DRAFT
+  PENDING_APPROVAL
+  CHANGES_REQUESTED
+  APPROVED
+  /// §4.4 hata durumu: yöneticisi bulunamayan faaliyet kaybolmaz, bu durumda
+  /// bekler ve sistem yöneticisine alarm gider.
+  MANAGER_NOT_FOUND
+  /// Müdür kaydı uygun bulmadı ve süreci kapattı (§5.4, 19.08.2026 kararı).
+  /// İptalden farklıdır: iptal yayımlanmış kaydın geri çekilmesi, reddetme
+  /// kaydın hiç kabul edilmemesidir.
+  REJECTED
+  CANCELLED
+}
+
+/// Onay kararının gerekçe kategorisi hangi karara ait (§5.4).
+enum ApprovalReasonKind {
+  CHANGES_REQUESTED
+  REJECTED
+}
+
+/// Onay kararı gerekçeleri; sistem yöneticisi tanımlar (19.08.2026 kararı).
+/// Serbest metin raporlanamaz: herkes kendi cümlesini yazarsa "neden
+/// reddediliyor" sorusu sayıya dökülemez. Kategori zorunlu, açıklama
+/// isteğe bağlıdır.
+model ApprovalReason {
+  id        String             @id @default(uuid())
+  kind      ApprovalReasonKind
+  label     String             @db.VarChar(120)
+  /// Ekrandaki sıra; küçük olan üstte.
+  sortOrder Int                @default(0)
+  /// Fiziksel silme yok (§16.6): kullanımdan kalkan gerekçe pasifleştirilir,
+  /// eski kayıtlar gerekçesini korur.
+  isActive  Boolean            @default(true)
+  createdAt DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime           @updatedAt @db.Timestamptz(3)
+
+  activities Activity[]
+
+  /// Bileşik yabancı anahtarın hedefi: faaliyetteki gerekçenin türü,
+  /// kararın türüyle aynı olmak **zorunda** (veritabanı zorlar).
+  @@unique([id, kind])
+  @@unique([kind, label])
+  @@index([kind, isActive, sortOrder])
+}
+
+model Activity {
+  id              String   @id @default(uuid())
+  authorId        String
+  /// Yazım anında dondurulur (§4.6): kişi departman değiştirse de geçmiş
+  /// faaliyet yazıldığı birimle raporlanır. Görünürlük ise güncel ağaçtan gelir.
+  authorOrgUnitId String
+  /// Faaliyetin ait olduğu gün. Geçmişe dönük giriş sistem ayarıyla sınırlı (§5.6).
+  activityDate    DateTime @db.Date
+  title           String   @db.VarChar(150)
+  description     String   @db.VarChar(10000)
+
+  /// İnsan okur sıra numarası (ister belgesi §3.1): departmanlardan bağımsız,
+  /// yazım sırasına göre artar. Kimlik hâlâ `id`dir; bu numara konuşurken
+  /// ve belgede atıf verirken kullanılır ("412 numaralı faaliyet").
+  activityNo Int @unique @default(dbgenerated("nextval('activity_no_seq')"))
+
+  approvalStatus    ActivityApprovalStatus @default(APPROVED)
+  /// Son revizyonun numarası; ilk kayıt 1'dir.
+  currentRevisionNo Int                    @default(1)
+
+  /// Aktif onaylayıcı (§4.4 ile yazım anında çözülür, §8.2 matrisinde bu
+  /// sütun). Onaydan sonra da durur: "kim onayladı" sorusunun cevabıdır.
+  /// Onaya tabi olmayan birimlerde boştur.
+  approverId          String?
+  /// İşin onaylayıcının önüne düştüğü an. Düzeltilip yeniden gönderilen
+  /// kayıtta **yenilenir**: hatırlatma sayacı, kaydın ilk yazıldığı andan
+  /// değil, şu an bekleyen kişinin önüne düştüğü andan işler (açık soru 13
+  /// ile aynı ilke).
+  approvalSubmittedAt DateTime?           @db.Timestamptz(3)
+  /// Onaylandığı, düzeltme istendiği ya da reddedildiği an.
+  approvalDecidedAt   DateTime?           @db.Timestamptz(3)
+  /// Kararın gerekçe kategorisi. "Düzeltme istendi" ve "reddedildi"
+  /// durumlarında **zorunludur**; başka durumda boştur (veritabanı zorlar).
+  approvalReasonId    String?
+  /// Kategorinin türü; yalnız bileşik yabancı anahtar için tutulur ve
+  /// duruma uyması gerekir. Uygulama bunu elle yazmaz.
+  approvalReasonKind  ApprovalReasonKind?
+  /// Kararın serbest açıklaması; isteğe bağlı. Kategori raporlanır,
+  /// açıklama yazana yol gösterir.
+  approvalReasonNote  String?             @db.VarChar(1000)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  author         User            @relation("ActivityAuthor", fields: [authorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  approver       User?           @relation("ActivityApprover", fields: [approverId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  approvalReason ApprovalReason? @relation(fields: [approvalReasonId, approvalReasonKind], references: [id, kind], onDelete: Restrict, onUpdate: Restrict)
+  authorOrgUnit  OrgUnit         @relation("ActivityAuthorUnit", fields: [authorOrgUnitId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  scoreFacts        UserScorePeriodFact[]
+  revisions         ActivityRevision[]
+  /// Bu kaydı onaylayabilecek kişiler; yazım anında dondurulur.
+  eligibleApprovers ActivityApprover[]
+  followUps         FollowUpItem[]
+  targetDepts       ActivityTargetDept[]
+  attachments       Attachment[]
+  cancellation      CancellationRecord?
+  conversations     Conversation[]
+  readReceipts      ReadReceipt[]
+  appreciations     ActivityAppreciation[]
+  notifications     NotificationQueue[]
+
+  /// Onay turlarının değişmez geçmişi (P3-R2-1).
+  approvalRounds ApprovalRound[]
+
+  @@index([authorOrgUnitId, activityDate])
+  @@index([approvalStatus, activityDate])
+  /// Onay kutusu sorgusu: "bana düşen onaylar".
+  @@index([approverId, approvalStatus])
+  @@index([authorId, activityDate])
+}
+
+/// Her kaydetme değişmez bir revizyon üretir (§5.5). Denetim izinin "tek doğru
+/// kaynak" olması buna bağlıdır; revizyon kayıtları güncellenmez.
+/// Gönderilmemiş faaliyet taslağı (ürün sahibi isteği, 21.08.2026).
+///
+/// **Faaliyet değildir.** Ayrı tablo olmasının üç sebebi var:
+///
+///   1. Taslağın sıra numarası (`activityNo`) olmamalı. O numara insanların
+///      birbirine atıf verdiği kalıcı bir kimlik; hiç gönderilmemiş bir metin
+///      için numara yakmak, numara dizisinde açıklanamayan boşluklar bırakır.
+///   2. Görünürlük sorusu hiç doğmamalı. Taslak yalnız yazarınındır; onu
+///      `Activity` tablosunda tutmak, her okuma sorgusuna "ve taslak olmasın"
+///      koşulu eklemek demekti — unutulan tek sorgu sızıntı olurdu.
+///   3. Taslak **silinebilir**. Faaliyet silinemez (§16.6) çünkü olmuş bir
+///      şeyin kaydıdır; taslak ise hiç olmamış bir şeyin müsveddesidir.
+///      Kullanıcı gönderilmemiş notunu çöpe atabilmeli.
+///
+/// İki yoldan doğar ve ikisi de aynı listede görünür (Outlook'taki gibi):
+/// kullanıcı bilerek kaydeder ya da yazarken otomatik kaydedilir.
+/// Onay turu: işin onaylayıcının önüne düştüğü an ve verilen karar.
+///
+/// **Değişmez kayıt** (denetim 23.08.2026, P3-R2-1). `Activity`
+/// üzerindeki `approvalSubmittedAt` "şu an ne zamandır bekliyor" demektir ve
+/// karar verilince **boşaltılır**; bir kayıt düzeltilip yeniden
+/// gönderilebildiği için de tek sütun birden fazla turu taşıyamaz. Onay
+/// süresi boyutu bu yüzden canlı sütunlardan değil, buradan hesaplanır:
+/// karar anında gönderim anı kaybolmaz.
+model ApprovalRound {
+  id         String @id @default(uuid())
+  activityId String
+  /// Kaçıncı tur; ilk gönderim 1, her yeniden gönderim bir artırır.
+  roundNo    Int
+
+  /// İşin onaylayıcının önüne düştüğü an.
+  submittedAt DateTime                @db.Timestamptz(3)
+  /// Karar anı; tur hâlâ açıksa boş.
+  decidedAt   DateTime?               @db.Timestamptz(3)
+  /// Kararı veren kişi; turu kapatan karar sahibidir.
+  decidedById String?
+  /// Kararın kendisi: onaylandı, düzeltme istendi ya da reddedildi.
+  decision    ActivityApprovalStatus?
+
+  activity  Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  decidedBy User?    @relation("ApprovalRoundDecider", fields: [decidedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([activityId, roundNo])
+  @@index([decidedById, decidedAt])
+}
+
+model ActivityDraft {
+  id       String @id @default(uuid())
+  authorId String
+
+  /// Alanların hepsi eksik olabilir: taslak yarım kalmış bir formdur.
+  activityDate     DateTime @db.Date
+  title            String   @db.VarChar(150)
+  description      String   @db.VarChar(10000)
+  targetOrgUnitIds String[]
+  openFollowUp     Boolean  @default(false)
+
+  /// Kullanıcı "Taslak olarak kaydet" dedi mi, yoksa otomatik mi kaydedildi?
+  /// Listede ayırt edilir: bilerek bekletilen taslak ile kazara kalan metin
+  /// aynı şey değildir.
+  savedManually Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attachments ActivityDraftAttachment[]
+
+  @@index([authorId, updatedAt])
+}
+
+/// Sunucu taslağına bağlı dosya eki (§5.7, §15.4).
+///
+/// Taslak eki, gönderilene kadar faaliyet eki değildir. Bu ayrım taslağın
+/// yalnız yazarına ait kalmasını ve taslak silme istisnasının dar tutulmasını
+/// sağlar. Silme, migration'daki transaction işaretine bağlı tetikleyici ile
+/// yalnız taslak silme veya başarılı gönderim sırasında açılır.
+model ActivityDraftAttachment {
+  id           String   @id @default(uuid())
+  draftId      String
+  originalName String   @db.VarChar(255)
+  /// Sunucuda üretilmiş ad — kullanıcının verdiği ad diskte kullanılmaz.
+  storedName   String   @unique @db.VarChar(255)
+  storagePath  String   @db.VarChar(500)
+  sizeBytes    Int
+  /// İçerik imzasından doğrulanmış MIME türü.
+  mimeType     String   @db.VarChar(150)
+  sha256       String   @db.Char(64)
+  uploadedById String
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  draft      ActivityDraft @relation(fields: [draftId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  uploadedBy User          @relation("ActivityDraftAttachmentUploader", fields: [uploadedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// Otomatik kaydetmenin aynı dosyayı tekrar tekrar üretmesini engeller.
+  @@unique([draftId, sha256, originalName])
+  @@index([draftId, createdAt])
+  @@index([sha256])
+}
+
+/// Kaydın uygun onaylayıcıları (20.08.2026 kararı).
+///
+/// Yazarın biriminde birden fazla müdür olabildiği için "onaylayıcı" tek bir
+/// sütunla ifade edilemez. Liste **yazım anında dondurulur**: ağaç sonradan
+/// değişse bile akıştaki iş sessizce başkasına devrolmaz.
+///
+/// Onaya tabi olmayan birimde liste boştur; kayıt doğrudan onaylı doğar.
+model ActivityApprover {
+  activityId String
+  userId     String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([activityId, userId])
+  @@index([userId])
+}
+
+model ActivityRevision {
+  id               String   @id @default(uuid())
+  activityId       String
+  revisionNo       Int
+  title            String   @db.VarChar(150)
+  description      String   @db.VarChar(10000)
+  /// Muhatap departmanların o andaki anlık görüntüsü. Sonradan değişse de
+  /// revizyon o günkü hâli gösterir.
+  targetOrgUnitIds String[]
+  changedById      String
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  activity  Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  changedBy User     @relation(fields: [changedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([activityId, revisionNo])
+  @@index([activityId, createdAt])
+}
+
+/// Faaliyetin muhatap departmanları (§5.3). Konu etiketidir; kimseye erişim
+/// vermez (§8.3). Bileşik anahtar mükerrer kaydı engeller; en fazla 5 kaydolma
+/// kısıtı 0.2b'de eklenir.
+model ActivityTargetDept {
+  activityId String
+  orgUnitId  String
+
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  orgUnit  OrgUnit  @relation(fields: [orgUnitId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([activityId, orgUnitId])
+  @@index([orgUnitId, activityId])
+}
+
+/// Dosya eki (§15.4). Kullanıcının verdiği ad saklama adı olarak kullanılmaz;
+/// tür uzantıdan değil içerik imzasından doğrulanır.
+model Attachment {
+  id           String   @id @default(uuid())
+  activityId   String
+  originalName String   @db.VarChar(255)
+  /// Sunucuda üretilmiş ad — yol enjeksiyonunu imkânsızlaştırır.
+  storedName   String   @unique @db.VarChar(255)
+  storagePath  String   @db.VarChar(500)
+  sizeBytes    Int
+  /// İçerik imzasından doğrulanmış tür.
+  mimeType     String   @db.VarChar(150)
+  sha256       String   @db.Char(64)
+  uploadedById String
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  uploadedBy User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([activityId])
+  @@index([sha256])
+}
+
+/// İptal kaydı (§5.5). Faaliyet silinmez, üstü çizili kalır; iptal geri alınamaz
+/// ve faaliyet başına tek kayıt olur.
+model CancellationRecord {
+  activityId    String   @id
+  cancelledById String
+  reason        String   @db.VarChar(1000)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  activity    Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cancelledBy User     @relation(fields: [cancelledById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([cancelledById])
+}
+
+// ---------------------------------------------------------------------------
+// Diyalog ve okundu (§16.4)
+// ---------------------------------------------------------------------------
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum ConversationCloseType {
+  /// Soran kişi ya da 10 iş günü sonra soranın üstü kapattı (§9.3).
+  NORMAL
+  /// Sistem yöneticisinin gerekçeli idari kapatması (taraflardan biri
+  /// pasifleştirildiğinde). `closeReason` zorunludur.
+  ADMINISTRATIVE
+  /// Faaliyet iptal edildiği için kapandı (§5.5). İdari kapatmadan ayrı
+  /// tutulur; gerekçe faaliyetin iptal kaydındadır (ürün sahibi kararı,
+  /// açık soru 9).
+  CANCELLED_ACTIVITY
+}
+
+/// Bir faaliyet üzerinde birbirinden bağımsız birden fazla konuşma olabilir
+/// (§9.1). Her konuşmanın tek sorumlusu vardır: iş kimde, her an bellidir.
+model Conversation {
+  id            String                 @id @default(uuid())
+  activityId    String
+  askerId       String
+  /// Konuşma kimin iş listesinde duruyor. Cevapla el değiştirir (§9.2).
+  responsibleId String
+  status        ConversationStatus     @default(OPEN)
+  openedAt      DateTime               @default(now()) @db.Timestamptz(3)
+  closedById    String?
+  closedAt      DateTime?              @db.Timestamptz(3)
+  closeType     ConversationCloseType?
+  /// Yalnız idari kapatmada dolu olur; diğer türlerde boş kalması veritabanı
+  /// kısıtıyla zorlanır.
+  closeReason   String?                @db.VarChar(500)
+
+  activity    Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  asker       User     @relation("ConversationAsker", fields: [askerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  responsible User     @relation("ConversationResponsible", fields: [responsibleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  closedBy    User?    @relation("ConversationCloser", fields: [closedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  messages ConversationMessage[]
+
+  @@index([responsibleId, status])
+  @@index([askerId, status])
+  @@index([activityId, status])
+}
+
+model ConversationMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  authorId       String
+  text           String   @db.VarChar(10000)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  author       User         @relation(fields: [authorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([conversationId, createdAt])
+}
+
+/// Okundu bilgisi (§10). Kullanıcı başına yalnızca ilk ve son okuma saklanır;
+/// ara okumaların dökümü tutulmaz — bu bir kolaylık göstergesidir, denetim
+/// kaydı değildir (§10.3).
+model ReadReceipt {
+  activityId  String
+  userId      String
+  firstReadAt DateTime @default(now()) @db.Timestamptz(3)
+  lastReadAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([activityId, userId])
+  @@index([userId, lastReadAt])
+}
+
+// ---------------------------------------------------------------------------
+// Takvim, bildirim, sistem (§16.5)
+// ---------------------------------------------------------------------------
+
+/// Şirket geneli tek çalışma takvimi (§12.1 — v3'te vardiya ve kişi bazlı
+/// takvim kaldırıldı). Tek kayıt olması 0.2b'de veritabanı kısıtıyla zorlanır.
+model WorkCalendar {
+  id              Int   @id @default(1)
+  /// Çalışılan günler, ISO-8601 gün numaraları (1 = Pazartesi … 7 = Pazar).
+  workingDays     Int[]
+  /// Mesai başlangıç/bitişi, gün başından itibaren dakika (örn. 08:30 → 510).
+  /// Yerel saat (Europe/Istanbul) olarak yorumlanır; zaman dilimi taşımaz.
+  workStartMinute Int
+  workEndMinute   Int
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+
+/// Birime özel mesai penceresi (Görev 11.9, tasarım Paket H).
+///
+/// **Takvim ikiye ayrıldı.** `WorkCalendar` şirket varsayılanı olarak kaldı;
+/// burası yalnız **mesai penceresini** birim bazlı yapıyor: hangi günler
+/// çalışılıyor, mesai ne zaman bitiyor, resmî tatilde çalışılıyor mu.
+///
+/// İş günü sayacı (`businessDaysBetween`) bundan **etkilenmez** ve şirket
+/// geneli kalır: sayaç iki kişi arasındaki ortak süre ölçüsüdür — soruyu
+/// satıştan biri sorar, cevabı üretimden biri verir. Taraflardan birinin
+/// takvimine bağlansaydı aynı kayıt iki ekranda farklı sayı gösterirdi.
+///
+/// Birimin satırı yoksa **üst birime** bakılır, en sonda şirket varsayılanına
+/// düşülür. 30 birimlik bir ağaçta iki üç satır yeter.
+model OrgUnitWorkCalendar {
+  orgUnitId       String  @id
+  /// Çalışılan günler, ISO-8601 gün numaraları (1 = Pazartesi … 7 = Pazar).
+  workingDays     Int[]
+  /// Mesai başlangıç/bitişi, gün başından itibaren dakika (örn. 07:00 → 420).
+  workStartMinute Int
+  workEndMinute   Int
+  /// Resmî tatillerde çalışılır mı. Üretim gibi birimler için true.
+  ///
+  /// Ayrı bir birim-tatil listesi **açılmadı**: 30 birim × 15 tatil ayrı ayrı
+  /// bakım yükü doğururdu ve ürün sahibinin tarif ettiği ihtiyaç ("satış
+  /// resmî tatilde kapalı, üretim açık") tek bayrakla karşılanıyor.
+  worksOnHolidays Boolean @default(false)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  orgUnit OrgUnit @relation(fields: [orgUnitId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+/// Resmî tatiller. Bu günlerde hatırlatma gitmez ve iş günü sayacı işlemez.
+model Holiday {
+  date        DateTime @id @db.Date
+  description String   @db.VarChar(150)
+}
+
+/// "Faaliyet beklenmiyor" dönemi (§12.1): yönetici işaretler, o aralıkta
+/// hatırlatma gitmez ve katılım paydası düşer. Çalışanların kendi talepleri
+/// yöneticinin onayından sonra geçerli olur; yöneticinin kendi kaydı doğrudan
+/// onaylıdır.
+enum NoActivityPeriodStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum NoActivityDecisionRoute {
+  DIRECT_ENTRY
+  DIRECT_MANAGER
+  DEPUTY
+  UPPER_MANAGER
+}
+
+model NoActivityPeriod {
+  id         String   @id @default(uuid())
+  userId     String
+  startDate  DateTime @db.Date
+  endDate    DateTime @db.Date
+  note       String?  @db.VarChar(500)
+  /// Yönetici yokluğunda geçici yetki alan vekil.
+  deputyId   String?
+  markedById String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Kişinin kendi talebi bekler; yönetici girişi ve yöneticinin kendi kaydı
+  /// doğrudan onaylıdır.
+  status           NoActivityPeriodStatus @default(APPROVED)
+  decidedAt        DateTime?              @db.Timestamptz(3)
+  decidedById      String?
+  decisionReason   String?                @db.VarChar(500)
+  /// Kararın doğrudan giriş, doğrudan yönetici, vekil veya üst yönetici
+  /// yolundan geldiğini geçmişte de açıklayabilmek için tutulur.
+  decisionRoute    NoActivityDecisionRoute?
+
+  /// İptal (denetim 21.08.2026, bulgu 7).
+  ///
+  /// Dönem **silinmez.** Vekilin bütün geçmiş görünürlüğü bu satırdan türer
+  /// (§4.5): satır gidince vekil, vekâlet ettiği dönemin kayıtlarını bir anda
+  /// kaybeder ve "sonradan soru gelirse cevap verebilmeli" kuralı çöker.
+  /// Yanlış girilen kayıt gerekçeyle iptal edilir; iptal edilen dönem hiç
+  /// yaşanmamış sayılır — hatırlatmayı durdurmaz, vekâlet açmaz, çakışma
+  /// kısıtına girmez.
+  cancelledAt        DateTime? @db.Timestamptz(3)
+  cancelledById      String?
+  cancellationReason String?   @db.VarChar(500)
+
+  user        User  @relation("NoActivityPeriodUser", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  deputy      User? @relation("NoActivityPeriodDeputy", fields: [deputyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  markedBy    User  @relation("NoActivityPeriodMarker", fields: [markedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cancelledBy User? @relation("NoActivityPeriodCanceller", fields: [cancelledById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  decidedBy   User? @relation("NoActivityPeriodDecider", fields: [decidedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId, startDate, endDate])
+  @@index([userId, status, cancelledAt])
+  @@index([decidedById, decidedAt])
+  /// Vekâlet kapsamı sorgusu: "bu kişi kimlere vekâlet ediyor/etti".
+  @@index([deputyId, cancelledAt])
+}
+
+/// Tarayıcı push aboneliği (§12.3, Görev 5.3b).
+///
+/// Bir kişinin birden çok cihazı olabilir; her tarayıcı ayrı abonelik üretir.
+/// `endpoint` aboneliğin kimliğidir ve tekildir: aynı tarayıcı yeniden izin
+/// verdiğinde yeni kayıt açılmaz, mevcut kayıt tazelenir.
+///
+/// **Anahtarlar sır değildir** — gönderim için tarayıcının verdiği açık
+/// anahtarlardır; şifreleme VAPID özel anahtarıyla yapılır ve o ayarlarda
+/// mühürlü durur.
+model PushSubscription {
+  id        String  @id @default(uuid())
+  userId    String
+  endpoint  String  @unique @db.VarChar(1000)
+  /// Tarayıcının açık anahtarı (base64url).
+  p256dh    String  @db.VarChar(255)
+  /// Kimlik doğrulama sırrı (base64url).
+  auth      String  @db.VarChar(255)
+  /// Hangi cihaz olduğunu kullanıcıya göstermek için; kimlik değildir.
+  userAgent String? @db.VarChar(300)
+
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  lastSentAt   DateTime? @db.Timestamptz(3)
+  /// Üst üste başarısız gönderim sayısı. Kalıcı hata (404/410) tek seferde
+  /// kaydı düşürür; geçici hata sayaç artırır.
+  failureCount Int       @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId])
+}
+
+enum FollowUpStatus {
+  OPEN
+  CLOSED
+}
+
+/// Takip maddesi olayı (§11.1: "her açılış/kapanış olay kaydına yazılır").
+enum FollowUpEventKind {
+  OPENED
+  CLOSED
+  REOPENED
+  TRANSFERRED
+  UPDATED
+  /// Faaliyete yorum/cevap geldi ve madde hareket gördü (§11.1). İçerik
+  /// taşımaz; "hareketsiz kaç gün" hesabı geçmişten çözülebilsin diye durur
+  /// (denetim 23.08.2026, P3-R2-3).
+  TOUCHED
+}
+
+/// Takip maddesi (§11). Faaliyet girerken tek tıkla açılan "bu konu açık
+/// kalıyor" işareti; ama **boolean değil bağımsız kayıt** — Excel'de ölen
+/// Açık/Kapalı sütununun yeniden üretilmemesi için sahibi, kapanış notu ve
+/// olay geçmişi var (§16.4).
+///
+/// Sistem hiçbir maddeyi kendiliğinden yukarı taşımaz (§11.2); yalnız
+/// hareketsiz olanları ayrı bir ekranda **görünür kılar.**
+model FollowUpItem {
+  id         String         @id @default(uuid())
+  activityId String
+  status     FollowUpStatus @default(OPEN)
+
+  /// Maddeyi açan kişi.
+  openedById String
+  openedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Sahibi. Varsayılan açan kişidir; devredilebilir (§4.6: pasifleştirme
+  /// öncesi açık işler devredilir ya da kapatılır).
+  ownerId String
+
+  /// "Sonraki adım" kısa metni; isteğe bağlı.
+  nextStep   String?   @db.VarChar(500)
+  /// Gözden geçirme günü; isteğe bağlı.
+  reviewDate DateTime? @db.Date
+
+  /// Son hareket (§11.1). Faaliyete yeni yorum/cevap geldiğinde ve madde
+  /// üzerinde işlem yapıldığında güncellenir. "Hareketsiz kaç gün" bundan
+  /// hesaplanır.
+  lastMovedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Kapanış. Not **zorunludur** (§11.1); veritabanı da zorlar.
+  closedById  String?
+  closedAt    DateTime? @db.Timestamptz(3)
+  closingNote String?   @db.VarChar(1000)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  openedBy User     @relation("FollowUpOpener", fields: [openedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  owner    User     @relation("FollowUpOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  closedBy User?    @relation("FollowUpCloser", fields: [closedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  events FollowUpItemEvent[]
+
+  @@index([ownerId, status, lastMovedAt])
+  @@index([activityId, status])
+}
+
+/// Takip maddesinin olay geçmişi (§11.1, §16.4). Madde bir boolean değil,
+/// **geçmişi olan** bir kayıttır; kim ne zaman ne yaptı burada durur.
+model FollowUpItemEvent {
+  id         String            @id @default(uuid())
+  followUpId String
+  kind       FollowUpEventKind
+  actorId    String
+  /// Kapanış/yeniden açma gerekçesi ya da devir notu.
+  note       String?           @db.VarChar(1000)
+  createdAt  DateTime          @default(now()) @db.Timestamptz(3)
+
+  followUp FollowUpItem @relation(fields: [followUpId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor    User         @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([followUpId, createdAt])
+}
+
+/// Kişinin bildirim tercihi (§12.3, Görev 10.8).
+///
+/// Kullanıcının e-posta alma biçimi üç seçenekle sınırlıdır. Olayların şirket
+/// genelinde açılıp kapanması ve kanal seçimi `SystemSetting` üzerinden yapılır;
+/// bu alan kişi başına olay × kanal matrisi tutmaz.
+enum NotificationMode {
+  /// Olay olur olmaz.
+  INSTANT
+  /// Günde tek özet (şirket saatiyle akşam).
+  DAILY_DIGEST
+  /// Yalnız kişiden bir şey isteyen olaylar; bilgilendirmeler gitmez.
+  ACTION_ONLY
+}
+
+enum NotificationChannel {
+  EMAIL
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  /// Gönderilmeden kapatıldı: alıcı artık ilgili kaydı göremiyor (§8).
+  /// `FAILED` değildir — ortada arıza yok, gönderilmemesi **doğru** karardır
+  /// ve operasyon ekranında hata gibi görünmemeli.
+  CANCELLED
+}
+
+/// Bildirim kuyruğu (§12.3): işlem içinde yazılır, işleyici süreci gönderir.
+/// Idempotency anahtarı (olay + hedef kullanıcı + nesne) aynı olayın iki kez
+/// işlenmesi hâlinde tek bildirim gitmesini sağlar.
+model NotificationQueue {
+  id             String              @id @default(uuid())
+  userId         String
+  eventType      String              @db.VarChar(100)
+  /// İlgili faaliyet; bildirim bir faaliyete bağlıysa doldurulur.
+  ///
+  /// Kimlik yükün içinde de var ama orada **süzülemez**: JSON alanına
+  /// görünürlük koşulu bağlanamaz. Ayrı sütun olmasının tek sebebi, bildirim
+  /// kutusunu ve göndericiyi görünürlük modülünün süzgecinden geçirebilmek
+  /// (denetim 21.08.2026, bulgu 3). Görünürlüğünü kaybeden kişiye
+  /// başlık taşıyan e-posta gidiyordu.
+  activityId     String?
+  channel        NotificationChannel
+  /// Gönderim içeriğini üretmek için gereken veri (şablon değişkenleri).
+  payload        Json
+  idempotencyKey String              @unique @db.VarChar(255)
+  status         NotificationStatus  @default(PENDING)
+  attemptCount   Int                 @default(0)
+  lastAttemptAt  DateTime?           @db.Timestamptz(3)
+  sentAt         DateTime?           @db.Timestamptz(3)
+  /// Kullanıcı bunu **uygulama içinde** gördü mü (Görev 10.4). Gönderimden
+  /// bağımsızdır: e-posta gitmemiş olabilir ama kişi ekranda görmüş olabilir,
+  /// ya da tersi. Yalnız `EMAIL` satırında anlamlıdır — zil kutusu o satırı
+  /// kanonik sayar.
+  seenAt         DateTime?           @db.Timestamptz(3)
+  lastError      String?
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  activity Activity? @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([status, lastAttemptAt])
+  @@index([userId, createdAt])
+  /// Zil kutusu: "bu kişinin görmedikleri".
+  @@index([userId, channel, seenAt])
+  @@index([activityId])
+}
+
+/// Zamanlanmış işlerin nabzı (§12.4). Zamanlayıcı durursa sistem çalışıyor
+/// görünür ama süreçler sessizce ölür; bu tablo o arızayı görünür kılar.
+model ScheduledJobStatus {
+  jobName                 String    @id @db.VarChar(100)
+  lastSuccessAt           DateTime? @db.Timestamptz(3)
+  lastError               String?
+  /// İşin beklenen çalışma aralığı; bunun iki katı gecikmede alarm üretilir.
+  expectedIntervalMinutes Int
+  updatedAt               DateTime  @updatedAt @db.Timestamptz(3)
+}
+
+enum BackupRequestSource {
+  MANUAL
+  SCHEDULED
+}
+
+enum BackupRequestStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// Panelden istenen veya günlük zamanlayıcı tarafından oluşturulan yedek işi.
+/// Yedek işlemi uygulamanın dışındaki koşucuda çalışır; bu satır panel ile
+/// koşucu arasındaki güvenli iletişim kuyruğudur.
+model BackupRequest {
+  id            String              @id @default(uuid())
+  source        BackupRequestSource
+  requestedById String?
+  status        BackupRequestStatus  @default(PENDING)
+  requestedAt   DateTime            @default(now()) @db.Timestamptz(3)
+  startedAt     DateTime?           @db.Timestamptz(3)
+  finishedAt    DateTime?           @db.Timestamptz(3)
+  fileName      String?             @db.VarChar(500)
+  sizeBytes     BigInt?
+  message       String?             @db.VarChar(1000)
+
+  requestedBy User? @relation("BackupRequestRequester", fields: [requestedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([status, requestedAt])
+  @@index([requestedAt])
+  @@index([requestedById, requestedAt])
+}
+
+enum SystemResetStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// Web panelinden istenen başlangıca dönüş işlemi. Sıfırlama uygulama
+/// konteynerinin içinden değil, host koşucusu üzerinden yürütülür.
+model SystemResetRequest {
+  id                    String            @id @default(uuid())
+  requestedById         String?
+  status                SystemResetStatus @default(PENDING)
+  requestedAt           DateTime          @default(now()) @db.Timestamptz(3)
+  startedAt             DateTime?         @db.Timestamptz(3)
+  finishedAt            DateTime?         @db.Timestamptz(3)
+  bootstrapFullName     String            @db.VarChar(150)
+  bootstrapEmail        String            @db.VarChar(255)
+  bootstrapPasswordHash String?           @db.VarChar(255)
+  message               String?           @db.VarChar(1000)
+
+  requestedBy User? @relation("SystemResetRequester", fields: [requestedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([status, requestedAt])
+  @@index([requestedById, requestedAt])
+}
+
+/// Varsayılanlar koda gömülmez, ayardan gelir (§16.5): geçmişe dönük gün sayısı,
+/// düzenleme penceresi, ek dosya sınırları, yöneticiye katılım özeti.
+/// Örnek verinin **köken kaydı** (denetim 23.08.2026, P3-R5-2).
+///
+/// Demo kullanıcı e-posta alan adından, demo faaliyet de yazarından
+/// tanınabiliyor; ama birim öyle değil. Kurulum aynı adlı bir birim bulunca
+/// onu **yeniden kullanıyor** ve temizlik yalnız ada bakarsa daha önceden
+/// var olan **gerçek** bir birimi siler. Ad bir köken kaydı değildir.
+///
+/// Bu tablo kurulumla ilişkili nesnelerin köken kararını taşır. Temizlik
+/// yalnız `CREATED_BY_INSTALLER` olanları silme kümesine alır;
+/// `REUSED_EXISTING` gerçek nesneyi korur.
+enum DemoObjectOrigin {
+  CREATED_BY_INSTALLER
+  REUSED_EXISTING
+}
+
+model DemoObject {
+  /// Nesne türü, örn. `org_unit`.
+  objectType String           @db.VarChar(40)
+  objectId   String
+  /// Kurulum mu oluşturdu, yoksa daha önce var olan nesneyi mi kullandı?
+  /// Silme kararı addan değil bu değişmez köken kararından çıkar.
+  origin     DemoObjectOrigin
+  createdAt  DateTime         @default(now()) @db.Timestamptz(3)
+
+  @@id([objectType, objectId])
+}
+
+model SystemSetting {
+  key         String   @id @db.VarChar(100)
+  value       String   @db.VarChar(500)
+  description String   @db.VarChar(500)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+}
+
+/// Uygulamadaki yardım ve sık sorulanlar kütüphanesi. İçerik düz metindir;
+/// HTML ya da çalıştırılabilir içerik saklanmaz. Silme yerine arşivleme yapılır.
+model HelpArticle {
+  id          String    @id @default(uuid())
+  category    String    @db.VarChar(60)
+  title       String    @db.VarChar(200)
+  answer      String    @db.Text
+  sortOrder   Int       @default(0)
+  isPublished Boolean   @default(true)
+  createdById String
+  updatedById String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt  DateTime? @db.Timestamptz(3)
+
+  createdBy User @relation("HelpArticleCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  updatedBy User @relation("HelpArticleUpdater", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([category, archivedAt, isPublished])
+  @@index([archivedAt, sortOrder])
+}
+
+enum FeedbackCategory {
+  BUG
+  SUGGESTION
+  CRITIQUE
+  QUESTION
+}
+
+enum FeedbackStatus {
+  NEW
+  IN_REVIEW
+  RESOLVED
+}
+
+/// Kullanıcıların hata, öneri, eleştiri ve sorularını uygulama içinden
+/// iletebildiği kayıt. Fiziksel silme yerine arşivleme kullanılır.
+model Feedback {
+  id              String           @id @default(uuid())
+  submittedById   String
+  category        FeedbackCategory
+  title           String           @db.VarChar(200)
+  description     String           @db.Text
+  sourcePath      String?          @db.VarChar(500)
+  adminsOnly      Boolean          @default(false)
+  status          FeedbackStatus   @default(NEW)
+  readAt          DateTime?        @db.Timestamptz(3)
+  readById        String?
+  reviewedAt      DateTime?        @db.Timestamptz(3)
+  reviewedById    String?
+  resolvedAt      DateTime?        @db.Timestamptz(3)
+  resolvedById    String?
+  response        String?          @db.Text
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(3)
+  archivedAt      DateTime?        @db.Timestamptz(3)
+
+  submittedBy User  @relation("FeedbackSubmitter", fields: [submittedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  readBy      User? @relation("FeedbackReader", fields: [readById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  reviewedBy  User? @relation("FeedbackReviewer", fields: [reviewedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  resolvedBy  User? @relation("FeedbackResolver", fields: [resolvedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([status, archivedAt, createdAt])
+  @@index([submittedById, archivedAt, createdAt])
+  @@index([readAt, status])
+}
+
+/// Dönemsel skor (Görev 11.10, tasarım Paket I).
+///
+/// **Pay ve payda da saklanır**, yalnız sonuç değil: altı ay sonra "neden 64"
+/// sorulduğunda cevap verilebilmeli.
+///
+/// Temel skor 100 üzerinden hesaplanır. Takdir katkısı ayrıca eklenebildiği
+/// için genel toplam 100'ü aşabilir.
+model UserScorePeriod {
+  userId          String
+  /// Dönemin ilk günü (aylık dönemde ayın 1'i).
+  periodStart     DateTime @db.Date
+  /// Aynı kullanıcı-ay için artan, değişmez karne sürümü. Geç gelen fakat
+  /// kurala uygun veri eski sürümü değiştirmez; yeni sürüm doğurur.
+  revisionNo      Int      @default(1)
+  /// Sürümün neden üretildiği. İlk kapanış `INITIAL`, sonraki düzeltmeler
+  /// yeniden hesaplama isteğinin türünü taşır.
+  revisionReason  String   @default("INITIAL") @db.VarChar(60)
+  /// Yeniden hesaplama isteğiyle birebir bağ. Aynı istek iki sürüm üretemez.
+  sourceRequestId String?  @unique
+  /// Tarihsel düzeltme kişinin bu ay hiç skorlanmaması gerektiğini gösterirse
+  /// eski sürüm silinmez; en yeni sürüm geçersiz kılma mührü olur ve ekran
+  /// dönemi göstermez.
+  voided          Boolean  @default(false)
+
+  /// Düzenlilik puanı: kayıt girilen gün ÷ beklenen iş günü.
+  regularity Int
+  /// Kabul oranı puanı; yalnız **onaya tabi çalışanda** dolu.
+  ///
+  /// Onaya tabi olmayan birimde kayıt doğrudan APPROVED doğar ve kabul oranı
+  /// tanımı gereği %100 olurdu — ölçmeyen bir boyut ağırlığını boşa harcar.
+  acceptance Int?
+  /// Onay süresi puanı; yalnız **yöneticide** dolu. Ret de karardır ve aynı
+  /// puanı getirir: onay mekanizmasının işi kaliteyi süzmek.
+  approval   Int?
+  /// Takip disiplini puanı.
+  followUp   Int
+  total      Int
+
+  /// Paydanın kendisi: dönemde kaç iş günü bekleniyordu.
+  expectedDays Int
+  /// Payın kendisi: kaç günde kayıt girildi.
+  writtenDays  Int
+
+  /// Dönem **donduruldu mu** (denetim 23.08.2026, P3-R2-4).
+  ///
+  /// Kapanmış dönem, başkası baktığında canlı tablolardan yeniden
+  /// hesaplanıyordu ve hesap **bugünün** verisiyle yapılıyordu: eylülde
+  /// verilen onay ağustosun kabul oranını değiştiriyor, sonradan iptal edilen
+  /// izin paydayı büyütüyor, ağırlık ayarı bütün geçmişi yeniden yazıyordu.
+  /// Aynı tarihçe farklı günlerde farklı toplam veriyordu.
+  ///
+  /// Dondurulmuş dönemde katkılar `UserScorePeriodFact` satırlarında,
+  /// payda ve formül ise aşağıdaki kolonlarda durur. Bu bayrak `false` ise
+  /// dönem eski modelden kalmadır: katkısı yoktur, **hiçbir ekranda
+  /// gösterilmez** (ürün sahibi kararı, 25.08.2026 — "geçmiş temizlensin";
+  /// satır fiziksel olarak silinmez, §16.6).
+  frozen Boolean @default(false)
+
+  /// Dönemdeki profil: ağırlıklar buna göre seçilmişti. Rol sonradan
+  /// değişirse geçmiş dönem yine o günkü profille okunur.
+  profile String? @db.VarChar(20)
+
+  /// Dönemde geçerli olan ağırlıklar. Ayar sonradan değişse de kapanmış
+  /// dönem aynı formülle okunur.
+  weightRegularity Int?
+  weightAcceptance Int?
+  weightApproval   Int?
+  weightFollowUp   Int?
+
+  /// Bu dönemde geçerli olan takdir başına puan. Takdir olguları ayrıca
+  /// `UserScorePeriodFact` satırlarında tutulur.
+  appreciationPointsPer Int @default(0)
+
+  /// Dönemin kapandığı **formül sürümü** (denetim 25.08.2026, P8-5).
+  ///
+  /// Ağırlıkları dondurmak yetmiyor: yuvarlama, boş payda davranışı, boyut
+  /// tanımı ya da profil eşlemesi değişirse aynı dönem yeni algoritmayla
+  /// farklı bir toplam verirdi. Okuma bu sürümün hesaplayıcısını seçiyor.
+  formulaVersion Int?
+
+  computedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user  User                  @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  facts UserScorePeriodFact[]
+
+  @@id([userId, periodStart, revisionNo])
+  @@index([periodStart, revisionNo])
+  @@index([userId, periodStart, frozen, revisionNo])
+}
+
+/// Dönemin **katkı gerçekleri** (denetim 23.08.2026, P3-R2-4).
+///
+/// Kapanışta kişi başına tek toplam yerine olgular yazılır. Her satır bir
+/// faaliyete bağlıdır; okuma anında yalnız **görünürlükten** süzülür ve değeri
+/// yeniden hesaplanmaz.
+///
+/// Böylece iki soru ayrışır (tasarım notu, 23.08.2026):
+///   · *Bu kaydı görebilir miyim?* — her zaman **güncel** ağaçtan (§4.6).
+///   · *O dönemde ne oldu?* — **dönem sonundaki** gerçek.
+///
+/// Eski kod ikisini tek sorguda karıştırıyordu: kapsam güncel (doğru), veri de
+/// güncel (yanlış).
+model UserScorePeriodFact {
+  id          String   @id @default(uuid())
+  userId      String
+  periodStart DateTime @db.Date
+  revisionNo  Int      @default(1)
+
+  /// Görünürlük süzgeci bunun üzerinden çalışır: bakan kaydı göremiyorsa
+  /// katkı da sayılmaz.
+  activityId String
+  kind       ScoreFactKind
+  /// Olgunun günü; düzenlilik "kaç ayrı günde" sorusunu bundan cevaplar.
+  happenedOn DateTime      @db.Date
+  /// Katkının **paya girip girmediği**; anlamı türe göre değişir:
+  ///   · `WRITTEN`    — kayıt beklenen bir iş gününe düştü mü (düzenliliğin payı)
+  ///   · `ACCEPTED`   — her zaman `true`
+  ///   · `DECISION`   — karar eşik içinde mi verildi
+  ///   · `OBLIGATION` — madde/soru zamanında ele alındı mı
+  onTime     Boolean       @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  period   UserScorePeriod @relation(fields: [userId, periodStart, revisionNo], references: [userId, periodStart, revisionNo], onDelete: Restrict, onUpdate: Restrict)
+  activity Activity        @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([userId, periodStart, revisionNo])
+  @@index([activityId])
+}
+
+/// Donmuş bir ayı etkileyen geç mutasyonun atomik yeniden hesaplama isteği.
+/// Asıl faaliyet/ayar/tarihçe yazısıyla aynı işlemde doğar; işçi idempotent
+/// olarak yeni bir `UserScorePeriod` sürümüne çevirir.
+model ScoreRecalculationRequest {
+  id          String    @id @default(uuid())
+  userId      String
+  periodStart DateTime  @db.Date
+  sourceType  String    @db.VarChar(60)
+  sourceId    String    @db.VarChar(150)
+  requestedAt DateTime  @default(now()) @db.Timestamptz(3)
+  processedAt DateTime? @db.Timestamptz(3)
+  attempts    Int       @default(0)
+  lastError   String?
+
+  @@unique([userId, periodStart, sourceType, sourceId])
+  @@index([processedAt, requestedAt])
+  @@index([userId, periodStart, processedAt])
+}
+
+/// Güvenilir etkili-tarih geçmişinin ilk tam ayı. Kesimden önceki durum
+/// tahmin edilmez; kapanış işçisi bu aydan önce karne üretmez.
+model ScoreHistoryControl {
+  id            Int      @id @default(1)
+  historyStart  DateTime @db.Date
+  initializedAt DateTime @default(now()) @db.Timestamptz(3)
+}
+
+/// İlk kapanışın tamamlandığı ayların kayıt defteri. Kullanıcısı olmayan ay da
+/// burada kapanır; aksi hâlde işçi aynı boş ayı sonsuza kadar seçerdi.
+model ScorePeriodLedger {
+  periodStart     DateTime @id @db.Date
+  closedAt        DateTime @db.Timestamptz(3)
+  retroactiveDays Int
+  formulaVersion  Int
+}
+
+/// Skoru etkileyen kullanıcı durumunun append-only, etkili-tarihli görüntüsü.
+model ScoreUserStateEvent {
+  id               String   @id @default(uuid())
+  userId           String
+  effectiveAt      DateTime @db.Timestamptz(3)
+  recordedAt       DateTime @default(now()) @db.Timestamptz(3)
+  isActive         Boolean
+  isScored         Boolean
+  writesActivities Boolean
+  isUnitManager    Boolean
+  orgUnitId        String
+  reason           String   @db.VarChar(500)
+  actorId          String?
+
+  @@index([userId, effectiveAt, recordedAt])
+  @@index([orgUnitId, effectiveAt])
+}
+
+/// Birim ağacı ve skor politikasının append-only, etkili-tarihli görüntüsü.
+model ScoreOrgUnitStateEvent {
+  id               String   @id @default(uuid())
+  orgUnitId        String
+  effectiveAt      DateTime @db.Timestamptz(3)
+  recordedAt       DateTime @default(now()) @db.Timestamptz(3)
+  parentId         String?
+  isActive         Boolean
+  requiresApproval Boolean
+  reason           String   @db.VarChar(500)
+  actorId          String?
+
+  @@index([orgUnitId, effectiveAt, recordedAt])
+}
+
+/// Şirket çalışma takviminin append-only, etkili-tarihli görüntüsü.
+model ScoreCompanyCalendarEvent {
+  id              String   @id @default(uuid())
+  effectiveAt     DateTime @db.Timestamptz(3)
+  recordedAt      DateTime @default(now()) @db.Timestamptz(3)
+  workingDays     Int[]
+  workStartMinute Int
+  workEndMinute   Int
+  reason          String   @db.VarChar(500)
+  actorId         String?
+
+  @@index([effectiveAt, recordedAt])
+}
+
+/// Birim mesai tanımının append-only görüntüsü. `hasOwnCalendar=false`,
+/// birimin o andan itibaren üst birimden devraldığını gösterir.
+model ScoreUnitCalendarEvent {
+  id              String   @id @default(uuid())
+  orgUnitId       String
+  effectiveAt     DateTime @db.Timestamptz(3)
+  recordedAt      DateTime @default(now()) @db.Timestamptz(3)
+  hasOwnCalendar  Boolean
+  workingDays     Int[]
+  workStartMinute Int
+  workEndMinute   Int
+  worksOnHolidays Boolean
+  reason          String   @db.VarChar(500)
+  actorId         String?
+
+  @@index([orgUnitId, effectiveAt, recordedAt])
+}
+
+/// Resmî tatil ekleme/kaldırma olayları; geçmiş takvim tahmin edilmez.
+model ScoreHolidayEvent {
+  id          String   @id @default(uuid())
+  holidayDate DateTime @db.Date
+  effectiveAt DateTime @db.Timestamptz(3)
+  recordedAt  DateTime @default(now()) @db.Timestamptz(3)
+  isHoliday   Boolean
+  description String?  @db.VarChar(150)
+  reason      String   @db.VarChar(500)
+  actorId     String?
+
+  @@index([holidayDate, effectiveAt, recordedAt])
+}
+
+/// Skoru etkileyen ayarların append-only geçmişi (ağırlıklar ve geriye giriş).
+model ScoreSettingEvent {
+  id          String   @id @default(uuid())
+  key         String   @db.VarChar(100)
+  value       String   @db.VarChar(500)
+  effectiveAt DateTime @db.Timestamptz(3)
+  recordedAt  DateTime @default(now()) @db.Timestamptz(3)
+  reason      String   @db.VarChar(500)
+  actorId     String?
+
+  @@index([key, effectiveAt, recordedAt])
+}
+
+/// Katkının türü.
+enum ScoreFactKind {
+  /// Yazılan kayıt: sayısı `writtenCount`, ayrı günleri `writtenDays`.
+  WRITTEN
+  /// Onaylanmış kayıt: kabul oranının payı.
+  ACCEPTED
+  /// Kişinin verdiği onay kararı; `onTime` eşiği tutturdu mu.
+  DECISION
+  /// Takip maddesi ya da cevap borcu; `onTime` zamanında ele alındı mı.
+  OBLIGATION
+  /// Onaylanmış faaliyete verilen geçerli takdir.
+  APPRECIATION
+}
+
+/// Bir faaliyete verilen takdir (Görev 11.11).
+///
+/// Takdir kayda verilir, kişiye değil; skor katkısı yalnız faaliyetin dönem
+/// içinde onaylanmış olması ve geçerli takdir almasıyla oluşur.
+model ActivityAppreciation {
+  activityId String
+  userId     String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([activityId, userId])
+  @@index([userId])
+}
+
+/// Denetim izi (§15.2). Kayıtlar değişmezdir; güncellenemez olmaları 0.2b'de
+/// veritabanı kısıtıyla zorlanır. Okuma verisi bu kapsamın dışındadır (§10.3).
+model AuditLog {
+  id           String   @id @default(uuid())
+  /// İşlemi yapan kullanıcı. **Boş olabilir**: §15.2 "oturum açma denemeleri"
+  /// de kayıt ister ve kayıtsız bir e-postayla yapılan deneme hiçbir kullanıcıya
+  /// bağlanamaz. Denenen adres `detail` alanında durur.
+  userId       String?
+  /// Vekâletle yapılan işlemde gerçek kullanıcı ("X adına Y", §4.5).
+  actualUserId String?
+  objectType   String   @db.VarChar(100)
+  objectId     String   @db.VarChar(100)
+  action       String   @db.VarChar(100)
+  detail       Json?
+  ipAddress    String?  @db.VarChar(45)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  user       User? @relation("AuditLogUser", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actualUser User? @relation("AuditLogActualUser", fields: [actualUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([objectType, objectId, createdAt])
+  @@index([userId, createdAt])
+}
+
+/// Root'un faaliyet silme talebi (ürün sahibi kararı, 03.09.2026).
+///
+/// Silme dört katmandan geçer: yetki (yalnız root), dönem (kapanmış dönem
+/// silinemez), onay kodu ve veritabanı kapısı. Bu tablo üçüncü katmandır.
+///
+/// `activityId` bilerek **yabancı anahtar değil**: hedefi silinen bir talep
+/// kaydı yaşamaya devam etmeli, yoksa silmenin kanıtı silinen şeyle birlikte
+/// giderdi. Aynı gerekçeyle faaliyetin üst verisi buraya **kopyalanıyor**.
+model ActivityDeletionRequest {
+  id         String @id @default(uuid())
+  /// Hedef faaliyet; FK yok, kayıt silinse de kimlik burada kalır.
+  activityId String
+
+  /// Silme anındaki üst veri; kanıt olarak dondurulur.
+  activityTitle  String   @db.VarChar(300)
+  activityDate   DateTime @db.Date
+  activityAuthor String   @db.VarChar(200)
+
+  requestedById String
+  /// Kodun **özeti**; kodun kendisi yalnız e-postada durur.
+  codeHash      String   @db.VarChar(64)
+  expiresAt     DateTime @db.Timestamptz(3)
+  /// Yanlış deneme sayısı; eşiğe varınca talep kapanır.
+  attemptCount  Int      @default(0)
+  /// Kodun kullanıldığı an; dolu talep ikinci kez çalışmaz.
+  consumedAt    DateTime? @db.Timestamptz(3)
+  /// Talebin iptal edildiği an (çok yanlış deneme ya da yeni talep).
+  cancelledAt   DateTime? @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+
+  requestedBy User @relation("DeletionRequester", fields: [requestedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([requestedById, createdAt])
+  @@index([activityId])
+}

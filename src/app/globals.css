@@ -1,0 +1,420 @@
+@import "tailwindcss";
+
+/* Yazı tipleri çalışma **ve derleme** anında yereldir (denetim P6A-4).
+   Önceki uzak font yükleyicisi temiz build'de Google'a çıkıyordu. IBM'nin sürümü
+   kilitli resmî paketlerindeki `complete` WOFF2 yüzleri Türkçe glifleri tek
+   dosyada taşır. Standart CSS tanımları paket dosyalarını doğrudan bağlar;
+   derleme zamanı font ağı/metadata yolu yoktur. */
+@font-face {
+  font-family: "IBM Plex Sans Local";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../../node_modules/@ibm/plex-sans/fonts/complete/woff2/IBMPlexSans-Regular.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans Local";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../../node_modules/@ibm/plex-sans/fonts/complete/woff2/IBMPlexSans-Medium.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans Local";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../../node_modules/@ibm/plex-sans/fonts/complete/woff2/IBMPlexSans-SemiBold.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans Local";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../../node_modules/@ibm/plex-sans/fonts/complete/woff2/IBMPlexSans-Bold.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono Local";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../../node_modules/@ibm/plex-mono/fonts/complete/woff2/IBMPlexMono-Regular.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono Local";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../../node_modules/@ibm/plex-mono/fonts/complete/woff2/IBMPlexMono-Medium.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono Local";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../../node_modules/@ibm/plex-mono/fonts/complete/woff2/IBMPlexMono-SemiBold.woff2")
+    format("woff2");
+}
+
+:root {
+  --font-plex-sans: "IBM Plex Sans Local";
+  --font-plex-mono: "IBM Plex Mono Local";
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   INDUSTRIAL EDITORIAL WORKSPACE
+   Faaliyet Raporlama Sistemi — tasarım sistemi (19.08.2026, sıfırdan)
+   ═══════════════════════════════════════════════════════════════════════
+
+   İki dünyanın birleşimi:
+
+   • Üretim ortamı — iş emri, kayıt defteri, teknik föy, vardiya panosu.
+     Buradan gelen: köşeli şekil dili, kural çizgileri, kenar işaretleri,
+     sıra numarası şeridi, sayıların monospace hizası.
+
+   • Editoryal yayın — tipografik ritim, boşluk, uzun metin okunabilirliği.
+     Buradan gelen: ölçülü başlık ölçeği, kontrollü satır uzunluğu,
+     bölüm numaraları, ince kural çizgileriyle kurulan hiyerarşi.
+
+   ── Üç yapısal karar ──────────────────────────────────────────────────
+
+   1. YÜZEY, KUTU DEĞİL ÇİZGİDİR. Paneller birbirinden gölge ve yuvarlak
+      köşeyle değil, kural çizgisi ve yüzey farkıyla ayrılır. Gölge yalnız
+      gerçekten üstte duran katmanlara (menü, dialog, toast) ayrılmıştır.
+      Sebep: gün boyu açık kalan, uzun listeler barındıran bir ekranda
+      kutu koleksiyonu görsel gürültü üretir.
+
+   2. SICAK MİNERAL ZEMİN. Saf beyaz ve soğuk gri yerine kâğıt/kireç
+      tonları (hue 75, çok düşük kroma). Uzun okuma seansında soğuk beyaz
+      yorucudur; kâğıt tonu kayıt defteri karakterini de taşır.
+
+   3. PAS TURUNCUSU BİRİNCİL EYLEM. Üretim bağlamını çağrıştırır ama
+      "tehlike" diye bağırmaz — o yüzden doygunluğu ölçülü ve açıklığı
+      düşük tutuldu. Tehlike rengi ondan belirgin biçimde ayrışır (daha
+      kırmızı ton, daha yüksek kroma).
+
+   ── Erişilebilirlik ──────────────────────────────────────────────────
+
+   Metin renkleri kendi zeminlerinde WCAG 2.2 AA'yı sağlar; ölçülen
+   değerler aşağıda her rolün yanında yazılıdır. Durum **hiçbir yerde
+   yalnız renkle** anlatılmaz: her durumun metni ve ikonu vardır, kritik
+   olanların ayrıca kenar işareti bulunur. */
+
+@theme {
+  /* ── Tipografi aileleri ────────────────────────────────────────────
+     IBM Plex: Türkçe karakterleri eksiksiz, açık kaynak, endüstriyel
+     karakterli. Sürümü kilitli yerel WOFF2 dosyaları uygulamayla birlikte
+     servis edilir; çalışma ve derleme anında dış isteğe çıkılmaz. */
+  --font-sans:
+    var(--font-plex-sans), system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  --font-mono:
+    var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  /* ── Yüzeyler: sıcak mineral/kâğıt rampası (hue 75) ────────────────
+     canvas  — uygulama zemini, en koyu yüzey
+     surface — okunacak yüzey; en açık olan burasıdır
+     raised  — zeminden yükselen şerit (kabuk, tablo başlığı)
+     inset   — içeri gömülü alan (kod, alıntı, seçili satır) */
+  --color-canvas: oklch(0.955 0.008 75);
+  --color-surface: oklch(0.988 0.005 78);
+  --color-raised: oklch(0.972 0.007 75);
+  --color-inset: oklch(0.935 0.011 75);
+  --color-surface-hover: oklch(0.945 0.012 70);
+
+  /* ── Çizgiler: kural çizgisi bu sistemin ana ayırıcısıdır ───────── */
+  --color-line: oklch(0.885 0.012 72);
+  --color-line-strong: oklch(0.76 0.018 70);
+
+  /* ── Mürekkep: orman kömürü, hafif sıcak ─────────────────────────
+     Oranlar CSS Color 4 matrisiyle elle hesaplanmıştır (DESIGN-IS-2026-09-02,
+     Görev 15.4) — önceki yorumdaki "4.6:1" iddiası yanlıştı, gerçek değer
+     4.42:1 idi ve AA eşiğinin (4.5:1) altındaydı. `faint` L 0.565 → 0.55
+     koyultuldu; üç kademenin sırası (ink < muted < faint < surface) korunur.
+     ink       16.95:1 on surface — gövde metni
+     muted      7.06:1 on surface — ikincil metin
+     faint      4.70:1 on surface — üçüncül; artık AA'nın güvenli üstünde */
+  --color-ink: oklch(0.215 0.014 60);
+  --color-muted: oklch(0.455 0.016 60);
+  --color-faint: oklch(0.55 0.014 62);
+
+  /* ── Birincil eylem: pas/oksit ───────────────────────────────────
+     primary  5.1:1 on surface — düğme zemini olarak beyaz metinle 5.0:1 */
+  --color-primary: oklch(0.505 0.135 45);
+  --color-primary-hover: oklch(0.455 0.135 43);
+  --color-primary-pressed: oklch(0.4 0.12 42);
+  --color-primary-soft: oklch(0.955 0.028 55);
+  --color-primary-line: oklch(0.845 0.065 50);
+
+  /* ── İkincil vurgu: petrol / derin turkuaz ───────────────────────
+     Yalnız bilgilendirme ve ikincil işaretlerde; eylem rengi değildir. */
+  --color-accent: oklch(0.475 0.085 215);
+  --color-accent-soft: oklch(0.955 0.022 215);
+  --color-accent-line: oklch(0.845 0.05 215);
+
+  /* ── Odak halkası: hiçbir zeminde kaybolmayacak kadar ayrık ────── */
+  --color-focus: oklch(0.48 0.16 250);
+
+  /* ── Durum ailesi ────────────────────────────────────────────────
+     Hepsi aynı açıklık/kroma mantığını paylaşır: metin ~0.44–0.50 L,
+     yumuşak zemin ~0.955 L, çizgi ~0.83 L. Yan yana geldiklerinde biri
+     diğerinden yüksek sesli olmaz. Ton (hue) ayırır, ama ayrımın tek
+     taşıyıcısı ton değildir — her durumun metni ve ikonu vardır.
+
+     success    onaylandı, sağlıklı, kapandı
+     waiting    onay bekliyor, cevap bekleniyor, kuyrukta
+     correction düzeltme istendi, yaklaşan takip, gecikme uyarısı
+     danger     uygun bulunmadı, başarısız, hata
+     cancelled  iptal edildi, pasif, artık geçerli değil
+     info       nötr bilgilendirme */
+  --color-success: oklch(0.45 0.105 150);
+  --color-success-soft: oklch(0.955 0.03 150);
+  --color-success-line: oklch(0.83 0.075 150);
+
+  --color-waiting: oklch(0.495 0.105 85);
+  --color-waiting-soft: oklch(0.955 0.04 88);
+  --color-waiting-line: oklch(0.83 0.085 86);
+
+  --color-correction: oklch(0.475 0.115 55);
+  --color-correction-soft: oklch(0.955 0.035 58);
+  --color-correction-line: oklch(0.83 0.08 56);
+
+  --color-danger: oklch(0.465 0.155 22);
+  --color-danger-soft: oklch(0.955 0.04 22);
+  --color-danger-line: oklch(0.83 0.09 22);
+
+  /* Baş harf rozetinin tonları (Görev 11.5).
+     Kişinin kimliğinden türetilir ve değişmez; renk bir işaret olsun diye.
+     Hepsi aynı açıklık ve kroma seviyesinde — biri diğerinden daha "önemli"
+     görünmemeli. Beyaz metinle kontrast oranı 4.5:1 üstünde (WCAG AA). */
+  --color-avatar-0: oklch(0.47 0.085 25);
+  --color-avatar-1: oklch(0.47 0.085 85);
+  --color-avatar-2: oklch(0.47 0.085 145);
+  --color-avatar-3: oklch(0.47 0.085 215);
+  --color-avatar-4: oklch(0.47 0.085 275);
+  --color-avatar-5: oklch(0.47 0.085 325);
+
+  --color-cancelled: oklch(0.505 0.012 70);
+  --color-cancelled-soft: oklch(0.94 0.008 70);
+  --color-cancelled-line: oklch(0.82 0.012 70);
+
+  --color-info: oklch(0.475 0.085 215);
+  --color-info-soft: oklch(0.955 0.022 215);
+  --color-info-line: oklch(0.845 0.05 215);
+
+  /* ── Tipografi ölçeği ────────────────────────────────────────────
+     Yedi seviye. Gövde 15px: editoryal okunabilirlik için 14'ten büyük,
+     ama yoğun listeyi şişirmeyecek kadar ölçülü. Mobil form girdileri
+     ayrıca 16px'e sabitlenir (aşağıda) — iOS yakınlaştırmasın diye. */
+  --text-2xs: 11.5px; /* zaman damgası, mikro etiket */
+  --text-xs: 12.5px;  /* rozet, tablo üst bilgisi */
+  --text-sm: 13.5px;  /* ikincil metin, yoğun satır */
+  --text-base: 15px;  /* gövde */
+  --text-lg: 17px;    /* vurgulu gövde, kart başlığı */
+  --text-xl: 21px;    /* bölüm başlığı */
+  --text-2xl: 27px;   /* sayfa başlığı */
+  --text-3xl: 34px;   /* yalnız giriş ekranı manifestosu */
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight: -0.015em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.06em;   /* bölüm etiketleri, versal metin */
+
+  /* Uzun metin satır uzunluğu: 68 karakter editoryal okuma için ölçülü. */
+  --container-prose: 68ch;
+
+  /* ── Boşluk ritmi ────────────────────────────────────────────────
+     Tek ölçek; 4px tabanlı ama editoryal ritim için 6/10/18 gibi ara
+     adımlar da var — her şeyin 8'in katı olması gerekmez.
+
+     **İki katman, kasıtlı (DESIGN-IS-2026-09-02, Görev 15.3):**
+     1. Bu token'lar — sayfa/bölüm düzeyinde editoryal ritim (etiket↔girdi,
+        liste satırı, blok, bölüm, sayfa üst/alt). Elle ayarlanmış, sabit
+        sayıda adım.
+     2. Bileşen içi ince boşluk (ikon-metin arası, kart dolgusu, buton
+        yüksekliği) Tailwind'in **doğal** 4px ölçeğiyle (`gap-2`, `px-4`,
+        `py-2.5` gibi) yazılır — bu ayrı bir "keyfi" sistem değil, Tailwind'in
+        kendi tutarlı ölçeğinin bağlama göre kullanılması. Bileşen ölçeğini
+        bu token'lara zorlamak (örn. `gap-2`'yi `gap-(--spacing-field)`
+        yapmak) sıkı gruplamaları gevşetip anlamsız kılardı. */
+  --spacing-field: 10px;   /* etiket ↔ girdi */
+  --spacing-row: 14px;     /* liste satırı iç boşluğu */
+  --spacing-block: 22px;   /* bölüm içi bloklar */
+  --spacing-section: 36px; /* bölümler arası */
+  --spacing-page: 56px;    /* sayfa üst/alt */
+
+  /* ── Ölçüler ─────────────────────────────────────────────────── */
+  --spacing-spine: 244px;      /* masaüstü sol omurga */
+  --spacing-spine-narrow: 68px;/* tablet dar omurga */
+  --spacing-control: 40px;     /* düğme/girdi yüksekliği */
+  --spacing-control-lg: 46px;  /* birincil eylem, mobil hedef */
+  --spacing-touch: 44px;       /* asgari dokunma hedefi */
+  --spacing-topbar: 54px;      /* mobil bağlam çubuğu */
+  --spacing-tabbar: 58px;      /* mobil alt gezinme */
+
+  /* ── Şekil: köşeli ve hassas ────────────────────────────────────
+     Hiçbir şey hap değildir. En büyük yarıçap 6px; rozetler bile
+     dikdörtgendir — durumu şekil değil metin+ikon taşır. */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 6px;
+
+  /* ── Yükselti: yalnız geçici üst katmanlar ──────────────────────
+     Kartlar ve paneller gölge kullanmaz. */
+  --shadow-menu: 0 2px 4px oklch(0.215 0.014 60 / 0.08),
+    0 8px 24px oklch(0.215 0.014 60 / 0.1);
+  --shadow-dialog: 0 4px 8px oklch(0.215 0.014 60 / 0.1),
+    0 24px 56px oklch(0.215 0.014 60 / 0.16);
+  --shadow-sheet: 0 -2px 24px oklch(0.215 0.014 60 / 0.14);
+
+  /* ── Hareket ────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 260ms;
+}
+
+/* ── Z-index katmanları ──────────────────────────────────────────
+   Tailwind'in z-* yardımcıları yerine adlandırılmış katmanlar: hangi
+   şeyin neyin üstünde olduğu sayıdan değil adından okunur. */
+@layer base {
+  :root {
+    --z-spine: 30;
+    --z-topbar: 35;
+    --z-tabbar: 35;
+    --z-menu: 50;
+    --z-sheet: 60;
+    --z-dialog: 70;
+    --z-toast: 80;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* Sticky başlıklar bağlantıyla gelindiğinde çubuğun altında kalmasın. */
+    scroll-padding-top: calc(var(--spacing-topbar) + 8px);
+  }
+
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    /* Kâğıt zeminde çok ince bir doku: düz renk yerine derinlik verir,
+       ama desen olarak okunmaz. */
+    background-image: radial-gradient(
+      oklch(0.215 0.014 60 / 0.018) 0.5px,
+      transparent 0.5px
+    );
+    background-size: 4px 4px;
+  }
+
+  /* Klavyeyle gezen kullanıcı nerede olduğunu görmeli. Halka her zeminde
+     görünür: koyu mavi, iki katman (dış beyaz ayırıcı + iç renk). */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
+  /* Sayılar hizalansın; sistem verisi monospace ailesinden gelsin. */
+  table,
+  time,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    line-height: var(--leading-tight);
+    letter-spacing: var(--tracking-tight);
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Mobilde form girdisi 16px altına düşmesin: iOS aksi hâlde odakta
+     sayfayı yakınlaştırır ve kullanıcı düzeni kaybeder. */
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
+  /* Hareket azaltma tercihi: geçişler kapanır, bilgi hiçbir zaman
+     animasyona bağlı değildir. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* Bölüm etiketi: kayıt defteri karakterinin taşıyıcısı. */
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-weight: 500;
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  /* Kenar işareti: durum taşıyan satırların sol kuralı. Renkle birlikte
+     her zaman metin de bulunur; bu yalnız tarama hızını artırır. */
+  .edge-mark {
+    border-inline-start: 3px solid currentColor;
+  }
+
+  /* Okuma yüzeyi: uzun metin kontrollü satır uzunluğunda. */
+  .prose-measure {
+    max-width: var(--container-prose);
+  }
+
+  /* Ekran okuyucuya görünür, göze görünmez. */
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}

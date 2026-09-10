@@ -1,0 +1,46 @@
+# Bağımlılıklar
+node_modules/
+.pnp/
+.pnp.js
+
+# Derleme çıktıları
+dist/
+build/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Test çıktıları
+coverage/
+test-results/
+playwright-report/
+
+# Ortam değişkenleri ve sırlar
+.env
+.env.*
+!.env.example
+/certificate/
+
+# Şirket içi veri — depoya girmez
+*.xlsx
+*.xls
+*.docx
+/veri/
+/uploads/
+
+# Editör ve işletim sistemi
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Loglar
+*.log
+npm-debug.log*
+storage/
+
+# Yedekler depoya girmez (şifreli olsalar da).
+/yedek
+/storage
+/.faaliyet-backup.lock
