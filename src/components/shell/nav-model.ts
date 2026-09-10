@@ -53,65 +53,60 @@ function feedHref(unreadCount: number): string {
   return unreadCount > 0 ? "/feed?period=all&okunmamis=1" : "/feed";
 }
 
-export function buildNav(user: NavUser): NavModel {
+import { createTranslator, DEFAULT_LOCALE, type TranslateFunction } from "@/shared/i18n";
+
+export function buildNav(user: NavUser, t?: TranslateFunction): NavModel {
+  const tr = t ?? createTranslator(DEFAULT_LOCALE);
+
   const personal: NavItem[] = [
     {
       href: "/",
-      label: "Bugün",
+      label: tr("nav.today"),
       icon: "bugun",
     },
-    { href: "/activities", label: "Faaliyetlerim", icon: "faaliyet" },
+    { href: "/activities", label: tr("nav.myActivities"), icon: "faaliyet" },
   ];
 
   if (!user.hasTeam) {
     personal.push({
       href: feedHref(user.unreadCount),
-      label: "Faaliyet akışı",
+      label: tr("nav.feed"),
       icon: "akis",
       count: user.unreadCount,
-      countLabel: "okunmamış faaliyet",
+      countLabel: tr("nav.unreadCountLabel"),
     });
   }
 
-  // Taslak bölümü **her zaman** görünür (ürün sahibi kararı, 21.08.2026).
-  //
-  // Önceden yalnız taslağı olan kullanıcıda görünüyordu; gerekçe "boş kutuya
-  // götüren bağlantı yer kaplar" idi. Yanlış çıktı: kaybolan menü öğesi
-  // kullanıcıya özelliğin varlığını hiç öğretmiyor, taslak bitince de
-  // "nereye gitti" diye aratıyordu. Sabit gezinme öğrenilebilir, değişen
-  // gezinme değil. Sayaç sıfırken yazılmaz — rozet dikkat çeker, boş kutu
-  // dikkat istemiyor.
+  // Taslak bölümü **her zaman** görünür.
   personal.push({
     href: "/drafts",
-    label: "Taslaklar",
+    label: tr("nav.drafts"),
     icon: "taslak",
     count: user.draftCount > 0 ? user.draftCount : undefined,
-    countLabel: "gönderilmemiş taslak",
+    countLabel: tr("nav.draftCountLabel"),
   });
 
   // Onay bölümü yalnız onay görevi olan kullanıcıda.
   if (user.pendingApprovals > 0) {
     personal.push({
       href: "/approvals",
-      label: "Onaylar",
+      label: tr("nav.approvals"),
       icon: "onay",
       count: user.pendingApprovals,
-      countLabel: "onay bekleyen kayıt",
+      countLabel: tr("nav.approvalCountLabel"),
     });
   }
 
   personal.push(
-    { href: "/follow-ups", label: "Takipler", icon: "takip" },
-    { href: "/search", label: "Arama", icon: "arama" },
+    { href: "/follow-ups", label: tr("nav.followUps"), icon: "takip" },
+    { href: "/search", label: tr("common.search"), icon: "arama" },
   );
 
-  // Kendi izin günleri herkeste (Görev 11.8): izin girişi artık kişinin
-  // kendisine açık.
-  personal.push({ href: "/absence", label: "İzinlerim", icon: "izin" });
+  personal.push({ href: "/absence", label: tr("nav.absence"), icon: "izin" });
 
   const common: NavItem[] = [
-    { href: "/yardim", label: "Yardım", icon: "yardim" },
-    { href: "/feedback", label: "Geri bildirim", icon: "geriBildirim" },
+    { href: "/yardim", label: tr("nav.help"), icon: "yardim" },
+    { href: "/feedback", label: tr("nav.feedback"), icon: "geriBildirim" },
   ];
 
   const management: NavItem[] = [];
@@ -120,47 +115,42 @@ export function buildNav(user: NavUser): NavModel {
     management.push(
       {
         href: feedHref(user.unreadCount),
-        label: "Yönettiğim faaliyetler",
+        label: tr("nav.managedActivities"),
         icon: "akis",
         count: user.unreadCount,
-        countLabel: "okunmamış faaliyet",
+        countLabel: tr("nav.unreadCountLabel"),
       },
-      { href: "/team/absence", label: "Yönettiğim izinler", icon: "ekip" },
+      { href: "/team/absence", label: tr("nav.managedAbsence"), icon: "ekip" },
     );
-    // Skor bölümü yalnız açıkken: kapalı bir sistemin boş sayfasına götüren
-    // bağlantı, her gün görülen gezinmede yer kaplamaktan başka bir şey
-    // yapmaz (Görev 11.11).
+
     if (user.scoringEnabled) {
-      management.push({ href: "/scores", label: "Skorlar", icon: "skor" });
+      management.push({ href: "/scores", label: tr("nav.scores"), icon: "skor" });
     }
   }
 
   if (user.canViewReports) {
-    management.push({ href: "/reports", label: "Raporlar", icon: "rapor" });
+    management.push({ href: "/reports", label: tr("nav.reports"), icon: "rapor" });
   }
 
-  // Vekâlet bölümü yalnız ilgisi olanda: hiç vekâlet etmemiş ve yerine
-  // bakılmamış birinde boş bir sayfaya götüren bağlantı yer kaplamaktan
-  // başka bir şey yapmaz.
   if (user.hasDeputyHistory) {
     personal.push({
       href: "/deputy",
-      label: "Vekâlet",
+      label: tr("nav.deputy"),
       icon: "vekalet",
       count: user.activeDeputyCount,
-      countLabel: "aktif vekâlet",
+      countLabel: tr("nav.activeDeputyCountLabel"),
     });
   }
 
   const admin: NavItem[] = user.isSystemAdmin
     ? [
-        { href: "/admin/org", label: "Organizasyon", icon: "yonetim" },
-        { href: "/admin/users", label: "Kullanıcılar", icon: "ekip" },
-        { href: "/admin/calendar", label: "Çalışma takvimi", icon: "bugun" },
-        { href: "/admin/approval-reasons", label: "Onay gerekçeleri", icon: "onay" },
-        { href: "/admin/settings", label: "Sistem ayarları", icon: "yonetim" },
-        { href: "/admin/jobs", label: "Zamanlanmış işler", icon: "takip" },
-        { href: "/admin/audit", label: "İşlem kayıtları", icon: "faaliyet" },
+        { href: "/admin/org", label: tr("nav.orgTree"), icon: "yonetim" },
+        { href: "/admin/users", label: tr("nav.users"), icon: "ekip" },
+        { href: "/admin/calendar", label: tr("nav.calendar"), icon: "bugun" },
+        { href: "/admin/approval-reasons", label: tr("nav.approvalReasons"), icon: "onay" },
+        { href: "/admin/settings", label: tr("nav.settings"), icon: "yonetim" },
+        { href: "/admin/jobs", label: tr("nav.jobs"), icon: "takip" },
+        { href: "/admin/audit", label: tr("nav.audit"), icon: "faaliyet" },
       ]
     : [];
 
@@ -170,7 +160,7 @@ export function buildNav(user: NavUser): NavModel {
     common,
     admin,
     primaryAction: user.writesActivities
-      ? { href: "/activities/new", label: "Yeni faaliyet" }
+      ? { href: "/activities/new", label: tr("nav.newAction") }
       : null,
   };
 }

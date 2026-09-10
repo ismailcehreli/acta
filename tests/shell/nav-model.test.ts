@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildNav, isActive, mobileTabs, type NavUser } from "@/components/shell/nav-model";
+import { createTranslator } from "@/shared/i18n";
 
 const baseUser: NavUser = {
   isSystemAdmin: false,
@@ -17,8 +18,24 @@ const baseUser: NavUser = {
 };
 
 describe("ana gezinme modeli", () => {
-  it("kişisel ve yönetilen alanı ayrı, günlük dille adlandırır", () => {
+  it("kişisel ve yönetilen alanı ayrı, varsayılan İngilizce adlandırır", () => {
     const nav = buildNav(baseUser);
+
+    expect(nav.personal.find((item) => item.href === "/activities")?.label).toBe(
+      "My Activities",
+    );
+    expect(nav.management.find((item) => item.href === "/feed")?.label).toBe(
+      "Team Activities",
+    );
+    expect(
+      nav.management.find((item) => item.href === "/team/absence")?.label,
+    ).toBe("Team Absences");
+    expect(nav.personal.some((item) => item.href === "/feed")).toBe(false);
+  });
+
+  it("Türkçe çevirmen ile Türkçe etiketler üretir", () => {
+    const t = createTranslator("tr");
+    const nav = buildNav(baseUser, t);
 
     expect(nav.personal.find((item) => item.href === "/activities")?.label).toBe(
       "Faaliyetlerim",
@@ -29,7 +46,6 @@ describe("ana gezinme modeli", () => {
     expect(
       nav.management.find((item) => item.href === "/team/absence")?.label,
     ).toBe("Yönettiğim izinler");
-    expect(nav.personal.some((item) => item.href === "/feed")).toBe(false);
   });
 
   it("rapor bağlantısını yalnız rapor yetkisi olan kişiye verir", () => {
@@ -40,7 +56,7 @@ describe("ana gezinme modeli", () => {
       buildNav({ ...baseUser, canViewReports: true }).management.find(
         (item) => item.href === "/reports",
       ),
-    ).toMatchObject({ label: "Raporlar" });
+    ).toMatchObject({ label: "Reports" });
   });
 
   it("rapor bağlantısını skor ekranından ayrı tutar", () => {
@@ -56,7 +72,7 @@ describe("ana gezinme modeli", () => {
   it("ekibi olmayan kişide akış kişisel bölümde kalır", () => {
     const nav = buildNav({ ...baseUser, hasTeam: false });
     expect(nav.personal.find((item) => item.href === "/feed")?.label).toBe(
-      "Faaliyet akışı",
+      "Activity Feed",
     );
     expect(nav.management).toHaveLength(0);
     expect(mobileTabs(nav).length).toBeLessThanOrEqual(5);

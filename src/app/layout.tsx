@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 
 import { prisma } from "@/server/db";
 import { DEFAULT_PAGE_TITLE, readBranding } from "@/server/settings/branding";
+import { getLocale } from "@/server/i18n/locale";
+import { getTranslations } from "@/server/i18n/server";
+import { I18nProvider } from "@/components/i18n/provider";
 
 import "./globals.css";
 
@@ -40,21 +43,25 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
+
   return (
-    <html lang="tr">
+    <html lang={locale}>
       <body>
-        {/* Klavye kullanıcısı gezinmeyi atlayıp içeriğe geçebilmeli (§10).
-            Odak alana gelene kadar görünmez, geldiğinde belirgin. */}
-        <a
-          href="#icerik"
-          className="sr-only-focusable absolute start-3 top-3 z-[var(--z-toast)] rounded-(--radius-sm) bg-ink px-3 py-2 text-[length:var(--text-sm)] font-medium text-surface"
-        >
-          İçeriğe atla
-        </a>
-        {children}
+        <I18nProvider locale={locale}>
+          {/* Keyboard navigation skip link */}
+          <a
+            href="#icerik"
+            className="sr-only-focusable absolute start-3 top-3 z-[var(--z-toast)] rounded-(--radius-sm) bg-ink px-3 py-2 text-[length:var(--text-sm)] font-medium text-surface"
+          >
+            {t("common.skipToContent")}
+          </a>
+          {children}
+        </I18nProvider>
       </body>
     </html>
   );

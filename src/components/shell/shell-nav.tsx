@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Menu, MenuHeader, MenuSeparator, MenuSubmit } from "@/components/ui/menu";
+import { useTranslations } from "@/components/i18n/provider";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 
 import { NavIcon } from "./nav-icons";
 import { Avatar } from "@/components/ui/avatar";
@@ -49,13 +51,14 @@ export interface ShellNavUser extends NavUser {
 
 /** Tıklanan bağlantının bekleme göstergesi; HTTP anlamını değiştirmez. */
 function LinkBekliyor() {
+  const t = useTranslations();
   const { pending } = useLinkStatus();
   if (!pending) return null;
 
   return (
     <span
       role="status"
-      aria-label="Yükleniyor"
+      aria-label={t("common.loading")}
       className="ms-auto inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent opacity-60"
     />
   );
@@ -194,9 +197,11 @@ function AccountMenu({
   logout: () => Promise<void>;
   align?: "left" | "right";
 }) {
+  const t = useTranslations();
+
   return (
     <Menu
-      label="Hesap menüsü"
+      label={t("nav.accountMenu")}
       align={align}
       // Hesap bloğu kabuğun **en altında**: menü aşağı açılsa ekran dışına
       // taşar ve tıklanamaz olurdu.
@@ -232,7 +237,7 @@ function AccountMenu({
         role="menuitem"
         className="flex min-h-(--spacing-touch) w-full items-center px-3 text-[length:var(--text-sm)] text-ink transition-colors hover:bg-surface-hover"
       >
-        Profilim
+        {t("nav.profile")}
       </Link>
 
       <Link
@@ -240,13 +245,20 @@ function AccountMenu({
         role="menuitem"
         className="flex min-h-(--spacing-touch) w-full items-center px-3 text-[length:var(--text-sm)] text-ink transition-colors hover:bg-surface-hover"
       >
-        Parolamı değiştir
+        {t("nav.changePassword")}
       </Link>
 
       <MenuSeparator />
 
+      <div className="flex items-center justify-between px-3 py-2 text-[length:var(--text-xs)] text-muted">
+        <span>{t("nav.language")}</span>
+        <LanguageSwitcher />
+      </div>
+
+      <MenuSeparator />
+
       <form action={logout}>
-        <MenuSubmit>Çıkış yap</MenuSubmit>
+        <MenuSubmit>{t("nav.logout")}</MenuSubmit>
       </form>
     </Menu>
   );
@@ -281,6 +293,7 @@ function NavDrawer({
   admin: NavItem[];
   primaryAction: { href: string; label: string } | null;
 }) {
+  const t = useTranslations();
   const panel = useRef<HTMLDivElement>(null);
   const basligiId = useId();
 
@@ -330,7 +343,7 @@ function NavDrawer({
     <div className="fixed inset-0 z-[var(--z-sheet)] xl:hidden">
       <button
         type="button"
-        aria-label="Menüyü kapat"
+        aria-label={t("nav.closeMenu")}
         onClick={onClose}
         className="absolute inset-0 bg-ink/35"
       />
@@ -344,13 +357,13 @@ function NavDrawer({
       >
         <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
           <h2 id={basligiId} className="sr-only">
-            Gezinme
+            {t("nav.navigation")}
           </h2>
           <Brand brand={brand} compact />
           <button
             type="button"
             onClick={onClose}
-            aria-label="Menüyü kapat"
+            aria-label={t("nav.closeMenu")}
             className="grid size-(--spacing-touch) place-items-center rounded-(--radius-sm) text-muted hover:bg-surface-hover hover:text-ink"
           >
             <svg aria-hidden viewBox="0 0 20 20" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.7">
@@ -359,7 +372,7 @@ function NavDrawer({
           </button>
         </div>
 
-        <nav aria-label="Ana menü" className="flex-1 overflow-y-auto pb-4">
+        <nav aria-label={t("nav.mainMenu")} className="flex-1 overflow-y-auto pb-4">
           {primaryAction ? (
             <div className="px-3 pt-3">
               <Link
@@ -373,10 +386,10 @@ function NavDrawer({
             </div>
           ) : null}
 
-          <NavGroup label="Benim işlerim" items={personal} pathname={pathname} onNavigate={onClose} />
-          <NavGroup label="Yönettiğim alan" items={management} pathname={pathname} onNavigate={onClose} />
-          <NavGroup label="Yardım ve iletişim" items={common} pathname={pathname} onNavigate={onClose} />
-          <NavGroup label="Sistem yönetimi" items={admin} pathname={pathname} onNavigate={onClose} />
+          <NavGroup label={t("nav.personalGroup")} items={personal} pathname={pathname} onNavigate={onClose} />
+          <NavGroup label={t("nav.managementGroup")} items={management} pathname={pathname} onNavigate={onClose} />
+          <NavGroup label={t("nav.commonGroup")} items={common} pathname={pathname} onNavigate={onClose} />
+          <NavGroup label={t("nav.adminGroup")} items={admin} pathname={pathname} onNavigate={onClose} />
         </nav>
 
         <div className="border-t border-line p-2">
@@ -402,10 +415,11 @@ export function ShellNav({
   markNotificationsSeen: () => Promise<void>;
   logout: () => Promise<void>;
 }) {
+  const t = useTranslations();
   const pathname = usePathname();
   const [drawer, setDrawer] = useState(false);
 
-  const model = buildNav(user);
+  const model = buildNav(user, t);
   const tabs = mobileTabs(model);
 
   // Sayfa değişince çekmece kapanır; açık kalırsa yeni sayfayı örter.
@@ -449,11 +463,11 @@ export function ShellNav({
           </Link>
         ) : null}
 
-        <nav aria-label="Ana menü" className="flex-1 overflow-y-auto pb-4">
-          <NavGroup label="Benim işlerim" items={model.personal} pathname={pathname} />
-          <NavGroup label="Yönettiğim alan" items={model.management} pathname={pathname} />
-          <NavGroup label="Yardım ve iletişim" items={model.common} pathname={pathname} />
-          <NavGroup label="Sistem yönetimi" items={model.admin} pathname={pathname} />
+        <nav aria-label={t("nav.mainMenu")} className="flex-1 overflow-y-auto pb-4">
+          <NavGroup label={t("nav.personalGroup")} items={model.personal} pathname={pathname} />
+          <NavGroup label={t("nav.managementGroup")} items={model.management} pathname={pathname} />
+          <NavGroup label={t("nav.commonGroup")} items={model.common} pathname={pathname} />
+          <NavGroup label={t("nav.adminGroup")} items={model.admin} pathname={pathname} />
         </nav>
 
         <div className="flex items-center gap-1 border-t border-line p-2">
@@ -477,7 +491,7 @@ export function ShellNav({
           <button
             type="button"
             onClick={() => setDrawer(true)}
-            aria-label="Menüyü aç"
+            aria-label={t("nav.openMenu")}
             aria-expanded={drawer}
             className="grid size-(--spacing-touch) shrink-0 place-items-center rounded-(--radius-sm) text-muted hover:bg-surface-hover hover:text-ink"
           >
@@ -511,7 +525,7 @@ export function ShellNav({
 
       {/* ── Mobil alt gezinme (<768) ──────────────────────────────── */}
       <nav
-        aria-label="Birincil gezinme"
+        aria-label={t("nav.primaryNav")}
         className="fixed inset-x-0 bottom-0 z-[var(--z-tabbar)] flex border-t border-line bg-raised pb-[env(safe-area-inset-bottom)] md:hidden"
       >
         {tabs.map((item) => {
@@ -559,19 +573,19 @@ export function ShellNav({
             <span className="grid size-7 place-items-center rounded-(--radius-xs) bg-primary text-white">
               <NavIcon name="yeni" className="size-4" />
             </span>
-            Yeni
+            {t("nav.new")}
           </Link>
         ) : null}
 
         <button
           type="button"
           onClick={() => setDrawer(true)}
-          aria-label="Tüm bölümler"
+          aria-label={t("nav.allSections")}
           aria-expanded={drawer}
           className="flex flex-1 flex-col items-center justify-center gap-0.5 px-1 text-[length:var(--text-2xs)] text-muted"
         >
           <NavIcon name="daha" />
-          Daha
+          {t("nav.more")}
         </button>
       </nav>
     </>
