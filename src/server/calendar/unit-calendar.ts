@@ -13,7 +13,7 @@ import { readWorkCalendar } from "./settings";
 
 
 
-//     etkilenmiyor.
+//     is not affected.
 //
 
 

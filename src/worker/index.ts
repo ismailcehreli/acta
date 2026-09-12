@@ -214,7 +214,7 @@ async function main(): Promise<void> {
     await sleep(TICK_INTERVAL_MS);
   }
 
-  log("durdu");
+  log("stopped");
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

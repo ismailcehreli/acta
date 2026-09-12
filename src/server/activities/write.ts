@@ -368,7 +368,7 @@ export async function createActivity(
 
         // Draft attachment rows are consumed only in a successful submission
         // transaction; the storage files remain in place, so content is safe.
-        await tx.$executeRawUnsafe("SET LOCAL app.activity_draft_promote = 'evet'");
+        await tx.$executeRawUnsafe("SET LOCAL app.activity_draft_promote = 'yes'");
         await tx.activityDraftAttachment.deleteMany({ where: { draftId: draft.id } });
         await tx.activityDraft.delete({ where: { id: draft.id } });
       }

@@ -22,7 +22,7 @@ export const testDb = new PrismaClient({
 });
 
 
-export const SENTINEL_COMMENT = "faaliyet-test-veritabani";
+export const SENTINEL_COMMENT = "acta-test-database";
 
 
 async function readSentinel(

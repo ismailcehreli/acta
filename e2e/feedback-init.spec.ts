@@ -89,7 +89,7 @@ test("the application reset form shows validation and a valid request flow", asy
   const fillResetForm = async (currentPassword: string): Promise<void> => {
     await page.getByLabel("Current password").fill(currentPassword);
     await page.getByLabel("Full name").fill("New E2E Reset Administrator");
-    await page.getByLabel("Email", { exact: true }).fill("yeni-e2e-reset@example.test");
+    await page.getByLabel("Email", { exact: true }).fill("new-e2e-reset@example.test");
     await page.getByLabel("Initial password", { exact: true }).fill("new-e2e-initial-123");
     await page.getByLabel("Confirm initial password").fill("new-e2e-initial-123");
     await page.getByLabel("Confirm operation").fill("RESET APPLICATION");
@@ -103,5 +103,5 @@ test("the application reset form shows validation and a valid request flow", asy
   await page.getByRole("button", { name: "Reset application" }).click();
   await expect(page.getByText("Reset request pending")).toBeVisible();
   await expect(page.getByText("Status: Pending", { exact: true })).toBeVisible();
-  await expect(page.getByText("yeni-e2e-reset@example.test")).toBeVisible();
+  await expect(page.getByText("new-e2e-reset@example.test")).toBeVisible();
 });

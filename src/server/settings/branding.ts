@@ -263,7 +263,7 @@ export interface LogoFile {
   contentType: string;
 }
 
-/** Servis edilecek logo; yoksa `null`. */
+/** Logo URL when a logo exists; otherwise `null`. */
 export async function loadLogo(db: BrandingDb): Promise<LogoFile | null> {
   const row = await db.systemSetting.findUnique({
     where: { key: KEYS.logoExtension },

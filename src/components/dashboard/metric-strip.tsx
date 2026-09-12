@@ -8,7 +8,7 @@ import { getTranslations } from "@/server/i18n/server";
 
 
 
-// gerekmiyor.
+// The metric strip is intentionally rendered without a heading.
 //
 
 

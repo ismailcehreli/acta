@@ -1,0 +1,11 @@
+#!/bin/sh
+# The test server contains two separate databases:
+#   acta_test — Vitest (tables are emptied before each test)
+#   acta_e2e  — Playwright (end-to-end runs use their own data)
+# If they shared a database, a unit test running during an end-to-end run could
+# empty its tables and break the other suite.
+set -e
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+  CREATE DATABASE acta_e2e OWNER "$POSTGRES_USER";
+EOSQL

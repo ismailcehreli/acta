@@ -53,10 +53,6 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
 tar -C "$WORK_DIR" -xzf "$WORK_DIR/archive.tar.gz" || fail "Could not extract the archive."
 
 DATABASE_DUMP="$WORK_DIR/database.dump"
-if [[ ! -s "$DATABASE_DUMP" ]]; then
-  # Backward compatibility for backups created before the English archive names.
-  DATABASE_DUMP="$WORK_DIR/veritabani.dump"
-fi
 [[ -s "$DATABASE_DUMP" ]] || fail "The archive does not contain a database dump."
 
 # Stop application processes: a client writing during restore would create
@@ -72,14 +68,7 @@ docker compose exec -T postgres pg_restore \
   < "$DATABASE_DUMP" || fail "pg_restore failed."
 
 ATTACHMENTS_ARCHIVE="$WORK_DIR/attachments.tar"
-if [[ ! -s "$ATTACHMENTS_ARCHIVE" ]]; then
-  ATTACHMENTS_ARCHIVE="$WORK_DIR/ekler.tar"
-fi
-
 AVATARS_ARCHIVE="$WORK_DIR/avatars.tar"
-if [[ ! -s "$AVATARS_ARCHIVE" ]]; then
-  AVATARS_ARCHIVE="$WORK_DIR/avatarlar.tar"
-fi
 
 if [[ -s "$ATTACHMENTS_ARCHIVE" || -s "$AVATARS_ARCHIVE" ]]; then
   log "restoring file stores"
@@ -93,16 +82,16 @@ fi
 
 if [[ -s "$ATTACHMENTS_ARCHIVE" ]]; then
   # The directory is a mount point and cannot be removed; clear its contents.
-  docker compose exec -T app sh -c 'mkdir -p /veri/ekler && find /veri/ekler -mindepth 1 -delete' </dev/null
-  docker compose exec -T app tar -C /veri -xf - < "$ATTACHMENTS_ARCHIVE" \
+  docker compose exec -T app sh -c 'mkdir -p /data/attachments && find /data/attachments -mindepth 1 -delete' </dev/null
+  docker compose exec -T app tar -C /data -xf - < "$ATTACHMENTS_ARCHIVE" \
     || fail "Could not restore attachments."
 fi
 
 # Profile pictures are stored in a separate archive. **Older backups may not
 # contain it**; that is not an error and existing pictures remain untouched.
 if [[ -s "$AVATARS_ARCHIVE" ]]; then
-  docker compose exec -T app sh -c 'mkdir -p /veri/avatarlar && find /veri/avatarlar -mindepth 1 -delete' </dev/null
-  docker compose exec -T app tar -C /veri -xf - < "$AVATARS_ARCHIVE" \
+  docker compose exec -T app sh -c 'mkdir -p /data/avatars && find /data/avatars -mindepth 1 -delete' </dev/null
+  docker compose exec -T app tar -C /data -xf - < "$AVATARS_ARCHIVE" \
     || fail "Could not restore profile pictures."
 else
   log "no profile-picture archive in the backup; existing pictures were left untouched."

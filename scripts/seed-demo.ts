@@ -9,7 +9,7 @@ import { DEMO_DEFAULT_PASSWORD, installDemoData } from "@/server/demo/data";
 
 
 async function main(): Promise<void> {
-  if (process.env.NODE_ENV === "production" && process.env.DEMO_FORCE !== "yes" && process.env.DEMO_FORCE !== "evet") {
+  if (process.env.NODE_ENV === "production" && process.env.DEMO_FORCE !== "yes") {
     console.log(
       "[demo data] NODE_ENV=production: aborted. Set DEMO_FORCE=yes to force run.",
     );

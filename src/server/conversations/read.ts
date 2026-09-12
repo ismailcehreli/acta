@@ -8,7 +8,7 @@ import { canViewActivity } from "@/server/authz/visibility";
 
 
 
-// bilmelidir.
+// Every read must pass through the visibility boundary.
 //
 
 

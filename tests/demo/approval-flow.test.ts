@@ -151,7 +151,7 @@ describe("demo data approval flow", () => {
     });
 
     await testDb.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'evet'");
+      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'yes'");
       await tx.approvalRound.deleteMany({ where: { activityId: pending.id } });
       await tx.activityApprover.deleteMany({ where: { activityId: pending.id } });
     });

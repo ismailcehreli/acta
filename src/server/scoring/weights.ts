@@ -7,7 +7,7 @@ import {
 import type { ScoreWeights } from "./compute";
 
 
-// 23.08.2026 bulgu 8).
+// 23.08.2026 finding 8.
 //
 
 

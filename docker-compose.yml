@@ -29,7 +29,7 @@ services:
       retries: 12
 
   # Separate server used by the tests; it hosts two databases
-  # (faaliyet_test → Vitest, faaliyet_e2e → Playwright). Its data lives in tmpfs
+  # (acta_test → Vitest, acta_e2e → Playwright). Its data lives in tmpfs
   # and is removed on shutdown. It uses a separate profile so it cannot run in
   # production:
   #   docker compose --profile test up -d test-postgres
@@ -38,9 +38,9 @@ services:
     profiles: ["test"]
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${TEST_POSTGRES_USER:-faaliyet_test}
-      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:-faaliyet_test}
-      POSTGRES_DB: ${TEST_POSTGRES_DB:-faaliyet_test}
+      POSTGRES_USER: ${TEST_POSTGRES_USER:-acta_test}
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:-acta_test}
+      POSTGRES_DB: ${TEST_POSTGRES_DB:-acta_test}
       TZ: Europe/Istanbul
     ports:
       - "127.0.0.1:${TEST_POSTGRES_PORT:-5433}:5432"
@@ -52,7 +52,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${TEST_POSTGRES_USER:-faaliyet_test} -d ${TEST_POSTGRES_DB:-faaliyet_test}",
+          "pg_isready -U ${TEST_POSTGRES_USER:-acta_test} -d ${TEST_POSTGRES_DB:-acta_test}",
         ]
       interval: 5s
       timeout: 5s
@@ -68,7 +68,7 @@ services:
     build: .
     image: acta:local
     restart: "no"
-    command: ["node_modules/.bin/prisma", "migrate", "deploy"]
+    command: ["node", "--import", "tsx", "scripts/migrate.ts", "deploy"]
     environment:
       NODE_ENV: production
       TZ: Europe/Istanbul
@@ -93,22 +93,22 @@ services:
       # Read tickets (§10.2) are signed with this secret; it has no default.
       APP_SECRET: ${APP_SECRET:?APP_SECRET must be set}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
-      ATTACHMENT_STORAGE_DIR: /veri/ekler
+      ATTACHMENT_STORAGE_DIR: /data/attachments
       # Profile pictures also live on disk and **must be persistent**. Before
       # this variable was configured, they were written inside the container at
       # `/app/storage/avatars`, so every `docker compose up --build` removed
       # them. The database retained `avatarExtension`, but the files disappeared
       # and every profile returned 404 (Audit 2026-08-23, finding 5).
-      AVATAR_STORAGE_DIR: /veri/avatarlar
+      AVATAR_STORAGE_DIR: /data/avatars
     volumes:
       # Attachments live on a persistent volume. If they stayed in the container,
       # every update would remove the files while leaving database records
       # behind (§15.4).
-      - attachment-data:/veri/ekler
+      - attachment-data:/data/attachments
       # Avatars use a **separate volume**. Sharing it with attachments would make
       # backup/restore unable to separate them; restoring one would restore the
       # other as well.
-      - avatar-data:/veri/avatarlar
+      - avatar-data:/data/avatars
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"
     depends_on:
@@ -130,9 +130,9 @@ services:
       # The worker needs the same secret to decrypt the SMTP password.
       APP_SECRET: ${APP_SECRET:?APP_SECRET must be set}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
-      ATTACHMENT_STORAGE_DIR: /veri/ekler
+      ATTACHMENT_STORAGE_DIR: /data/attachments
     volumes:
-      - attachment-data:/veri/ekler
+      - attachment-data:/data/attachments
     depends_on:
       postgres:
         condition: service_healthy

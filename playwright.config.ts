@@ -11,7 +11,7 @@ const baseURL = externalBaseURL ?? `http://127.0.0.1:${port}`;
 // Acceptance benchmark is excluded from the normal test suite: it generates tens of thousands
 // of records and adds minutes to every run. Run manually with its own project:
 //
-//   pnpm e2e:kabul
+//   pnpm e2e:acceptance
 const BENCHMARK = "**/acceptance-benchmark.spec.ts";
 
 // These spec files modify shared system state and must run sequentially with a single worker
@@ -46,7 +46,7 @@ function browserProjects() {
       testIgnore: [BENCHMARK, ...SHARED_STATE_MUTATORS],
     },
     {
-      name: `${name}-ayar`,
+      name: `${name}-shared`,
       use: { ...devices[device] },
       testMatch: SHARED_STATE_MUTATORS,
     },
@@ -73,7 +73,7 @@ export default defineConfig({
   projects: [
     ...browserProjects(),
     {
-      name: "kabul",
+      name: "acceptance",
       use: { ...devices["Desktop Chrome"] },
       testMatch: [BENCHMARK],
     },

@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # The old version left avatars in the app container's writable layer under
 # `/app/storage/avatars` because `AVATAR_STORAGE_DIR` was not configured. The
-# new version writes them to the `avatar-data` volume under `/veri/avatarlar`.
+# new version writes them to the `avatar-data` volume under `/data/avatars`.
 # Without this migration, the first `docker compose up --build` removes the old
 # container and all profile pictures: `avatarExtension` remains in the database,
 # but the files disappear and every profile returns 404.
@@ -28,7 +28,7 @@ set -euo pipefail
 
 SOURCE_CONTAINER="${1:-}"
 SOURCE_DIR="${AVATAR_OLD_DIR:-/app/storage/avatars}"
-TARGET_DIR="/veri/avatarlar"
+TARGET_DIR="/data/avatars"
 
 log() { echo "[avatar migration] $*"; }
 fail() { echo "[avatar migration] ERROR: $*" >&2; exit 1; }

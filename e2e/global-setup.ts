@@ -115,14 +115,14 @@ export default async function globalSetup(): Promise<void> {
     resolveUrl: e2eDatabaseUrl,
     assertSentinel: assertSentinelPresent,
     runMigrations: (target) => {
-      execFileSync("pnpm", ["exec", "prisma", "migrate", "deploy"], {
+      execFileSync("pnpm", ["migrate"], {
         env: { ...process.env, DATABASE_URL: target },
         stdio: "inherit",
       });
     },
     isSchemaReady: isRequiredSchemaPresent,
     resetDatabase: (target) => {
-      execFileSync("pnpm", ["exec", "prisma", "migrate", "reset", "--force"], {
+      execFileSync("pnpm", ["migrate:reset"], {
         env: { ...process.env, DATABASE_URL: target },
         stdio: "inherit",
       });

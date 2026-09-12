@@ -1,0 +1,2 @@
+
+ALTER TABLE "User" ADD COLUMN "title" VARCHAR(100);

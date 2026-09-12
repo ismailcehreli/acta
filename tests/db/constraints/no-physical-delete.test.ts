@@ -139,7 +139,7 @@ describe("demo data purge narrow backdoor", () => {
     const user = await createUser(unit.id);
 
     await testDb.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'evet'");
+      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'yes'");
       await tx.user.delete({ where: { id: user.id } });
     });
 
@@ -152,7 +152,7 @@ describe("demo data purge narrow backdoor", () => {
     const toKeep = await createUser(unit.id, { email: "to-keep@example.test" });
 
     await testDb.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'evet'");
+      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'yes'");
       await tx.user.delete({ where: { id: toDelete.id } });
     });
 
@@ -183,7 +183,7 @@ describe("demo data purge narrow backdoor", () => {
     const toKeep = await createActivity(user);
 
     await testDb.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe("SET LOCAL app.activity_delete = 'evet'");
+      await tx.$executeRawUnsafe("SET LOCAL app.activity_delete = 'yes'");
       await tx.activityRevision.deleteMany({ where: { activityId: toDelete.id } });
       await tx.activity.delete({ where: { id: toDelete.id } });
     });

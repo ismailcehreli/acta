@@ -29,7 +29,7 @@ const SIZES: Record<ButtonSize, string> = {
   lg: "h-(--spacing-control-lg) px-5 text-[length:var(--text-base)] gap-2",
 };
 
-const TABAN =
+const BASE_CLASS =
   "inline-flex items-center justify-center rounded-(--radius-sm) border font-medium " +
   "transition-colors duration-(--duration-fast) " +
   "disabled:cursor-not-allowed disabled:opacity-45 disabled:pointer-events-none";
@@ -42,7 +42,7 @@ export function Button({
 }: ComponentProps<"button"> & { variant?: ButtonVariant; size?: ButtonSize }) {
   return (
     <button
-      className={`${TABAN} ${VARIANTS[variant]} ${SIZES[size]} ${className ?? ""}`}
+      className={`${BASE_CLASS} ${VARIANTS[variant]} ${SIZES[size]} ${className ?? ""}`}
       {...props}
     />
   );
@@ -61,7 +61,7 @@ export function ButtonLink({
 }) {
   return (
     <Link
-      className={`${TABAN} ${VARIANTS[variant]} ${SIZES[size]} ${className ?? ""}`}
+      className={`${BASE_CLASS} ${VARIANTS[variant]} ${SIZES[size]} ${className ?? ""}`}
       {...props}
     >
       {children}

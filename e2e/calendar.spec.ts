@@ -36,9 +36,9 @@ test("a system administrator edits the work calendar and adds a holiday", async 
   await expect(page.getByRole("checkbox", { name: "Saturday" })).toBeChecked();
 
   // Add a holiday and verify it appears in the list.
-  const tatil = "2026-12-31";
+  const holidayDate = "2026-12-31";
   await resilientGoto(page, "/admin/calendar?tab=holidays");
-  await page.getByLabel("Date").fill(tatil);
+  await page.getByLabel("Date").fill(holidayDate);
   await page.getByLabel("Description").fill("New Year's Eve");
   await page.getByRole("button", { name: "Add holiday" }).click();
   await expect(page.getByText("New Year's Eve")).toBeVisible();

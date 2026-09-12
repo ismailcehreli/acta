@@ -20,7 +20,7 @@ export type ApprovalRoundDb = Pick<PrismaClient, "approvalRound">;
  * Not the entire `ActivityApprovalStatus` set: cancellation is not an approval
  * decision (the author or upstream chain cancels; the approval queue is empty
  * at that point) and "manager not found" is not a decision, but a failure state.
- * The database enforces the same restriction via `ApprovalRound_gecerli_karar` constraint.
+ * The database enforces the same restriction via the `ApprovalRound_valid_decision` constraint.
  */
 export type ApprovalDecision = "APPROVED" | "CHANGES_REQUESTED" | "REJECTED";
 

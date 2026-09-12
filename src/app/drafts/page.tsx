@@ -47,8 +47,8 @@ export async function generateMetadata() {
 
 
 function preview(text: string): string {
-  const tek = text.replace(/\s+/g, " ").trim();
-  return tek.length > 160 ? `${tek.slice(0, 160)}…` : tek;
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > 160 ? `${normalized.slice(0, 160)}…` : normalized;
 }
 
 export default async function DraftsPage({

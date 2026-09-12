@@ -10,8 +10,8 @@ import {
 
 // (audit 2026-08-17, finding 3).
 
-const TEST_URL = "postgresql://u:p@localhost:5433/faaliyet_test";
-const APP_URL = "postgresql://u:p@localhost:5442/faaliyet";
+const TEST_URL = "postgresql://u:p@localhost:5433/acta_test";
+const APP_URL = "postgresql://u:p@localhost:5442/acta";
 
 const options = { variableName: "TEST_DATABASE_URL", applicationUrl: APP_URL };
 
@@ -25,7 +25,7 @@ describe("test database URL validation", () => {
   });
 
   it("accepts the end-to-end database", () => {
-    const e2eUrl = "postgresql://u:p@localhost:5433/faaliyet_e2e";
+    const e2eUrl = "postgresql://u:p@localhost:5433/acta_e2e";
     expect(assertTestDatabaseUrl(e2eUrl, options)).toBe(e2eUrl);
   });
 
@@ -50,14 +50,14 @@ describe("test database URL validation", () => {
 
   it("rejects the production database name", () => {
     expect(() =>
-      assertTestDatabaseUrl("postgresql://u:p@localhost:5433/faaliyet", options),
+      assertTestDatabaseUrl("postgresql://u:p@localhost:5433/acta", options),
     ).toThrow(/does not point to an allowed test database/);
   });
 
   it("rejects a remote host", () => {
     expect(() =>
       assertTestDatabaseUrl(
-        "postgresql://u:p@db.sirket.local:5432/faaliyet_test",
+        "postgresql://u:p@db.example.local:5432/acta_test",
         options,
       ),
     ).toThrow(/points to a non-local host/);
@@ -72,7 +72,7 @@ describe("test database URL validation", () => {
   });
 
   it("does not expose a password in error messages", () => {
-    const withPassword = "postgresql://faaliyet:secret-password@localhost:5442/faaliyet";
+    const withPassword = "postgresql://acta:secret-password@localhost:5442/acta";
 
     expect(maskUrl(withPassword)).not.toContain("secret-password");
     expect(maskUrl(withPassword)).toContain("***");
@@ -93,30 +93,30 @@ describe("test database URL validation", () => {
 
 describe("canonical database targets", () => {
   it("treats localhost and 127.0.0.1 as the same target", () => {
-    expect(canonicalTarget("postgresql://u:p@localhost:5442/faaliyet")).toBe(
-      canonicalTarget("postgresql://baska:parola@127.0.0.1:5442/faaliyet"),
+    expect(canonicalTarget("postgresql://u:p@localhost:5442/acta")).toBe(
+      canonicalTarget("postgresql://other:password@127.0.0.1:5442/acta"),
     );
   });
 
   it("treats the implicit default port as the explicit port", () => {
-    expect(canonicalTarget("postgresql://u:p@127.0.0.1/faaliyet")).toBe(
-      canonicalTarget("postgresql://u:p@127.0.0.1:5432/faaliyet"),
+    expect(canonicalTarget("postgresql://u:p@127.0.0.1/acta")).toBe(
+      canonicalTarget("postgresql://u:p@127.0.0.1:5432/acta"),
     );
   });
 
   it("rejects the application database despite a different spelling", () => {
 
     expect(() =>
-      assertTestDatabaseUrl("postgresql://u:p@localhost:5442/faaliyet", {
+      assertTestDatabaseUrl("postgresql://u:p@localhost:5442/acta", {
         variableName: "TEST_DATABASE_URL",
-        applicationUrl: "postgresql://faaliyet:parola@127.0.0.1:5442/faaliyet",
+        applicationUrl: "postgresql://acta:password@127.0.0.1:5442/acta",
       }),
     ).toThrow(/same database as DATABASE_URL|allowed test database/);
   });
 
   it("treats different database names as different targets", () => {
-    expect(canonicalTarget("postgresql://u:p@127.0.0.1:5433/faaliyet_test")).not.toBe(
-      canonicalTarget("postgresql://u:p@127.0.0.1:5433/faaliyet_e2e"),
+    expect(canonicalTarget("postgresql://u:p@127.0.0.1:5433/acta_test")).not.toBe(
+      canonicalTarget("postgresql://u:p@127.0.0.1:5433/acta_e2e"),
     );
   });
 });

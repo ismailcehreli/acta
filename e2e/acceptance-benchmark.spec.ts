@@ -14,7 +14,7 @@ import { generateLoadData, type LoadSummary } from "../tests/helpers/acceptance-
 // thousands of records and adds minutes to each run. Results belong in the
 // acceptance report.
 //
-//   pnpm e2e:kabul
+//   pnpm e2e:acceptance
 //
 // **The benchmark verifies what it measures** (audit 2026-08-23, finding 10).
 // The old version only waited for any `main` element. Error and "not found"

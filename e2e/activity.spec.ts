@@ -296,13 +296,13 @@ test("an attachment can be downloaded only by an authorized user", async ({
   await page.getByRole("button", { name: "Submit" }).click();
   await expect(page).toHaveURL(/\/activities/);
 
-  const detayUrl = await page
+  const detailUrl = await page
     .locator('[data-test="activity-record"]')
     .filter({ hasText: title })
     .getByRole("link", { name: title })
     .getAttribute("href");
 
-  await resilientGoto(page, detayUrl as string);
+  await resilientGoto(page, detailUrl as string);
   // The image is shown as a preview; obtain the download address from the
   // link inside the overlay.
   const preview = page.locator('[data-test="attachment-preview"][data-attachment-type="image"]');

@@ -143,9 +143,9 @@ docker compose run --rm --no-deps migrate \
 # The database was reset successfully. Clear the application stores as well;
 # the mount points themselves are not removed.
 docker compose run --rm --no-deps --entrypoint sh app -c \
-  'mkdir -p /veri/ekler /veri/avatarlar &&
-   find /veri/ekler -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + &&
-   find /veri/avatarlar -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
+  'mkdir -p /data/attachments /data/avatars &&
+   find /data/attachments -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + &&
+   find /data/avatars -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
 
 # The logo and similar settings may live in the app container's writable layer
 # rather than a named volume. Removing the old container clears a stale logo

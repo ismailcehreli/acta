@@ -156,13 +156,13 @@ describe("events produced by workflows", () => {
     const unsubscribe = await subscribe(author.id, (event) => authorEvents.push(event));
 
     try {
-      const kapatma = await closeConversation(
+      const closeResult = await closeConversation(
         testDb,
         { id: director.id, isSystemAdmin: false },
         opened.value.id,
         new Date(NOW.getTime() + 120_000),
       );
-      expect(kapatma.ok).toBe(true);
+      expect(closeResult.ok).toBe(true);
 
       expect(await wait(authorEvents)).toEqual({
         kind: REALTIME_EVENTS.conversationClosed,

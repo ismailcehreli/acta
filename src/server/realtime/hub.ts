@@ -16,7 +16,7 @@ import {
 
 
 
-// zorunlu sonucu.
+// Subscribers must observe the result of every delivered event.
 
 type Listener = (event: RealtimeEvent) => void;
 

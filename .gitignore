@@ -26,7 +26,7 @@ playwright-report/
 *.xlsx
 *.xls
 *.docx
-/veri/
+/data/
 /uploads/
 
 # Editor and operating system
@@ -41,6 +41,6 @@ npm-debug.log*
 storage/
 
 # Backups are never committed, even when encrypted.
-/yedek
+/backups
 /storage
-/.faaliyet-backup.lock
+/.acta-backup.lock

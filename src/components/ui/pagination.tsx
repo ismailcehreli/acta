@@ -57,18 +57,18 @@ export async function Pagination({
       aria-label={t("common.pagination")}
       className="flex flex-wrap items-center gap-x-1 gap-y-2 border-t border-line px-4 py-3 sm:px-5"
     >
-      <Adim
+      <Step
         href={page > 1 ? hrefFor(page - 1) : null}
         label={`${t("common.previous")} ${t("common.page")}`}
       >
         ‹
-      </Adim>
+      </Step>
 
       <ul className="flex flex-wrap items-center gap-1">
         {pages.map((value, i) =>
           value === "..." ? (
             <li
-              key={`bosluk-${i}`}
+              key={`gap-${i}`}
               aria-hidden
               className="px-1 text-[length:var(--text-sm)] text-faint"
             >
@@ -95,12 +95,12 @@ export async function Pagination({
         )}
       </ul>
 
-      <Adim
+      <Step
         href={page < pageCount ? hrefFor(page + 1) : null}
         label={`${t("common.next")} ${t("common.page")}`}
       >
         ›
-      </Adim>
+      </Step>
 
       {totalLabel ? (
         <span className="ms-auto text-[length:var(--text-xs)] text-faint">
@@ -112,7 +112,7 @@ export async function Pagination({
 }
 
 /** Render a previous/next step, muted when the link is unavailable. */
-function Adim({
+function Step({
   href,
   label,
   children,

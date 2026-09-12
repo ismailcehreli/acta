@@ -24,7 +24,7 @@ Acta consists of three primary components:
 1. **Next.js Web Application (`app`):** Handles user interfaces, server actions, authentication, and real-time SSE event subscriptions.
 2. **PostgreSQL 17 Database (`postgres`):** Single source of truth. Contains database-level constraints, triggers, and partial indexes for unbreakable business invariants.
 3. **Background Worker (`worker`):** An independent daemon process sharing the codebase that polls the transactional outbox queue, processes notification dispatches (email & web-push), checks shift windows, and calculates scheduled job pulses.
-4. **Migration Runner (`migrate`):** A transient container that executes `prisma migrate deploy` before the application or worker boots. If a migration fails, the app does not start.
+4. **Migration Runner (`migrate`):** A transient container that runs the migration compatibility wrapper before the application or worker boots. If a migration fails, the app does not start.
 
 ---
 

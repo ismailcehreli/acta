@@ -1,29 +1,29 @@
-// Push service worker (Görev 5.3b).
+// Push service worker (Task 5.3b).
 //
-// Burada **hiç uygulama mantığı yoktur**: gelen bildirimi gösterir ve
-// tıklandığında ilgili sayfayı açar. Service worker sayfadan bağımsız çalışır;
-// içine iş kuralı koymak, tarayıcıda güncellenmesi en zor yere kural koymak
-// olurdu.
+// There is **no business logic here**: the worker shows an incoming
+// notification and opens its target when clicked. A service worker runs
+// independently of the page, so placing business rules here would put them in
+// one of the hardest browser surfaces to update.
 
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
-  let veri;
+  let payload;
   try {
-    veri = event.data.json();
+    payload = event.data.json();
   } catch {
-    // Beklenmeyen biçimde bir gövde geldiyse sessizce yutmak yerine görünür
-    // ama zararsız bir bildirim gösterilir.
-    veri = { title: "Faaliyet Raporlama", body: "Yeni bir bildiriminiz var.", url: "/" };
+    // Show a visible but harmless notification instead of silently swallowing
+    // an unexpected payload.
+    payload = { title: "Activity Reporting", body: "You have a new notification.", url: "/" };
   }
 
   event.waitUntil(
-    self.registration.showNotification(veri.title ?? "Faaliyet Raporlama", {
-      body: veri.body ?? "",
-      // Adres etiket olarak kullanılır: aynı kayda ait ikinci bildirim
-      // birincinin üstüne yazar, bildirim yığını şişmez.
-      tag: veri.url ?? "/",
-      data: { url: veri.url ?? "/" },
+    self.registration.showNotification(payload.title ?? "Activity Reporting", {
+      body: payload.body ?? "",
+      // Use the URL as the notification tag: a second notification for the
+      // same record replaces the first instead of growing the notification pile.
+      tag: payload.url ?? "/",
+      data: { url: payload.url ?? "/" },
       icon: "/api/branding/logo",
       badge: "/api/branding/logo",
     }),
@@ -32,22 +32,24 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const hedef = event.notification.data?.url ?? "/";
+  const targetUrl = event.notification.data?.url ?? "/";
 
   event.waitUntil(
     (async () => {
-      const pencereler = await self.clients.matchAll({
+      const windowClients = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
 
-      // Açık sekme varsa yenisi açılmaz; her tıklamada yeni pencere açmak
-      // hızla kirlilik üretiyor.
-      for (const pencere of pencereler) {
-        if (pencere.url === hedef && "focus" in pencere) return pencere.focus();
+      // Do not open a new tab when the target is already open; opening one on
+      // every click quickly creates clutter.
+      for (const windowClient of windowClients) {
+        if (windowClient.url === targetUrl && "focus" in windowClient) {
+          return windowClient.focus();
+        }
       }
 
-      if (self.clients.openWindow) return self.clients.openWindow(hedef);
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
       return undefined;
     })(),
   );

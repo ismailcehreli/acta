@@ -195,11 +195,11 @@ docker compose exec -T postgres pg_dump \
 #    in the database while the file was missing, so every profile returned 404.
 log "capturing file stores"
 docker compose run --rm --no-deps --entrypoint sh app -c \
-  'mkdir -p /veri/ekler /veri/avatarlar && tar -C /veri -cf - ekler' \
+  'mkdir -p /data/attachments /data/avatars && tar -C /data -cf - attachments' \
   > "$WORK_DIR/attachments.tar" || fail "Could not capture attachments."
 
 docker compose run --rm --no-deps --entrypoint sh app -c \
-  'tar -C /veri -cf - avatarlar' \
+  'tar -C /data -cf - avatars' \
   > "$WORK_DIR/avatars.tar" || fail "Could not capture profile pictures."
 
 log "closing write-free window: starting app and worker"
@@ -232,7 +232,7 @@ docker compose exec -T postgres psql \
 
 # 5. Remove old backups (default: 30 days).
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
-find "$TARGET_DIR" \( -name 'acta-*.tar.gz.enc' -o -name 'faaliyet-*.tar.gz.enc' \) \
+find "$TARGET_DIR" -name 'acta-*.tar.gz.enc' \
   -type f -mtime "+$RETENTION_DAYS" -print -delete \
   | sed 's/^/[backup] removed (old): /' || true
 

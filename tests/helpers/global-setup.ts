@@ -22,14 +22,14 @@ export default async function setup(): Promise<void> {
       }),
     assertSentinel: assertSentinelPresent,
     runMigrations: (url) => {
-      execFileSync("pnpm", ["exec", "prisma", "migrate", "deploy"], {
+      execFileSync("pnpm", ["migrate"], {
         env: { ...process.env, DATABASE_URL: url },
         stdio: "inherit",
       });
     },
     isSchemaReady: isRequiredSchemaPresent,
     resetDatabase: (url) => {
-      execFileSync("pnpm", ["exec", "prisma", "migrate", "reset", "--force"], {
+      execFileSync("pnpm", ["migrate:reset"], {
         env: { ...process.env, DATABASE_URL: url },
         stdio: "inherit",
       });

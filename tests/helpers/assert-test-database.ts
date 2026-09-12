@@ -7,7 +7,7 @@
 
 
 
-const ALLOWED_DATABASE_NAMES = new Set(["faaliyet_test", "faaliyet_e2e"]);
+const ALLOWED_DATABASE_NAMES = new Set(["acta_test", "acta_e2e"]);
 
 
 const ALLOWED_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "test-postgres"]);

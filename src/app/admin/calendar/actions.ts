@@ -139,18 +139,18 @@ export async function saveUnitCalendarAction(
   }
 
   const start = timeToMinute(String(formData.get("workStart") ?? ""));
-  const bit = timeToMinute(String(formData.get("workEnd") ?? ""));
-  if (start === null || bit === null) {
+  const end = timeToMinute(String(formData.get("workEnd") ?? ""));
+  if (start === null || end === null) {
     return { error: t("screens.calendar.invalidWorkingHours"), success: null };
   }
-  if (bit <= start) {
+  if (end <= start) {
     return { error: t("screens.calendar.endAfterStart"), success: null };
   }
 
   await saveUnitWorkCalendar(prisma, orgUnitId, {
     workingDays: days,
     workStartMinute: start,
-    workEndMinute: bit,
+    workEndMinute: end,
     worksOnHolidays: formData.get("worksOnHolidays") === "on",
   });
 

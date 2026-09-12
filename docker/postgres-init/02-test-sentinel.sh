@@ -10,7 +10,7 @@
 # the schema as "not empty" and reject migration deployment.
 set -e
 
-for db in "$POSTGRES_DB" faaliyet_e2e; do
+for db in "$POSTGRES_DB" acta_e2e; do
   psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$db" \
-    -c "COMMENT ON DATABASE \"$db\" IS 'faaliyet-test-veritabani';"
+    -c "COMMENT ON DATABASE \"$db\" IS 'acta-test-database';"
 done

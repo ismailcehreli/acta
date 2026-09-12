@@ -174,7 +174,7 @@ export async function deleteDraft(
   await db.$transaction(async (tx) => {
 
 
-    await tx.$executeRawUnsafe("SET LOCAL app.activity_draft_delete = 'evet'");
+    await tx.$executeRawUnsafe("SET LOCAL app.activity_draft_delete = 'yes'");
     await tx.activityDraftAttachment.deleteMany({ where: { draftId: id } });
     await tx.activityDraft.delete({ where: { id } });
   });

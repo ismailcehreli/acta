@@ -6,11 +6,11 @@ import { companyHour } from "@/shared/format/date-time";
 
 
 export const RETRY_DELAYS_MS = [
-  60_000, // 1 dk
-  5 * 60_000, // 5 dk
-  15 * 60_000, // 15 dk
-  60 * 60_000, // 1 saat
-  3 * 60 * 60_000, // 3 saat
+  60_000, // 1 min
+  5 * 60_000, // 5 min
+  15 * 60_000, // 15 min
+  60 * 60_000, // 1 hour
+  3 * 60 * 60_000, // 3 hours
 ];
 
 export const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;

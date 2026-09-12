@@ -9,7 +9,7 @@ import { localizeServiceMessage } from "@/shared/i18n/message";
 
 
 
-// ekini de indiremez.
+// Users without visibility cannot download the attachment.
 //
 
 //

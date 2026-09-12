@@ -17,7 +17,7 @@ const READ_PATTERN =
 
 /** Markers indicating visibility module usage. */
 const SCOPE_PATTERN =
-  /(visibleActivityWhere|visibleActivitySql|canViewActivity|canCancelActivity|approvalQueueWhere|gorunurFaaliyetler|gorunurlugeGoreAyir|getVisibleActivityIds|partitionRowsByVisibility|visibleReportScope)/;
+  /(visibleActivityWhere|visibleActivitySql|canViewActivity|canCancelActivity|approvalQueueWhere|getVisibleActivityIds|partitionRowsByVisibility|visibleReportScope)/;
 
 const MODEL_READ_PATTERN =
   /\b(activity|attachment)\.(findMany|findFirst|findUnique|count|groupBy|aggregate)\b/;

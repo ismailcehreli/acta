@@ -48,7 +48,7 @@ export async function teamParticipationToday(
 
   //
 
-  //      gibi roller).
+  //      such as managers).
 
   //
 

@@ -205,7 +205,7 @@ describe("mandatory round in rejection path", () => {
     // Bypass application layer to delete round: simulating corrupt data.
     // (Deletion block is bypassed with demo purge flag; not the subject of this test.)
     await testDb.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'evet'");
+      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'yes'");
       await tx.approvalRound.deleteMany({ where: { activityId: activity.id } });
     });
 

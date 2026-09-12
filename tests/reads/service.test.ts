@@ -115,17 +115,17 @@ describe("§10.2 — what counts as read", () => {
 describe("§10.3 — first and last read", () => {
   it("the first read is preserved and the last read is updated", async () => {
     const { manager, activity } = await scenario();
-    const sonra = new Date(NOW.getTime() + 3_600_000);
+    const later = new Date(NOW.getTime() + 3_600_000);
 
     await markActivityAsRead(testDb, viewer(manager), activity.id, 3_000, NOW);
-    await markActivityAsRead(testDb, viewer(manager), activity.id, 3_000, sonra);
+    await markActivityAsRead(testDb, viewer(manager), activity.id, 3_000, later);
 
     const record = await testDb.readReceipt.findUniqueOrThrow({
       where: { activityId_userId: { activityId: activity.id, userId: manager.id } },
     });
 
     expect(record.firstReadAt).toEqual(NOW);
-    expect(record.lastReadAt).toEqual(sonra);
+    expect(record.lastReadAt).toEqual(later);
 
     expect(await testDb.readReceipt.count()).toBe(1);
   });

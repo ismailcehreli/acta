@@ -18,7 +18,7 @@ import { ORG_TREE_LOCK_KEY } from "../org/locks";
 
 
 
-// tekrarlanmaz.
+// Duplicate email addresses remain rejected by the database constraint.
 //
 
 
@@ -186,14 +186,14 @@ export async function createUser(
         },
       });
 
-      const kimlik = await tx.userCredential.create({
+      const credential = await tx.userCredential.create({
         data: { userId: created.id, passwordHash },
       });
 
       if (options.welcomeEmail) {
         const token = issueResetToken(
           created.id,
-          kimlik.version,
+          credential.version,
           now,
           options.secret ?? appSecret(),
         );

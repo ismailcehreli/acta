@@ -17,7 +17,7 @@ export type EnqueueDb = Pick<PrismaClient, "notificationQueue" | "systemSetting"
   Partial<Pick<PrismaClient, "pushSubscription">>;
 
 
-function activityKimligi(payload: Prisma.InputJsonValue): string | null {
+function activityIdFromPayload(payload: Prisma.InputJsonValue): string | null {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     return null;
   }
@@ -51,7 +51,7 @@ export async function enqueueNotification(
         userId: params.userId,
         eventType: params.eventType,
         channel: "EMAIL",
-        activityId: activityKimligi(params.payload),
+        activityId: activityIdFromPayload(params.payload),
         payload: params.payload,
         idempotencyKey: params.idempotencyKey,
         createdAt: params.now,
@@ -70,17 +70,17 @@ export async function enqueueNotification(
 async function enqueuePush(db: EnqueueDb, params: EnqueueParams): Promise<number> {
   if (!db.pushSubscription) return 0;
 
-  const abonelik = await db.pushSubscription.count({
+  const subscriptionCount = await db.pushSubscription.count({
     where: { userId: params.userId },
   });
-  if (abonelik === 0) return 0;
+  if (subscriptionCount === 0) return 0;
 
   const created = await db.notificationQueue.createMany({
     data: {
       userId: params.userId,
       eventType: params.eventType,
       channel: "PUSH",
-      activityId: activityKimligi(params.payload),
+      activityId: activityIdFromPayload(params.payload),
       payload: params.payload,
 
       idempotencyKey: `push:${params.idempotencyKey}`,

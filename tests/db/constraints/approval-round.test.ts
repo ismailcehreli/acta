@@ -57,7 +57,7 @@ describe("approval round constraints", () => {
         INSERT INTO "ApprovalRound" ("id", "activityId", "roundNo", "submittedAt", "decidedAt")
         VALUES (gen_random_uuid(), ${activity.id}, 1, '2026-08-03T08:00:00Z', '2026-08-04T09:00:00Z')
       `,
-    ).rejects.toThrow(/ApprovalRound_karar_butunlugu/);
+    ).rejects.toThrow(/ApprovalRound_decision_consistency/);
   });
 
   it("decision cannot predate submission", async () => {
@@ -70,7 +70,7 @@ describe("approval round constraints", () => {
         VALUES (gen_random_uuid(), ${activity.id}, 1,
                 '2026-08-04T09:00:00Z', '2026-08-03T08:00:00Z', ${manager.id}, 'APPROVED')
       `,
-    ).rejects.toThrow(/ApprovalRound_karar_gonderimden_sonra/);
+    ).rejects.toThrow(/ApprovalRound_decision_after_submission/);
   });
 
   it("decided round is not treated as open", async () => {
@@ -151,6 +151,6 @@ describe("approval round constraints", () => {
             "decision" = 'CANCELLED'
         WHERE "activityId" = ${activity.id}
       `,
-    ).rejects.toThrow(/ApprovalRound_gecerli_karar/);
+    ).rejects.toThrow(/ApprovalRound_valid_decision/);
   });
 });

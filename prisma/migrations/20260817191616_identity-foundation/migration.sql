@@ -1,0 +1,3 @@
+ALTER TABLE "Session" ADD COLUMN     "credentialVersion" INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE "UserCredential" ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 0;

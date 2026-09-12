@@ -1,0 +1,11 @@
+
+CREATE TYPE "DemoObjectOrigin" AS ENUM (
+    'CREATED_BY_INSTALLER',
+    'REUSED_EXISTING'
+);
+
+ALTER TABLE "DemoObject"
+    ADD COLUMN "origin" "DemoObjectOrigin" NOT NULL DEFAULT 'CREATED_BY_INSTALLER';
+
+ALTER TABLE "DemoObject"
+    ALTER COLUMN "origin" DROP DEFAULT;

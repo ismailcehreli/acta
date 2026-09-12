@@ -343,12 +343,12 @@ describe("transactional safety of score recalculation queue", () => {
 
       let advisoryWaiting = false;
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        const [row] = await testDb.$queryRaw<Array<{ bekliyor: boolean }>>`
-          SELECT ("wait_event_type" = 'Lock' AND "wait_event" = 'advisory') AS bekliyor
+        const [row] = await testDb.$queryRaw<Array<{ isWaiting: boolean }>>`
+          SELECT ("wait_event_type" = 'Lock' AND "wait_event" = 'advisory') AS "isWaiting"
           FROM pg_stat_activity
           WHERE pid = ${decisionPid}
         `;
-        if (row?.bekliyor) {
+        if (row?.isWaiting) {
           advisoryWaiting = true;
           break;
         }

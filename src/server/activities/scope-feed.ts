@@ -166,19 +166,19 @@ function afterCursor(
   cursor: FeedCursor,
   order: FeedOrder,
 ): Prisma.ActivityWhereInput {
-  const ileri = order === "oldest";
+  const isForward = order === "oldest";
 
   return {
     OR: [
-      { activityDate: ileri ? { gt: cursor.activityDate } : { lt: cursor.activityDate } },
+      { activityDate: isForward ? { gt: cursor.activityDate } : { lt: cursor.activityDate } },
       {
         activityDate: cursor.activityDate,
-        createdAt: ileri ? { gt: cursor.createdAt } : { lt: cursor.createdAt },
+        createdAt: isForward ? { gt: cursor.createdAt } : { lt: cursor.createdAt },
       },
       {
         activityDate: cursor.activityDate,
         createdAt: cursor.createdAt,
-        id: ileri ? { gt: cursor.id } : { lt: cursor.id },
+        id: isForward ? { gt: cursor.id } : { lt: cursor.id },
       },
     ],
   };

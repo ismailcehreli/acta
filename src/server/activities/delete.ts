@@ -343,7 +343,7 @@ export async function confirmActivityDeletion(
 
     // Open the physical-deletion guard. `SET LOCAL` applies only to this
     // transaction, and this is the only application path that sets it.
-    await tx.$executeRawUnsafe("SET LOCAL app.activity_delete = 'evet'");
+    await tx.$executeRawUnsafe("SET LOCAL app.activity_delete = 'yes'");
 
     const conversations = await transactionDb.conversation.findMany({
       where: { activityId },

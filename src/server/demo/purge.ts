@@ -224,7 +224,7 @@ export async function purgeDemoData(
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('acta:demo_data'))`;
 
       // Session variable allowing physical deletion during this transaction only
-      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'evet'");
+      await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'yes'");
 
       const unclassifiedUnits = await listLegacyDemoOriginCandidates(
         tx as unknown as PurgeDb,

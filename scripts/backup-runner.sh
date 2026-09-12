@@ -152,7 +152,7 @@ if [[ "$backup_exit_code" != "0" ]]; then
   exit "$backup_exit_code"
 fi
 
-output_file="$(find "$TARGET_DIR" -maxdepth 1 -type f \( -name 'acta-*.tar.gz.enc' -o -name 'faaliyet-*.tar.gz.enc' \) -print | sort | tail -n 1)"
+output_file="$(find "$TARGET_DIR" -maxdepth 1 -type f -name 'acta-*.tar.gz.enc' -print | sort | tail -n 1)"
 if [[ -z "$output_file" ]]; then
   psql \
     --set="id=$request_id" \

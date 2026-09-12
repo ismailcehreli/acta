@@ -5,7 +5,7 @@ import type { ScoreInput, ScoreWeights } from "@/server/scoring/compute";
 
 // Formula Version 1 golden results (audit 25.08.2026, P8-R2-4).
 //
-// V1 previously called shared `profileWeights` and `puan` helpers: if one of those
+// V1 previously called shared `profileWeights` and `score` helpers: if one of those
 // shared helpers changed for a new formula, V1 periods would be re-interpreted.
 //
 // This file locks V1 with exact numbers. If profile distribution, empty denominator

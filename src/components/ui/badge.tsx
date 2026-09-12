@@ -35,38 +35,38 @@ const TONES: Record<BadgeTone, string> = {
 
 
 function ToneIcon({ tone }: { tone: BadgeTone }) {
-  const ortak = { width: 11, height: 11, viewBox: "0 0 12 12", "aria-hidden": true } as const;
+  const commonProps = { width: 11, height: 11, viewBox: "0 0 12 12", "aria-hidden": true } as const;
 
   switch (tone) {
     case "success":
       return (
-        <svg {...ortak} fill="none" stroke="currentColor" strokeWidth="2">
+        <svg {...commonProps} fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M2.5 6.5 5 9l4.5-6" strokeLinecap="square" />
         </svg>
       );
     case "waiting":
       return (
-        <svg {...ortak} fill="none" stroke="currentColor" strokeWidth="1.6">
+        <svg {...commonProps} fill="none" stroke="currentColor" strokeWidth="1.6">
           <circle cx="6" cy="6" r="4.6" />
           <path d="M6 3.4V6l1.8 1.2" strokeLinecap="square" />
         </svg>
       );
     case "correction":
       return (
-        <svg {...ortak} fill="none" stroke="currentColor" strokeWidth="1.8">
+        <svg {...commonProps} fill="none" stroke="currentColor" strokeWidth="1.8">
           <path d="M6 1.6 11 10.4H1L6 1.6Z" strokeLinejoin="miter" />
           <path d="M6 5v2.2M6 8.8v.4" strokeLinecap="square" />
         </svg>
       );
     case "danger":
       return (
-        <svg {...ortak} fill="none" stroke="currentColor" strokeWidth="2">
+        <svg {...commonProps} fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M2.6 2.6 9.4 9.4M9.4 2.6 2.6 9.4" strokeLinecap="square" />
         </svg>
       );
     case "cancelled":
       return (
-        <svg {...ortak} fill="none" stroke="currentColor" strokeWidth="1.6">
+        <svg {...commonProps} fill="none" stroke="currentColor" strokeWidth="1.6">
           <circle cx="6" cy="6" r="4.6" />
           <path d="M2.9 9.1 9.1 2.9" strokeLinecap="square" />
         </svg>
@@ -74,13 +74,13 @@ function ToneIcon({ tone }: { tone: BadgeTone }) {
     case "info":
     case "primary":
       return (
-        <svg {...ortak} fill="none" stroke="currentColor" strokeWidth="1.8">
+        <svg {...commonProps} fill="none" stroke="currentColor" strokeWidth="1.8">
           <path d="M6 5.4v4M6 2.8v.6" strokeLinecap="square" />
         </svg>
       );
     case "neutral":
       return (
-        <svg {...ortak} fill="none" stroke="currentColor" strokeWidth="1.6">
+        <svg {...commonProps} fill="none" stroke="currentColor" strokeWidth="1.6">
           <path d="M2.4 6h7.2" strokeLinecap="square" />
         </svg>
       );

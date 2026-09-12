@@ -101,7 +101,7 @@ export function UnitCalendarForm({ units }: { units: UnitCalendarRow[] }) {
       <FormGrid columns={3}>
         <Field htmlFor="unit-work-start" label={t("screens.calendar.unitWorkStart")} required>
           <Input
-            key={`${row.id}-bas`}
+            key={`${row.id}-start`}
             id="unit-work-start"
             name="workStart"
             type="time"
@@ -110,7 +110,7 @@ export function UnitCalendarForm({ units }: { units: UnitCalendarRow[] }) {
         </Field>
         <Field htmlFor="unit-work-end" label={t("screens.calendar.unitWorkEnd")} required>
           <Input
-            key={`${row.id}-bit`}
+            key={`${row.id}-end`}
             id="unit-work-end"
             name="workEnd"
             type="time"

@@ -14,7 +14,7 @@ function createObserver() {
     order,
     resolveUrl: () => {
       order.push("url");
-      return "postgresql://test/faaliyet_test";
+      return "postgresql://test/acta_test";
     },
     assertSentinel: async () => {
       order.push("sentinel");

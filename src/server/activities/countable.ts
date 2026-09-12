@@ -17,7 +17,7 @@ import type { Prisma } from "@prisma/client";
 
 
 
-//     getirirdi.
+//     would count the activity.
 
 
 
