@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 
+import { useTranslations } from "@/components/i18n";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader, EmptyState } from "@/components/ui/card";
 import type {
@@ -8,44 +11,41 @@ import type {
   WorkKind,
 } from "@/server/dashboard/work-queue";
 
-// Tek iş kuyruğu (Görev 10.5).
-//
-// Eskiden "cevap bekleyen sorular" ve "onayımı bekleyenler" iki ayrı kutuydu.
-// Kullanıcı açısından ikisi de aynı sorunun cevabı: **şimdi ne yapmalıyım?**
-//
-// "Cevap beklediklerim" bu listeden **ayrıldı**: yapılacak iş değil, izlenen
-// iş. Aynı listede durduğu sürece kuyruk bitirilebilir görünmüyordu.
 
-const TUR: Record<WorkKind, { etiket: string; tone: BadgeTone }> = {
-  answer: { etiket: "Cevapla", tone: "waiting" },
-  approve: { etiket: "Onayla", tone: "primary" },
-  revise: { etiket: "Düzelt", tone: "correction" },
+const WORK_KIND_STYLES: Record<WorkKind, { labelKey: string; tone: BadgeTone }> = {
+  answer: { labelKey: "dashboard.answer", tone: "waiting" },
+  approve: { labelKey: "dashboard.approve", tone: "primary" },
+  revise: { labelKey: "dashboard.revise", tone: "correction" },
 };
 
-const KIMDEN: Record<WorkKind, (ad: string) => string> = {
-  answer: (ad) => `${ad} sordu`,
-  approve: (ad) => `${ad} gönderdi`,
-  revise: (ad) => `${ad} düzeltme istedi`,
+const WORK_KIND_FROM_KEYS: Record<WorkKind, string> = {
+  answer: "dashboard.askedBy",
+  approve: "dashboard.submittedBy",
+  revise: "dashboard.requestedChangesBy",
 };
 
-/** "3 iş günüdür bekliyor" — sıfırsa hiç yazılmaz; "0 gün" bilgi değildir. */
-function beklemeMetni(isGunu: number): string | null {
-  if (isGunu <= 0) return null;
-  return `${isGunu} iş günüdür bekliyor`;
+/** Render a waiting duration; zero is omitted because it adds no information. */
+function formatWaitingDays(
+  businessDays: number,
+  t: ReturnType<typeof useTranslations>,
+): string | null {
+  if (businessDays <= 0) return null;
+  return t("dashboard.businessDaysWaiting", { count: businessDays });
 }
 
-function Satir({ item }: { item: WorkItem }) {
-  const tur = TUR[item.kind];
-  const bekleme = beklemeMetni(item.waitingBusinessDays);
+function Row({ item }: { item: WorkItem }) {
+  const t = useTranslations();
+  const type = WORK_KIND_STYLES[item.kind];
+  const waiting = formatWaitingDays(item.waitingBusinessDays, t);
 
   return (
-    <li data-test="is-satiri" data-tur={item.kind}>
+    <li data-test="work-item" data-type={item.kind}>
       <Link
         href={`/activities/${item.activityId}`}
         className="flex items-start gap-3 rounded-(--radius-sm) px-2 py-2.5 transition-colors hover:bg-inset"
       >
         <span className="shrink-0 pt-0.5">
-          <Badge tone={tur.tone}>{tur.etiket}</Badge>
+          <Badge tone={type.tone}>{t(type.labelKey)}</Badge>
         </span>
 
         <span className="min-w-0 flex-1">
@@ -53,12 +53,12 @@ function Satir({ item }: { item: WorkItem }) {
             {item.activityTitle}
           </span>
           <span className="block text-[length:var(--text-xs)] text-muted">
-            {KIMDEN[item.kind](item.fromName)}
-            {bekleme ? (
+            {t(WORK_KIND_FROM_KEYS[item.kind], { name: item.fromName })}
+            {waiting ? (
               <>
                 {" · "}
                 <span className={item.waitingBusinessDays >= 3 ? "text-correction" : undefined}>
-                  {bekleme}
+                  {waiting}
                 </span>
               </>
             ) : null}
@@ -69,11 +69,12 @@ function Satir({ item }: { item: WorkItem }) {
   );
 }
 
-function IzlenenSatir({ item }: { item: WatchedItem }) {
-  const bekleme = beklemeMetni(item.waitingBusinessDays);
+function WatchedRow({ item }: { item: WatchedItem }) {
+  const t = useTranslations();
+  const waiting = formatWaitingDays(item.waitingBusinessDays, t);
 
   return (
-    <li data-test="izlenen-satiri">
+    <li data-test="watched-item">
       <Link
         href={`/activities/${item.activityId}`}
         className="flex items-baseline gap-2 rounded-(--radius-sm) px-2 py-1.5 transition-colors hover:bg-inset"
@@ -82,8 +83,8 @@ function IzlenenSatir({ item }: { item: WatchedItem }) {
           {item.activityTitle}
         </span>
         <span className="shrink-0 text-[length:var(--text-xs)] text-muted">
-          {item.counterpartName} yanıtlayacak
-          {bekleme ? ` · ${bekleme}` : ""}
+          {t("dashboard.willAnswer", { name: item.counterpartName })}
+          {waiting ? ` · ${waiting}` : ""}
         </span>
       </Link>
     </li>
@@ -97,29 +98,32 @@ export function WorkQueueBlock({
   items: WorkItem[];
   watched: WatchedItem[];
 }) {
+  const t = useTranslations();
   return (
-    <Card id="is-kuyrugu" data-test="bana-dusenler" className="scroll-mt-6">
+    <Card id="work-queue" data-test="assigned-work" className="scroll-mt-6">
       <CardHeader
-        title="Bana düşenler"
+        title={t("dashboard.assignedToMe")}
         description={
           items.length === 0
             ? undefined
-            : "En uzun bekleyen en üstte. Tamamı sizin işiniz."
+            : t("dashboard.longestWaitingDescription")
         }
         action={
           items.length > 0 ? (
             <span className="flex items-center gap-2">
-              {/* Onay işi varken toplu ekrana kısa yol: müdür on kayıt için
-                  on kez git-gel yapmasın (Görev 10.6). */}
+              {/* When approval work exists, provide a shortcut to the batch view so
+                  the manager does not make ten round trips for ten records (Task 10.6). */}
               {items.some((item) => item.kind === "approve") ? (
                 <Link
                   href="/approvals"
                   className="text-[length:var(--text-sm)] font-medium text-primary hover:underline"
                 >
-                  Toplu onayla
+                  {t("dashboard.approveAll")}
                 </Link>
               ) : null}
-              <Badge tone="waiting">{items.length} iş</Badge>
+              <Badge tone="waiting">
+                {t("dashboard.itemsCount", { count: items.length })}
+              </Badge>
             </span>
           ) : null
         }
@@ -127,14 +131,14 @@ export function WorkQueueBlock({
 
       {items.length === 0 ? (
         <EmptyState
-          title="Size düşen bir iş yok."
-          description="Size soru sorulduğunda, onayınız beklendiğinde ya da düzeltme istendiğinde burada görünür."
+          title={t("dashboard.noAssignedWork")}
+          description={t("dashboard.assignedWorkDescription")}
         />
       ) : (
         <CardBody className="py-2">
           <ul className="flex flex-col">
             {items.map((item) => (
-              <Satir key={`${item.kind}:${item.activityId}`} item={item} />
+              <Row key={`${item.kind}:${item.activityId}`} item={item} />
             ))}
           </ul>
         </CardBody>
@@ -143,11 +147,11 @@ export function WorkQueueBlock({
       {watched.length > 0 ? (
         <CardBody className="border-t border-line pt-3 pb-2">
           <p className="px-2 pb-1 text-[length:var(--text-xs)] font-medium text-muted uppercase tracking-[var(--tracking-wide)]">
-            İzlediklerim
+            {t("dashboard.watchedByMe")}
           </p>
-          <ul className="flex flex-col" data-test="izlenenler">
+          <ul className="flex flex-col" data-test="watched-items">
             {watched.map((item) => (
-              <IzlenenSatir key={item.activityId} item={item} />
+              <WatchedRow key={item.activityId} item={item} />
             ))}
           </ul>
         </CardBody>

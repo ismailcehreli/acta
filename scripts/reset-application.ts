@@ -12,7 +12,7 @@ function isUuid(value: string): boolean {
 
 async function main(): Promise<void> {
   if (!isUuid(REQUEST_ID)) {
-    throw new Error("Geçerli bir sıfırlama isteği kimliği verilmedi.");
+    throw new Error("A valid reset request ID was not provided.");
   }
 
   const db = new PrismaClient();
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   try {
     const result = await resetApplicationData(db, REQUEST_ID);
     console.log(
-      `[başlangıca dönüş] tamamlandı: istek=${result.requestId} kök=${result.rootUnitId}`,
+      `[application reset] completed: request=${result.requestId} root=${result.rootUnitId}`,
     );
   } finally {
     await db.$disconnect();
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   console.error(
-    "[başlangıca dönüş] başarısız:",
+    "[application reset] failed:",
     error instanceof Error ? error.message : String(error),
   );
   process.exitCode = 1;

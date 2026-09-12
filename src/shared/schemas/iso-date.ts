@@ -1,34 +1,32 @@
 import { z } from "zod";
 
-// Takvim günü (`YYYY-MM-DD`) — **var olan** bir gün olmak zorunda.
+// Calendar day (`YYYY-MM-DD`) — it must be a real calendar date.
 //
-// Denetim 21.08.2026, bulgu 17: şemalar yalnız biçime bakıyordu.
-// `2026-02-31` regexten geçiyor ve `new Date` onu sessizce 3 Mart'a
-// yuvarlıyordu; `2026-99-99` ise geçersiz bir tarih olarak veri katmanına
-// kadar taşınıyordu. Sunucu istemci kontrolüne güvenemez: elle hazırlanmış
-// bir istek bu değerleri doğrudan gönderebilir.
+// A regular expression alone accepts values such as `2026-02-31`, which the
+// Date constructor silently normalizes. The server must validate the value
+// independently because requests can be crafted without the client.
 //
-// Kontrol, ayrıştırıp **geri yazarak** yapılır: `Date` normalize ettiği için
-// tek güvenilir kanıt, çıkanın girenle aynı gün olmasıdır.
+// Validation parses and writes the value back; equality with the input is the
+// reliable proof that normalization did not change the calendar day.
 
-const BICIM = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export function isCalendarDay(value: string): boolean {
-  if (!BICIM.test(value)) return false;
+  if (!DATE_PATTERN.test(value)) return false;
 
-  const [yil, ay, gun] = value.split("-").map(Number) as [number, number, number];
-  if (ay < 1 || ay > 12 || gun < 1 || gun > 31) return false;
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
 
-  const tarih = new Date(Date.UTC(yil, ay - 1, gun));
+  const date = new Date(Date.UTC(year, month - 1, day));
 
   return (
-    tarih.getUTCFullYear() === yil &&
-    tarih.getUTCMonth() === ay - 1 &&
-    tarih.getUTCDate() === gun
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
   );
 }
 
-/** Ortak gün şeması; tarih alanı olan her şema bunu kullanır. */
-export function isoDaySchema(mesaj = "Tarih GG.AA.YYYY biçiminde seçilmeli") {
-  return z.string().refine(isCalendarDay, mesaj);
+/** Shared date schema used by every schema with a calendar date. */
+export function isoDaySchema(message = "Choose a date in DD.MM.YYYY format") {
+  return z.string().refine(isCalendarDay, message);
 }

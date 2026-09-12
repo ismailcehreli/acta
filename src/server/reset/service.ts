@@ -8,14 +8,7 @@ import { readAllowedEmailDomains } from "@/server/settings/system-settings";
 import { emailSchema, passwordSchema } from "@/shared/schemas/auth";
 import { fullNameSchema } from "@/shared/schemas/user";
 
-/**
- * Başlangıca dönüşün veritabanı tarafı.
- *
- * Web isteği yalnızca kuyruğa kayıt bırakır. Aşağıdaki ikinci işlem host
- * koşucusu tarafından, app ve worker durdurulmuşken çağrılır. Sıfırlama
- * transaction'ı kontrollü bir `TRUNCATE` kullanır; normal silme trigger'larını
- * aşan bu yolun tek çağrıcısı reset koşucusudur.
- */
+
 
 export type ResetRequestDb = Pick<
   PrismaClient,
@@ -34,7 +27,13 @@ export type ResetRequestError =
 
 export type ResetRequestResult =
   | { ok: true; requestId: string }
-  | { ok: false; error: ResetRequestError; message: string };
+  | {
+      ok: false;
+      error: ResetRequestError;
+      message: string;
+      messageKey?: string;
+      messageValues?: Record<string, string | number>;
+    };
 
 export interface ResetRequestInput {
   actorId: string;
@@ -102,31 +101,38 @@ const RESET_TABLES = [
   "OrgUnit",
 ] as const;
 
-// Bu metin yalnız sabit tablo adlarından oluşur; kullanıcı girdisi hiçbir
-// şekilde SQL'e katılmaz.
+
+
 const RESET_SQL = `TRUNCATE TABLE ${RESET_TABLES.map((table) => `"${table}"`).join(", ")} RESTART IDENTITY CASCADE`;
 
 const ACTIVE_REQUEST_MESSAGE =
-  "Zaten bekleyen veya çalışan bir başlangıca dönüş işlemi var.";
+  "A reset operation is already waiting or running.";
 
-function fail(error: ResetRequestError, message: string): ResetRequestResult {
-  return { ok: false, error, message };
+function fail(
+  error: ResetRequestError,
+  message: string,
+  options: {
+    messageKey?: string;
+    messageValues?: Record<string, string | number>;
+  } = {},
+): ResetRequestResult {
+  return { ok: false, error, message, ...options };
 }
 
-/** Web panelinin güvenlik ve tekillik sınırından geçen yeni istek. */
+
 export async function requestSystemReset(
   db: ResetRequestDb,
   input: ResetRequestInput,
   now: Date = new Date(),
 ): Promise<ResetRequestResult> {
   const name = fullNameSchema.safeParse(input.bootstrapFullName);
-  if (!name.success) return fail("unknown", name.error.issues[0]?.message ?? "Ad soyad geçersiz.");
+  if (!name.success) return fail("unknown", name.error.issues[0]?.message ?? "Full name is invalid.");
 
   const email = emailSchema.safeParse(input.bootstrapEmail);
-  if (!email.success) return fail("unknown", email.error.issues[0]?.message ?? "E-posta geçersiz.");
+  if (!email.success) return fail("unknown", email.error.issues[0]?.message ?? "Email is invalid.");
 
   const password = passwordSchema.safeParse(input.bootstrapPassword);
-  if (!password.success) return fail("unknown", password.error.issues[0]?.message ?? "Parola geçersiz.");
+  if (!password.success) return fail("unknown", password.error.issues[0]?.message ?? "Password is invalid.");
 
   const actor = await db.user.findUnique({
     where: { id: input.actorId },
@@ -139,18 +145,24 @@ export async function requestSystemReset(
   });
 
   if (!actor?.isActive || !actor.isSystemAdmin || !actor.credential) {
-    return fail("invalid_current_password", "Mevcut parolanız doğrulanamadı.");
+    return fail("invalid_current_password", "Your current password could not be verified.");
   }
 
   if (!(await verifyPassword(actor.credential.passwordHash, input.currentPassword))) {
-    return fail("invalid_current_password", "Mevcut parolanız doğrulanamadı.");
+    return fail("invalid_current_password", "Your current password could not be verified.");
   }
 
   const allowedDomains = await readAllowedEmailDomains(db);
   if (!isEmailDomainAllowed(email.data, allowedDomains)) {
     return fail(
       "email_domain_not_allowed",
-      `Başlangıç yöneticisi için şu alan adlarından birini kullanın: ${allowedDomains.join(", ") || "izin verilen bir alan adı"}.`,
+      `Use one of these email domains for the bootstrap administrator: ${allowedDomains.join(", ") || "an allowed domain"}.`,
+      {
+        messageKey: "errors.reset.emailDomainNotAllowed",
+        messageValues: {
+          domains: allowedDomains.join(", ") || "an allowed domain",
+        },
+      },
     );
   }
 
@@ -194,8 +206,8 @@ export async function requestSystemReset(
     if (error instanceof ActiveResetRequestError || isUniqueViolation(error)) {
       return fail("active_request", ACTIVE_REQUEST_MESSAGE);
     }
-    console.error("[başlangıca dönüş] istek oluşturulamadı", error);
-    return fail("unknown", "Başlangıca dönüş isteği oluşturulamadı.");
+    console.error("[application reset] request could not be created", error);
+    return fail("unknown", "The application reset request could not be created.");
   }
 }
 
@@ -226,8 +238,8 @@ export interface ResetRunResult {
 }
 
 /**
- * Çalışan isteği tek transaction içinde yeni kök ve başlangıç yöneticisine
- * çevirir. Koşucu bu fonksiyonu app/worker durdurulduktan sonra çağırır.
+ * Converts a running request into a new root unit and bootstrap administrator
+ * in one transaction. The runner calls this after the app and worker stop.
  */
 export async function resetApplicationData(
   db: PrismaClient,
@@ -235,17 +247,17 @@ export async function resetApplicationData(
   now: Date = new Date(),
 ): Promise<ResetRunResult> {
   return db.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('faaliyet:baslangica_donus'))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('acta:application_reset'))`;
 
     const request = await tx.systemResetRequest.findUnique({
       where: { id: requestId },
     });
 
     if (!request || request.status !== "RUNNING") {
-      throw new Error("Sıfırlama isteği çalışır durumda değil.");
+      throw new Error("The reset request is not running.");
     }
     if (!request.bootstrapPasswordHash) {
-      throw new Error("Başlangıç yöneticisi parolası bulunamadı.");
+      throw new Error("The bootstrap administrator password is missing.");
     }
 
     const requestData = {
@@ -260,8 +272,8 @@ export async function resetApplicationData(
 
     const root = await tx.orgUnit.create({
       data: {
-        name: process.env.ROOT_UNIT_NAME ?? "Şirket",
-        type: "Kök",
+        name: process.env.ROOT_UNIT_NAME ?? "Company",
+        type: "Root",
         parentId: null,
         sortOrder: 0,
         requiresApproval: false,
@@ -274,7 +286,7 @@ export async function resetApplicationData(
       data: {
         fullName: requestData.bootstrapFullName,
         email: requestData.bootstrapEmail,
-        title: "Sistem yöneticisi",
+        title: "System administrator",
         orgUnitId: root.id,
         isUnitManager: true,
         isSystemAdmin: true,
@@ -296,8 +308,8 @@ export async function resetApplicationData(
       },
     });
 
-    // TRUNCATE ile istek satırı da temizlendi; aynı kimliği yeniden oluşturarak
-    // panelin işlem sonucunu göstermeye devam etmesini sağlarız.
+    // TRUNCATE also removes the request row, so recreate it with the same ID
+    // to keep the operation result visible in the settings panel.
     const finished = await tx.systemResetRequest.create({
       data: {
         id: requestData.id,
@@ -309,7 +321,7 @@ export async function resetApplicationData(
         bootstrapFullName: requestData.bootstrapFullName,
         bootstrapEmail: requestData.bootstrapEmail,
         bootstrapPasswordHash: null,
-        message: "Uygulama başlangıç durumuna döndürüldü.",
+        message: "Application reset completed.",
       },
     });
 

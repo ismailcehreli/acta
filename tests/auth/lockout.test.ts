@@ -14,48 +14,48 @@ import {
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
-describe("artan gecikme", () => {
-  it("ilk denemede gecikme yoktur", () => {
+describe("exponential backoff delay", () => {
+  it("no delay on first attempt", () => {
     expect(loginDelayMs(0)).toBe(0);
   });
 
-  it("her hatada ikiye katlanır", () => {
+  it("doubles on each failure", () => {
     expect(loginDelayMs(1)).toBe(200);
     expect(loginDelayMs(2)).toBe(400);
     expect(loginDelayMs(3)).toBe(800);
   });
 
-  it("tavanı aşmaz", () => {
+  it("does not exceed ceiling", () => {
     expect(loginDelayMs(50)).toBe(DELAY_MAX_MS);
   });
 });
 
-describe("kilitlenme eşiği", () => {
-  it(`${MAX_FAILED_ATTEMPTS} denemeden önce kilitlenmez`, () => {
+describe("lockout threshold", () => {
+  it(`does not lock before ${MAX_FAILED_ATTEMPTS} attempts`, () => {
     expect(isLockThresholdReached(MAX_FAILED_ATTEMPTS - 1)).toBe(false);
   });
 
-  it(`${MAX_FAILED_ATTEMPTS}. denemede kilitlenir`, () => {
+  it(`locks on attempt ${MAX_FAILED_ATTEMPTS}`, () => {
     expect(isLockThresholdReached(MAX_FAILED_ATTEMPTS)).toBe(true);
   });
 });
 
-describe("kilit süresi", () => {
-  it("kilit, şimdiden itibaren tanımlı süre kadardır", () => {
+describe("lock duration", () => {
+  it("lock lasts for defined duration from now", () => {
     expect(lockUntil(NOW).getTime() - NOW.getTime()).toBe(
       LOCKOUT_MINUTES * 60_000,
     );
   });
 
-  it("süresi geçmemiş kilit etkilidir", () => {
+  it("unexpired lock is effective", () => {
     expect(isLocked(new Date("2026-08-17T09:05:00.000Z"), NOW)).toBe(true);
   });
 
-  it("süresi geçmiş kilit etkisizdir", () => {
+  it("expired lock is inactive", () => {
     expect(isLocked(new Date("2026-08-17T08:59:00.000Z"), NOW)).toBe(false);
   });
 
-  it("kilit yoksa engel yoktur", () => {
+  it("no block if no lock exists", () => {
     expect(isLocked(null, NOW)).toBe(false);
   });
 });

@@ -21,20 +21,20 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-describe("başlangıca dönüş isteği", () => {
-  it("yalnız aktif sistem yöneticisinin doğru parolasıyla kuyruğa alınır", async () => {
-    const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-    const admin = await createUserWithPassword(root.id, "mevcut-parola-123", {
+describe("system reset request", () => {
+  it("is queued only with correct password of active system admin", async () => {
+    const root = await createOrgUnit({ name: "Company", type: "Root" });
+    const admin = await createUserWithPassword(root.id, "current-password-123", {
       isSystemAdmin: true,
       isUnitManager: true,
     });
 
     const result = await requestSystemReset(testDb, {
       actorId: admin.id,
-      currentPassword: "mevcut-parola-123",
-      bootstrapFullName: "Yeni Sistem Yöneticisi",
-      bootstrapEmail: "yeni.yonetici@ornek.test",
-      bootstrapPassword: "baslangic-parolasi-123",
+      currentPassword: "current-password-123",
+      bootstrapFullName: "New System Admin",
+      bootstrapEmail: "new.admin@example.test",
+      bootstrapPassword: "bootstrap-password-123",
     }, NOW);
 
     expect(result.ok).toBe(true);
@@ -44,59 +44,59 @@ describe("başlangıca dönüş isteği", () => {
       where: { id: result.requestId },
     });
     expect(request.status).toBe("PENDING");
-    expect(request.bootstrapPasswordHash).not.toContain("baslangic-parolasi-123");
+    expect(request.bootstrapPasswordHash).not.toContain("bootstrap-password-123");
 
     const second = await requestSystemReset(testDb, {
       actorId: admin.id,
-      currentPassword: "mevcut-parola-123",
-      bootstrapFullName: "İkinci Yönetici",
-      bootstrapEmail: "ikinci.yonetici@ornek.test",
-      bootstrapPassword: "baska-parola-123",
+      currentPassword: "current-password-123",
+      bootstrapFullName: "Second Admin",
+      bootstrapEmail: "second.admin@example.test",
+      bootstrapPassword: "other-password-123",
     }, NOW);
     expect(second).toEqual({
       ok: false,
       error: "active_request",
-      message: "Zaten bekleyen veya çalışan bir başlangıca dönüş işlemi var.",
+      message: "A reset operation is already waiting or running.",
     });
   });
 
-  it("sistem yöneticisi olmayan hesabı ve yanlış parolayı reddeder", async () => {
-    const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-    const user = await createUserWithPassword(root.id, "kullanici-parola-123");
+  it("rejects non-system-admin account and incorrect password", async () => {
+    const root = await createOrgUnit({ name: "Company", type: "Root" });
+    const user = await createUserWithPassword(root.id, "user-password-123");
 
     const result = await requestSystemReset(testDb, {
       actorId: user.id,
-      currentPassword: "kullanici-parola-123",
-      bootstrapFullName: "Yeni Sistem Yöneticisi",
-      bootstrapEmail: "yeni.yonetici@ornek.test",
-      bootstrapPassword: "baslangic-parolasi-123",
+      currentPassword: "user-password-123",
+      bootstrapFullName: "New System Admin",
+      bootstrapEmail: "new.admin@example.test",
+      bootstrapPassword: "bootstrap-password-123",
     }, NOW);
     expect(result).toMatchObject({ error: "invalid_current_password" });
 
-    const admin = await createUserWithPassword(root.id, "dogru-parola-123", {
+    const admin = await createUserWithPassword(root.id, "correct-password-123", {
       isSystemAdmin: true,
     });
     const wrongPassword = await requestSystemReset(testDb, {
       actorId: admin.id,
-      currentPassword: "yanlis-parola-123",
-      bootstrapFullName: "Yeni Sistem Yöneticisi",
-      bootstrapEmail: "yeni.yonetici@ornek.test",
-      bootstrapPassword: "baslangic-parolasi-123",
+      currentPassword: "wrong-password-123",
+      bootstrapFullName: "New System Admin",
+      bootstrapEmail: "new.admin@example.test",
+      bootstrapPassword: "bootstrap-password-123",
     }, NOW);
     expect(wrongPassword).toMatchObject({ error: "invalid_current_password" });
   });
 });
 
-describe("başlangıca dönüş çalıştırıcısı", () => {
-  it("sıfırlama transaction'ı hata alırsa eski veriyi korur", async () => {
-    const root = await createOrgUnit({ name: "Eski Şirket", type: "Kök" });
-    const oldAdmin = await createUserWithPassword(root.id, "eski-parola-123", {
+describe("system reset runner", () => {
+  it("preserves old data if reset transaction encounters an error", async () => {
+    const root = await createOrgUnit({ name: "Old Company", type: "Root" });
+    const oldAdmin = await createUserWithPassword(root.id, "old-password-123", {
       isSystemAdmin: true,
       isUnitManager: true,
     });
     const oldEmployee = await createUser(root.id);
-    const oldActivity = await createActivity(oldEmployee, { title: "Eski kayıt" });
-    const bootstrapHash = await hashPassword("yeni-baslangic-123");
+    const oldActivity = await createActivity(oldEmployee, { title: "Old record" });
+    const bootstrapHash = await hashPassword("new-bootstrap-123");
     const requestId = "5e3f2b8a-9d95-4d35-b1b1-2f0a2c1e6b11";
 
     await testDb.systemResetRequest.create({
@@ -106,19 +106,19 @@ describe("başlangıca dönüş çalıştırıcısı", () => {
         status: "RUNNING",
         requestedAt: NOW,
         startedAt: NOW,
-        bootstrapFullName: "Yeni Başlangıç Yöneticisi",
-        bootstrapEmail: "baslangic@ornek.test",
+        bootstrapFullName: "New Bootstrap Admin",
+        bootstrapEmail: "bootstrap@example.test",
         bootstrapPasswordHash: bootstrapHash,
       },
     });
 
-    const oncekiKokAdi = process.env.ROOT_UNIT_NAME;
+    const previousRootUnitName = process.env.ROOT_UNIT_NAME;
     process.env.ROOT_UNIT_NAME = "x".repeat(151);
     try {
       await expect(resetApplicationData(testDb, requestId, NOW)).rejects.toThrow();
     } finally {
-      if (oncekiKokAdi === undefined) delete process.env.ROOT_UNIT_NAME;
-      else process.env.ROOT_UNIT_NAME = oncekiKokAdi;
+      if (previousRootUnitName === undefined) delete process.env.ROOT_UNIT_NAME;
+      else process.env.ROOT_UNIT_NAME = previousRootUnitName;
     }
 
     expect(await testDb.orgUnit.count()).toBe(1);
@@ -129,16 +129,16 @@ describe("başlangıca dönüş çalıştırıcısı", () => {
     ).toMatchObject({ status: "RUNNING", bootstrapPasswordHash: bootstrapHash });
   });
 
-  it("veriyi temizler, eski oturumu kapatır ve yeni hesabı parola değişimine zorlar", async () => {
-    const root = await createOrgUnit({ name: "Eski Şirket", type: "Kök" });
-    const oldAdmin = await createUserWithPassword(root.id, "eski-parola-123", {
+  it("clears data, revokes old sessions, and forces password change on new account", async () => {
+    const root = await createOrgUnit({ name: "Old Company", type: "Root" });
+    const oldAdmin = await createUserWithPassword(root.id, "old-password-123", {
       isSystemAdmin: true,
       isUnitManager: true,
     });
     const oldEmployee = await createUser(root.id);
-    await createActivity(oldEmployee, { title: "Eski kayıt" });
+    await createActivity(oldEmployee, { title: "Old record" });
     const oldSession = await createSession(testDb, oldAdmin.id, NOW);
-    const bootstrapHash = await hashPassword("yeni-baslangic-123");
+    const bootstrapHash = await hashPassword("new-bootstrap-123");
     const requestId = "3e3f2b8a-9d95-4d35-b1b1-2f0a2c1e6b10";
 
     await testDb.systemResetRequest.create({
@@ -148,8 +148,8 @@ describe("başlangıca dönüş çalıştırıcısı", () => {
         status: "RUNNING",
         requestedAt: NOW,
         startedAt: NOW,
-        bootstrapFullName: "Yeni Başlangıç Yöneticisi",
-        bootstrapEmail: "baslangic@ornek.test",
+        bootstrapFullName: "New Bootstrap Admin",
+        bootstrapEmail: "bootstrap@example.test",
         bootstrapPasswordHash: bootstrapHash,
       },
     });
@@ -165,7 +165,7 @@ describe("başlangıca dönüş çalıştırıcısı", () => {
       where: { id: result.bootstrapUserId },
       include: { credential: true, orgUnit: true },
     });
-    expect(bootstrap.email).toBe("baslangic@ornek.test");
+    expect(bootstrap.email).toBe("bootstrap@example.test");
     expect(bootstrap.isSystemAdmin).toBe(true);
     expect(bootstrap.isUnitManager).toBe(true);
     expect(bootstrap.credential?.mustChangePassword).toBe(true);

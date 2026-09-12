@@ -11,88 +11,88 @@ import {
   isRequiredSchemaPresent,
 } from "../tests/helpers/test-db";
 
-// Uçtan uca testler gerçek sunucuya karşı koşar ve giriş yapabilen bir kullanıcı
-// gerektirir. Bu kurulum **yalnızca** E2E_DATABASE_URL'e yazar ve o adresin
-// izinli bir test veritabanı olduğunu önce kanıtlar.
+
+
+
 //
-// Denetim (17.08.2026, bulgu 1): önceki hâli uygulamanın DATABASE_URL
-// değerine, depoda açıkça yazılı sabit bir parolayla kalıcı hesap açıyordu.
-// Artık parola her koşuda rastgele üretilir ve koşu sonunda hesap kapatılır.
+
+
+
 
 export const E2E_USER = {
-  fullName: "Deneme Müdürü",
-  title: "Kalıphane Müdürü",
-  email: "e2e@ornek.test",
+  fullName: "Test Manager",
+  title: "Mold Shop Manager",
+  email: "e2e@example.test",
 };
 
-/** Yönetim ekranları için ayrı hesap: yetki ayrımı gerçek kullanıcıyla sınanır. */
+
 export const E2E_ADMIN = {
-  fullName: "Sistem Yöneticisi",
-  title: "Bilgi İşlem Uzmanı",
-  email: "e2e-admin@ornek.test",
+  fullName: "System Administrator",
+  title: "IT Specialist",
+  email: "e2e-admin@example.test",
 };
 
-// Üç kademeli örnek şirket (§13): kapsam görünümünün kademeye göre genişlediği
-// gerçek kullanıcılarla sınanabilsin diye.
+
+
 //
-//   Şirket ────────────── YK Başkanı  → "Tüm şirket"
-//     └─ Genel Müdürlük ── Genel Müdür → "Departmanlarım"
-//          ├─ Kalıphane ── Deneme Müdürü + Kalıphane Çalışanı → "Departmanım"
-//          └─ Planlama  ── Planlama Müdürü
+
+
+
+
 export const E2E_CHAIRMAN = {
-  fullName: "YK Başkanı",
-  title: "Yönetim Kurulu Başkanı",
-  email: "e2e-baskan@ornek.test",
+  fullName: "Board Chair",
+  title: "Board Chair",
+  email: "e2e-chair@example.test",
 };
 
 export const E2E_GM = {
-  fullName: "Genel Müdür",
-  title: "Genel Müdür",
-  email: "e2e-gm@ornek.test",
+  fullName: "General Manager",
+  title: "General Manager",
+  email: "e2e-gm@example.test",
 };
 
 export const E2E_WORKER = {
-  fullName: "Kalıphane Çalışanı",
-  title: "Kalıp Operatörü",
-  email: "e2e-calisan@ornek.test",
+  fullName: "Mold Shop Employee",
+  title: "Mold Operator",
+  email: "e2e-worker@example.test",
 };
 
 export const E2E_PLANNER = {
-  fullName: "Planlama Müdürü",
-  title: "Üretim Planlama Müdürü",
-  email: "e2e-planlama@ornek.test",
+  fullName: "Planning Manager",
+  title: "Production Planning Manager",
+  email: "e2e-planning@example.test",
 };
 
-// Boyahane, **kalıcı olarak onaya tabi** bir birimdir ve onay bayrağını
-// hiçbir test değiştirmez (21.08.2026).
+
+
 //
-// Sebep: Kalıphane'nin bayrağını sekiz ayrı spec açıp kapıyordu ve dosyalar
-// paralel koştuğu için biri diğerinin altını oyuyordu. Vekâlet senaryosu
-// bayrağı açıyor, aynı anda koşan başka bir spec kapatıyor, kayıt onaysız
-// doğuyor ve vekilin kuyruğu boş kalıyordu. Hata testin çok ilerisinde,
-// yanlış yerde patlıyordu.
+
+
+
+
+
 //
-// Paylaşılan değiştirilebilir durum, paralel testlerde en sinsi hata
-// kaynağıdır: her spec tek başına yeşil, paket kırmızı.
+
+
 export const E2E_DYE_MANAGER = {
-  fullName: "Boyahane Müdürü",
-  title: "Boyahane Müdürü",
-  email: "e2e-boya-mudur@ornek.test",
+  fullName: "Paint Shop Manager",
+  title: "Paint Shop Manager",
+  email: "e2e-paint-manager@example.test",
 };
 
 export const E2E_DYER = {
-  fullName: "Boyahane Çalışanı",
-  title: "Boya Operatörü",
-  email: "e2e-boyaci@ornek.test",
+  fullName: "Paint Shop Employee",
+  title: "Paint Operator",
+  email: "e2e-paint-operator@example.test",
 };
 
-/** Kurulumun ürettiği parola; testler buradan okur. */
+
 export function e2ePassword(): string {
   const password = process.env.E2E_PASSWORD;
 
   if (!password) {
     throw new Error(
-      "E2E_PASSWORD yok — uçtan uca kurulum çalışmamış olabilir.",
+      "E2E_PASSWORD is missing; global setup may not have run.",
     );
   }
 
@@ -107,9 +107,10 @@ export function e2eDatabaseUrl(): string {
 }
 
 export default async function globalSetup(): Promise<void> {
-  // Sıra Vitest ile ortak modülden gelir: adres, işaret, migration. İkisinin
-  // ayrı ayrı yazılması, birinin geride kalması demekti (denetim
-  // 18.08.2026, FAZ 4 bulgu 12).
+
+
+  // Prepare and validate the isolated E2E database (2026-08-18, Phase 4,
+  // finding 12).
   await prepareTestDatabase({
     resolveUrl: e2eDatabaseUrl,
     assertSentinel: assertSentinelPresent,
@@ -136,8 +137,8 @@ export default async function globalSetup(): Promise<void> {
   const prisma = new PrismaClient({ datasources: { db: { url } } });
 
   try {
-    // Her koşu temiz başlar: birikmiş birimler seçicileri kırılgan yapıyor ve
-    // testlerin birbirini etkilemesine yol açıyordu.
+
+
     const tables = await prisma.$queryRaw<{ tablename: string }[]>`
       SELECT tablename FROM pg_tables
       WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'
@@ -150,36 +151,36 @@ export default async function globalSetup(): Promise<void> {
     }
 
     const root = await prisma.orgUnit.create({
-      data: { name: "Şirket", type: "Kök" },
+      data: { name: "Company", type: "Root" },
     });
     const generalManagement = await prisma.orgUnit.create({
-      data: { name: "Genel Müdürlük", type: "Genel Müdürlük", parentId: root.id },
+      data: { name: "General Management", type: "General Management", parentId: root.id },
     });
     const moldShop = await prisma.orgUnit.create({
-      data: { name: "Kalıphane", type: "Departman", parentId: generalManagement.id },
+      data: { name: "Mold Shop", type: "Department", parentId: generalManagement.id },
     });
     const planning = await prisma.orgUnit.create({
-      data: { name: "Planlama", type: "Departman", parentId: generalManagement.id },
+      data: { name: "Planning", type: "Department", parentId: generalManagement.id },
     });
-    // Kalıcı olarak onaya tabi; bayrağı hiçbir test değiştirmez.
+    // Permanently requires approval; no test changes this flag.
     const dyeHouse = await prisma.orgUnit.create({
       data: {
-        name: "Boyahane",
-        type: "Departman",
+        name: "Paint Shop",
+        type: "Department",
         parentId: generalManagement.id,
         requiresApproval: true,
       },
     });
 
-    // Onay kararı gerekçe kataloğu. Geçiş dosyası bunu tohumluyor ama kurulum
-    // tabloları boşaltıyor; karar ekranı gerekçesiz çalışamaz.
+    // Decision-reason catalog. Migrations seed it, but setup truncates tables;
+    // the decision screen cannot operate without reasons.
     await prisma.approvalReason.createMany({
       data: [
-        { kind: "CHANGES_REQUESTED", label: "Eksik bilgi", sortOrder: 10 },
-        { kind: "CHANGES_REQUESTED", label: "Diğer", sortOrder: 90 },
-        { kind: "REJECTED", label: "Faaliyet niteliği taşımıyor", sortOrder: 10 },
-        { kind: "REJECTED", label: "Mükerrer kayıt", sortOrder: 20 },
-        { kind: "REJECTED", label: "Diğer", sortOrder: 90 },
+        { kind: "CHANGES_REQUESTED", label: "Insufficient information", sortOrder: 10 },
+        { kind: "CHANGES_REQUESTED", label: "Other", sortOrder: 90 },
+        { kind: "REJECTED", label: "Not an activity", sortOrder: 10 },
+        { kind: "REJECTED", label: "Duplicate record", sortOrder: 20 },
+        { kind: "REJECTED", label: "Other", sortOrder: 90 },
       ],
     });
 
@@ -262,8 +263,8 @@ export default async function globalSetup(): Promise<void> {
         },
         create: {
           fullName: account.fullName,
-          // Unvan listede ve faaliyet detayında gösteriliyor (Görev 11.1);
-          // test verisi de gerçek ekranı yansıtmalı.
+          // Titles are shown in lists and activity details; the fixture should
+          // represent the actual screen.
           title: account.title,
           email: account.email,
           orgUnitId: account.unitId,
@@ -280,7 +281,7 @@ export default async function globalSetup(): Promise<void> {
         create: { userId: user.id, passwordHash },
       });
 
-      // Önceki koşulardan kalan oturumlar kapatılır.
+      // Revoke sessions left by previous runs.
       await prisma.session.updateMany({
         where: { userId: user.id, revokedAt: null },
         data: { revokedAt: new Date() },

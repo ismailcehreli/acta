@@ -5,9 +5,9 @@ import { resolveManager } from "@/server/org/resolve-manager";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §4.4'ün dört kuralının her dalı ayrı ayrı sınanır. Bu fonksiyon faaliyetin
-// kime düşeceğini, hatırlatmanın kime gideceğini ve Sürüm 2'de onayın kime
-// gideceğini belirler; yanlış cevabı sessizce yanlış davranış üretir.
+// Each branch of the four rules in §4.4 is tested separately. This function determines
+// who receives the activity, who receives the reminder, and in Version 2 who receives
+// the approval; returning the wrong answer silently produces wrong behavior.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -17,25 +17,25 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-/** Kök → orta → alt zinciri kuran ortak düzen. */
+/** Helper setting up a root -> middle -> leaf chain. */
 async function threeLevelTree() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
+  const root = await createOrgUnit({ name: "Headquarters", type: "Root" });
   const middle = await createOrgUnit({
-    name: "Üretim Direktörlüğü",
-    type: "Direktörlük",
+    name: "Production Directorate",
+    type: "Directorate",
     parentId: root.id,
   });
   const leaf = await createOrgUnit({
-    name: "Kalıphane",
-    type: "Departman",
+    name: "Molding",
+    type: "Department",
     parentId: middle.id,
   });
 
   return { root, middle, leaf };
 }
 
-describe("kural 1 — birim yöneticisi olmayan kişi", () => {
-  it("kendi biriminin yöneticisine bağlanır", async () => {
+describe("rule 1 — non-manager individual", () => {
+  it("resolves to the manager of own unit", async () => {
     const { leaf } = await threeLevelTree();
     const manager = await createUser(leaf.id, { isUnitManager: true });
     const worker = await createUser(leaf.id);
@@ -49,7 +49,7 @@ describe("kural 1 — birim yöneticisi olmayan kişi", () => {
     });
   });
 
-  it("kendi biriminde yönetici yoksa üst birime çıkar", async () => {
+  it("walks up to parent unit if no manager in own unit", async () => {
     const { middle, leaf } = await threeLevelTree();
     const director = await createUser(middle.id, { isUnitManager: true });
     const worker = await createUser(leaf.id);
@@ -64,8 +64,8 @@ describe("kural 1 — birim yöneticisi olmayan kişi", () => {
   });
 });
 
-describe("kural 2 — birim yöneticisi olan kişi", () => {
-  it("üst birimin yöneticisine bağlanır, kendisine değil", async () => {
+describe("rule 2 — unit manager individual", () => {
+  it("resolves to manager of parent unit, not self", async () => {
     const { middle, leaf } = await threeLevelTree();
     const director = await createUser(middle.id, { isUnitManager: true });
     const departmentManager = await createUser(leaf.id, { isUnitManager: true });
@@ -80,10 +80,10 @@ describe("kural 2 — birim yöneticisi olan kişi", () => {
   });
 });
 
-describe("kural 3 — yönetici bulunana kadar yukarı çıkma", () => {
-  it("aradaki birimde yönetici yoksa bir üste devam eder", async () => {
+describe("rule 3 — ascending until manager found", () => {
+  it("skips intermediate units without manager and continues up", async () => {
     const { root, leaf } = await threeLevelTree();
-    // Orta kademede yönetici yok; kökte var.
+    // No manager in middle level; manager exists at root.
     const generalManager = await createUser(root.id, { isUnitManager: true });
     const departmentManager = await createUser(leaf.id, { isUnitManager: true });
 
@@ -96,7 +96,7 @@ describe("kural 3 — yönetici bulunana kadar yukarı çıkma", () => {
     });
   });
 
-  it("pasifleştirilmiş yönetici aday sayılmaz, arama yukarı devam eder", async () => {
+  it("deactivated manager is not considered, search continues upwards", async () => {
     const { root, middle, leaf } = await threeLevelTree();
     const generalManager = await createUser(root.id, { isUnitManager: true });
     const passiveDirector = await createUser(middle.id, {
@@ -118,8 +118,8 @@ describe("kural 3 — yönetici bulunana kadar yukarı çıkma", () => {
   });
 });
 
-describe("kural 4 — yöneticisiz durum", () => {
-  it("zincirde hiç yönetici yoksa hata döner, sessizce geçilmez", async () => {
+describe("rule 4 — no manager condition", () => {
+  it("returns error if no manager in entire chain, does not fail silently", async () => {
     const { leaf } = await threeLevelTree();
     const worker = await createUser(leaf.id);
 
@@ -128,7 +128,7 @@ describe("kural 4 — yöneticisiz durum", () => {
     expect(result).toEqual({ found: false, reason: "no_manager_in_chain" });
   });
 
-  it("kökün yöneticisinin üstü yoktur", async () => {
+  it("root manager has no manager above", async () => {
     const { root } = await threeLevelTree();
     const chairman = await createUser(root.id, { isUnitManager: true });
 
@@ -137,7 +137,7 @@ describe("kural 4 — yöneticisiz durum", () => {
     expect(result).toEqual({ found: false, reason: "no_manager_in_chain" });
   });
 
-  it("bilinmeyen kullanıcı için hata döner", async () => {
+  it("returns error for unknown user", async () => {
     const result = await resolveManager(
       testDb,
       "00000000-0000-0000-0000-000000000000",
@@ -147,13 +147,13 @@ describe("kural 4 — yöneticisiz durum", () => {
   });
 });
 
-describe("kademe sayısından bağımsızlık", () => {
-  it("kural, araya kademe eklendiğinde de aynı çalışır (İlke 1)", async () => {
-    // Kademe adları ve sayısı veriden gelir; kodda hiçbir kademe adı geçmez.
+describe("independence from hierarchy level count", () => {
+  it("rule works identically when intermediate levels are added (Principle 1)", async () => {
+    // Level names and counts come from data; no level names are hardcoded in code.
     let parentId: string | null = null;
     const unitIds: string[] = [];
 
-    for (const name of ["YK", "GM", "Direktörlük", "Müdürlük", "Ekip"]) {
+    for (const name of ["Board", "GM", "Directorate", "Department", "Team"]) {
       const unit: { id: string } = await createOrgUnit(
         parentId ? { name, type: name, parentId } : { name, type: name },
       );

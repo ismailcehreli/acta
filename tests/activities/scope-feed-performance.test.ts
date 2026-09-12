@@ -5,18 +5,17 @@ import { listScopeActivities } from "@/server/activities/scope-feed";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §18.4 kabul ölçütü: 12 aylık veriyle ana ekran iki saniyenin altında
-// açılmalı. Denetim, bu ölçütün hiç ölçülmediğini işaret etti (18.08.2026,
-// FAZ 4 bulgu 11) — testler iki kayıtla çalışıyordu.
+// §18.4 acceptance criterion: with 12 months of data, main screen must open
+// in under two seconds. Audit flagged that this was never benchmarked
+// (2026-08-18, PHASE 4 finding 11) — tests were running with just two records.
 //
-// Ölçüm mutlak bir başarım vaadi değildir: makineye göre değişir. Amaç,
-// sorgunun kayıt sayısıyla birlikte kabul edilemez biçimde büyümediğini
-// erkenden görmek. Sınır bilerek geniş tutuldu.
+// Measurement is not an absolute hardware performance promise: varies per machine.
+// Goal is to verify early that queries do not scale catastrophically with row count.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
-const KISI_SAYISI = 30;
-const KISI_BASINA_GUN = 250;
-const SURE_SINIRI_MS = 2_000;
+const USER_COUNT = 30;
+const DAYS_PER_USER = 250;
+const TIME_LIMIT_MS = 2_000;
 
 beforeEach(async () => {
   await resetDatabase();
@@ -26,26 +25,26 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function onIkiAylikSirket() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
+async function setupTwelveMonthCompany() {
+  const root = await createOrgUnit({ name: "Headquarters", type: "Root" });
   const director = await createUser(root.id, {
-    fullName: "Direktör",
+    fullName: "Director",
     isUnitManager: true,
   });
 
   const departments = await Promise.all(
     Array.from({ length: 5 }, (_, i) =>
-      createOrgUnit({ name: `Departman ${i + 1}`, parentId: root.id }),
+      createOrgUnit({ name: `Department ${i + 1}`, parentId: root.id }),
     ),
   );
 
   const authors = [];
-  for (let i = 0; i < KISI_SAYISI; i += 1) {
+  for (let i = 0; i < USER_COUNT; i += 1) {
     const unit = departments[i % departments.length];
     authors.push(
       await createUser(unit.id, {
-        fullName: `Kullanıcı ${i + 1}`,
-        // Her departmanın tek yöneticisi olur; kalanlar çalışan.
+        fullName: `User ${i + 1}`,
+        // Each department has a single manager; others are members.
         isUnitManager: i < departments.length,
       }),
     );
@@ -53,28 +52,28 @@ async function onIkiAylikSirket() {
 
   for (const author of authors) {
     await testDb.activity.createMany({
-      data: Array.from({ length: KISI_BASINA_GUN }, (_, gun) => ({
+      data: Array.from({ length: DAYS_PER_USER }, (_, day) => ({
         authorId: author.id,
         authorOrgUnitId: author.orgUnitId,
-        activityDate: new Date(NOW.getTime() - gun * 86_400_000),
-        title: `Faaliyet ${gun + 1}`,
-        description: "Gün içinde yapılan işin özeti.",
+        activityDate: new Date(NOW.getTime() - day * 86_400_000),
+        title: `Activity ${day + 1}`,
+        description: "Summary of work done during the day.",
         approvalStatus: "APPROVED" as const,
-        createdAt: new Date(NOW.getTime() - gun * 86_400_000),
+        createdAt: new Date(NOW.getTime() - day * 86_400_000),
         updatedAt: NOW,
       })),
     });
   }
 
-  return { director, toplam: KISI_SAYISI * KISI_BASINA_GUN };
+  return { director, total: USER_COUNT * DAYS_PER_USER };
 }
 
-describe("12 aylık veriyle kapsam akışı", () => {
-  it("tüm şirket görünümü sınırın altında açılır", async () => {
-    const { director, toplam } = await onIkiAylikSirket();
-    expect(await testDb.activity.count()).toBe(toplam);
+describe("scope feed with 12 months of data", () => {
+  it("opens entire company view under threshold limit", async () => {
+    const { director, total } = await setupTwelveMonthCompany();
+    expect(await testDb.activity.count()).toBe(total);
 
-    const basladi = performance.now();
+    const start = performance.now();
     const page = await listScopeActivities(
       testDb,
       { id: director.id, isSystemAdmin: false },
@@ -82,23 +81,21 @@ describe("12 aylık veriyle kapsam akışı", () => {
       NOW,
       { limit: 50 },
     );
-    const gecen = performance.now() - basladi;
+    const elapsed = performance.now() - start;
 
     expect(page.items).toHaveLength(50);
     expect(page.nextCursor).not.toBeNull();
-    // Ölçüm çıktıya yazılır: sınırın altında kalmak yetmez, ne kadar altında
-    // olduğu da görünmeli.
+    // Benchmark output logged: staying below threshold is necessary, and margin should be visible.
     console.info(
-      `[ölçüm] ${toplam} kayıtta ilk sayfa: ${gecen.toFixed(0)} ms`,
+      `[benchmark] first page across ${total} records: ${elapsed.toFixed(0)} ms`,
     );
-    expect(gecen).toBeLessThan(SURE_SINIRI_MS);
+    expect(elapsed).toBeLessThan(TIME_LIMIT_MS);
   }, 120_000);
 
-  it("son sayfa da sınırın altında açılır", async () => {
-    const { director } = await onIkiAylikSirket();
+  it("opens deep page under threshold limit", async () => {
+    const { director } = await setupTwelveMonthCompany();
 
-    // Derin sayfaya imleçle gidilir; offset olsaydı derinlik arttıkça
-    // yavaşlardı.
+    // Deep pagination accessed via cursor; offset-based queries would degrade with depth.
     let cursor = null;
     for (let i = 0; i < 20; i += 1) {
       const page = await listScopeActivities(
@@ -112,7 +109,7 @@ describe("12 aylık veriyle kapsam akışı", () => {
       if (!cursor) break;
     }
 
-    const basladi = performance.now();
+    const start = performance.now();
     const page = await listScopeActivities(
       testDb,
       { id: director.id, isSystemAdmin: false },
@@ -120,10 +117,10 @@ describe("12 aylık veriyle kapsam akışı", () => {
       NOW,
       { limit: 50, cursor },
     );
-    const gecen = performance.now() - basladi;
+    const elapsed = performance.now() - start;
 
-    console.info(`[ölçüm] 1000. kayıt civarı sayfa: ${gecen.toFixed(0)} ms`);
+    console.info(`[benchmark] page near 1000th record: ${elapsed.toFixed(0)} ms`);
     expect(page.items.length).toBeGreaterThan(0);
-    expect(gecen).toBeLessThan(SURE_SINIRI_MS);
+    expect(elapsed).toBeLessThan(TIME_LIMIT_MS);
   }, 120_000);
 });

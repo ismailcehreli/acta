@@ -7,7 +7,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Page, PageHeader } from "@/components/ui/page";
 import { companyDay } from "@/server/activities/date-rules";
-import { checkActivityEditPermission, editPermissionMessage } from "@/server/activities/edit-permission";
+import { checkActivityEditPermission } from "@/server/activities/edit-permission";
 import { findOwnActivity } from "@/server/activities/read";
 import { listTargetDepartments } from "@/server/activities/target-options";
 import { getCurrentUser } from "@/server/auth/current-user";
@@ -16,8 +16,11 @@ import { prisma } from "@/server/db";
 
 import { ActivityForm } from "../../activity-form";
 import { readActivityTextLimits } from "@/server/settings/system-settings";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
-export const metadata = { title: "Faaliyeti düzelt" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("activities.editActivity");
+}
 
 export default async function EditActivityPage({
   params,
@@ -27,8 +30,10 @@ export default async function EditActivityPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const t = await getTranslations();
+
   const { id } = await params;
-  // Yalnızca kişinin kendi faaliyeti getirilir; başkasınınki hiç aranmaz.
+
   const activity = await findOwnActivity(
     prisma,
     { id: user.id, isSystemAdmin: user.isSystemAdmin },
@@ -44,36 +49,36 @@ export default async function EditActivityPage({
     new Date(),
   );
 
-  // Bayat bir bağlantıyı 404'e çevirmek yerine, kullanıcının kendi kaydı için
-  // neden düzenleyemediğini ve faaliyete nasıl döneceğini açıkça gösteririz.
-  // Sunucu eylemi aynı kararı tekrarlar; sayfa tek başına güvenlik kapısı
-  // değildir.
   if (!permission.allowed) {
     const message =
       activity.approvalStatus === "CANCELLED"
-        ? "İptal edilmiş faaliyet düzenlenemez."
+        ? t("activities.cancelledCannotBeRevised")
         : activity.approvalStatus === "REJECTED"
-          ? "Reddedilen faaliyet düzenlenemez. Gerekiyorsa yeni bir faaliyet yazın."
-          : editPermissionMessage(permission.reason);
+          ? t("activities.rejectedCannotBeRevised")
+          : permission.reason === "already_read"
+            ? t("errors.activity.alreadyRead")
+            : permission.reason === "window_closed"
+              ? t("errors.activity.windowClosed")
+              : t("errors.activity.notEditable");
 
     return (
       <AppShell user={await toShellUser(user)}>
         <Page>
           <PageHeader
-            title="Faaliyet düzenlenemiyor"
-            description="Bu kaydın içeriği korunur."
+            title={t("activities.cannotRevise")}
+            description={t("activities.recordPreserved")}
             breadcrumbs={[
-              { label: "Ana ekran", href: "/" },
-              { label: "Faaliyetlerim", href: "/activities" },
+              { label: "Dashboard", href: "/" },
+              { label: "My activities", href: "/activities" },
               { label: activity.title, href: `/activities/${activity.id}` },
-              { label: "Düzelt" },
+              { label: t("activities.revise") },
             ]}
           />
           <Card>
             <CardBody className="flex flex-col items-start gap-4">
               <Alert tone="danger">{message}</Alert>
               <ButtonLink href={`/activities/${activity.id}`}>
-                Faaliyete dön
+                {t("common.back")}
               </ButtonLink>
             </CardBody>
           </Card>
@@ -92,17 +97,17 @@ export default async function EditActivityPage({
     <AppShell user={await toShellUser(user)}>
       <Page>
         <PageHeader
-          title="Faaliyeti düzelt"
+          title={t("activities.editActivity")}
           description={
             activity.approvalStatus === "CHANGES_REQUESTED"
-              ? "Yöneticinizin talep ettiği düzeltmeleri yapıp tekrar onaya gönderin."
-              : "Düzeltme kısa bir süre için mümkündür ve her kaydetme bir revizyon kaydı bırakır."
+              ? t("activities.changesRequestedDescription")
+              : t("activities.revisionDescription")
           }
           breadcrumbs={[
-            { label: "Ana ekran", href: "/" },
-            { label: "Faaliyetlerim", href: "/activities" },
+            { label: "Dashboard", href: "/" },
+            { label: "My activities", href: "/activities" },
             { label: activity.title, href: `/activities/${activity.id}` },
-            { label: "Düzelt" },
+            { label: t("activities.revise") },
           ]}
         />
 
@@ -112,7 +117,7 @@ export default async function EditActivityPage({
               limits={limits}
               attachmentLimits={attachmentLimits}
               mode="edit"
-              draftKey={`faaliyet-yarim:${activity.id}:${user.id}`}
+              draftKey={`activity-local-draft:${activity.id}:${user.id}`}
               options={options}
               values={{
                 id: activity.id,

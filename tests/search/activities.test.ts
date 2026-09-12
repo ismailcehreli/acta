@@ -10,8 +10,8 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Görev 5.2 (§16.2): Türkçe tam metin arama. Sonuçlar görünürlük kapsamıyla
-// sınırlı; kapsam dışı bir kayıt hiçbir sorguyla dönmez (§18.4).
+// Full-text activity search test suite.
+// Results are strictly bounded by visibility authorization scope.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -21,42 +21,48 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const gm = await createOrgUnit({ name: "Genel Müdürlük", parentId: root.id });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: gm.id });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: gm.id });
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "ROOT" });
+  const executive = await createOrgUnit({ name: "Executive Directorate", parentId: root.id });
+  const tooling = await createOrgUnit({ name: "Tooling Department", parentId: executive.id });
+  const planning = await createOrgUnit({ name: "Planning Department", parentId: executive.id });
 
-  const genelMudur = await createUser(gm.id, {
-    fullName: "Genel Müdür",
+  const ceo = await createUser(executive.id, {
+    fullName: "General Manager",
     isUnitManager: true,
   });
-  const kalipMudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const toolingManager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const planlamaMudur = await createUser(planlama.id, {
-    fullName: "Planlama Müdürü",
+  const planningManager = await createUser(planning.id, {
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
 
-  const kalipCalisan = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Çalışanı",
+  const toolingWorker = await createUser(tooling.id, {
+    fullName: "Tooling Worker",
   });
 
-  return { genelMudur, kalipMudur, planlamaMudur, kalipCalisan };
+  return { ceo, toolingManager, planningManager, toolingWorker };
 }
 
-async function faaliyet(
+async function resolveApproverId(userId: string): Promise<string | null> {
+  const { resolveManager } = await import("@/server/org/resolve-manager");
+  const result = await resolveManager(testDb, userId);
+  return result.found ? result.managerId : null;
+}
+
+async function createActivityRecord(
   author: { id: string; orgUnitId: string },
   title: string,
   description: string,
   approvalStatus: "APPROVED" | "CANCELLED" | "PENDING_APPROVAL" = "APPROVED",
 ) {
-  const onaylayanId =
-    approvalStatus === "PENDING_APPROVAL" ? await onaylayiciIdsi(author.id) : null;
+  const approverId =
+    approvalStatus === "PENDING_APPROVAL" ? await resolveApproverId(author.id) : null;
 
-  const kayit = await testDb.activity.create({
+  const record = await testDb.activity.create({
     data: {
       authorId: author.id,
       authorOrgUnitId: author.orgUnitId,
@@ -64,335 +70,313 @@ async function faaliyet(
       title,
       description,
       approvalStatus,
-      // Onay sürecindeki kayıt onaylayıcı ister (veritabanı kısıtı); §4.4'ün
-      // çözdüğü gerçek yönetici yazılır.
-      approverId: onaylayanId,
+      approverId,
     },
   });
 
-  // Uygun onaylayıcılar listesi, üretimde kayıtla birlikte doğuyor.
-  if (onaylayanId) {
+  if (approverId) {
     await testDb.activityApprover.create({
-      data: { activityId: kayit.id, userId: onaylayanId },
+      data: { activityId: record.id, userId: approverId },
     });
   }
 
-  return kayit;
+  return record;
 }
 
 const viewer = (u: { id: string }) => ({ id: u.id, isSystemAdmin: false });
 
-describe("Türkçe tam metin arama", () => {
-  it("ek almış kelimeyle eşleşir", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    await faaliyet(kalipMudur, "Kalıp bakımı", "Presteki kalıplar sökülüp temizlendi.");
+describe("full text search", () => {
+  it("matches stemmed search terms", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    await createActivityRecord(toolingManager, "Tooling maintenance", "Molds on press were disassembled and cleaned.");
 
-    // Kayıtta "kalıplar" geçiyor; kullanıcı "kalıp" arıyor.
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "kalıp");
+    const result = await searchActivities(testDb, viewer(ceo), "molds");
 
-    expect(sonuc.total).toBe(1);
-    expect(sonuc.hits[0].title).toBe("Kalıp bakımı");
+    expect(result.total).toBe(1);
+    expect(result.hits[0].title).toBe("Tooling maintenance");
   });
 
-  it("başlıkta da açıklamada da arar", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    await faaliyet(kalipMudur, "Enjeksiyon hattı", "Rutin kontrol yapıldı.");
-    await faaliyet(kalipMudur, "Günlük tur", "Enjeksiyon makinesi durdu.");
+  it("searches across both title and description", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    await createActivityRecord(toolingManager, "Injection line", "Routine check completed.");
+    await createActivityRecord(toolingManager, "Daily shift", "Injection press was halted.");
 
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "enjeksiyon");
+    const result = await searchActivities(testDb, viewer(ceo), "injection");
 
-    expect(sonuc.total).toBe(2);
+    expect(result.total).toBe(2);
   });
 
-  it("eşleşmeyen sorgu boş döner", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    await faaliyet(kalipMudur, "Kalıp bakımı", "Presteki kalıplar temizlendi.");
+  it("returns empty result when query does not match", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    await createActivityRecord(toolingManager, "Tooling maintenance", "Press molds cleaned.");
 
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "muhasebe");
+    const result = await searchActivities(testDb, viewer(ceo), "accounting");
 
-    expect(sonuc).toEqual({ hits: [], total: 0, page: 1, pageCount: 0 });
+    expect(result).toEqual({ hits: [], total: 0, page: 1, pageCount: 0 });
   });
 
-  it("boş sorgu hiçbir şey döndürmez", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    await faaliyet(kalipMudur, "Kalıp bakımı", "Presteki kalıplar temizlendi.");
+  it("returns zero results for empty queries", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    await createActivityRecord(toolingManager, "Tooling maintenance", "Press molds cleaned.");
 
-    for (const bos of ["", "   "]) {
-      const sonuc = await searchActivities(testDb, viewer(genelMudur), bos);
-      expect(sonuc.total).toBe(0);
+    for (const empty of ["", "   "]) {
+      const result = await searchActivities(testDb, viewer(ceo), empty);
+      expect(result.total).toBe(0);
     }
   });
 
-  it("eşleşen yer özet içinde işaretlenir", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    await faaliyet(
-      kalipMudur,
-      "Hat duruşu",
-      "Sabah vardiyasında enjeksiyon makinesi arıza verdi ve hat durdu.",
+  it("highlights matching terms in snippet without raw HTML markup", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    await createActivityRecord(
+      toolingManager,
+      "Line stoppage",
+      "During morning shift injection machine malfunction occurred and stopped.",
     );
 
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "arıza");
+    const result = await searchActivities(testDb, viewer(ceo), "malfunction");
 
-    // Özet HTML değildir: `<mark>` üretmek, kullanıcının yazdığı metni HTML
-    // olarak çalıştırmak demekti.
-    expect(sonuc.hits[0].snippet).toContain(HIGHLIGHT_START);
-    expect(sonuc.hits[0].snippet).not.toContain("<mark>");
+    expect(result.hits[0].snippet).toContain(HIGHLIGHT_START);
+    expect(result.hits[0].snippet).not.toContain("<mark>");
 
-    const parcalar = splitHighlights(sonuc.hits[0].snippet);
-    expect(parcalar.some((p) => p.marked && /arıza/i.test(p.text))).toBe(true);
+    const parts = splitHighlights(result.hits[0].snippet);
+    expect(parts.some((p) => p.marked && /malfunction/i.test(p.text))).toBe(true);
   });
 
-  it("açıklamadaki HTML özetten geçse de etiket olarak taşınmaz", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    await faaliyet(
-      kalipMudur,
-      "Betik denemesi",
-      "<script>alert(1)</script> presinde arıza vardı.",
+  it("preserves HTML in description as plain escaped text in snippets", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    await createActivityRecord(
+      toolingManager,
+      "Script testing",
+      "<script>alert(1)</script> press had malfunction.",
     );
 
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "arıza");
-    const parcalar = splitHighlights(sonuc.hits[0].snippet);
+    const result = await searchActivities(testDb, viewer(ceo), "malfunction");
+    const parts = splitHighlights(result.hits[0].snippet);
 
-    // Parçalar düz metindir; ekran onları metin olarak basar.
-    expect(parcalar.every((p) => typeof p.text === "string")).toBe(true);
-    expect(sonuc.hits[0].snippet).not.toContain("<mark>");
+    expect(parts.every((p) => typeof p.text === "string")).toBe(true);
+    expect(result.hits[0].snippet).not.toContain("<mark>");
   });
 });
 
-describe("arama görünürlük kapsamını aşamaz (§18.4)", () => {
-  it("akranın kaydı hiçbir sorguyla dönmez", async () => {
-    const { kalipMudur, planlamaMudur } = await sirket();
-    const akranKaydi = await faaliyet(
-      planlamaMudur,
-      "Planlama toplantısı",
-      "Haftalık üretim planı gözden geçirildi.",
+describe("search cannot exceed visibility scope", () => {
+  it("never returns peer records outside user scope", async () => {
+    const { toolingManager, planningManager } = await setupCompany();
+    const peerActivity = await createActivityRecord(
+      planningManager,
+      "Planning meeting",
+      "Weekly production schedule reviewed.",
     );
 
-    const sonuc = await searchActivities(testDb, viewer(kalipMudur), "planlama");
+    const result = await searchActivities(testDb, viewer(toolingManager), "planning");
 
-    expect(sonuc.total).toBe(0);
-    expect(sonuc.hits.map((h) => h.id)).not.toContain(akranKaydi.id);
+    expect(result.total).toBe(0);
+    expect(result.hits.map((h) => h.id)).not.toContain(peerActivity.id);
   });
 
-  it("onaylayıcının üstündeki kademe onay bekleyen kaydı bulamaz", async () => {
-    // Çalışanın onaylayıcısı Kalıphane Müdürü'dür; Genel Müdür onun üstüdür ve
-    // onay bitene kadar kaydı görmemeli (§8.2).
-    const { genelMudur, kalipCalisan } = await sirket();
-    const taslak = await faaliyet(
-      kalipCalisan,
-      "Taslak kalıp raporu",
-      "Henüz tamamlanmadı.",
+  it("prevents higher management from discovering pending approval records before review", async () => {
+    const { ceo, toolingWorker } = await setupCompany();
+    const draft = await createActivityRecord(
+      toolingWorker,
+      "Draft tooling report",
+      "Work in progress.",
       "PENDING_APPROVAL",
     );
 
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "kalıp");
+    const result = await searchActivities(testDb, viewer(ceo), "tooling");
 
-    expect(sonuc.hits.map((h) => h.id)).not.toContain(taslak.id);
+    expect(result.hits.map((h) => h.id)).not.toContain(draft.id);
   });
 
-  it("onaylayıcı kendi önündeki onay bekleyen kaydı bulur", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
-    const taslak = await faaliyet(
-      kalipCalisan,
-      "Taslak kalıp raporu",
-      "Henüz tamamlanmadı.",
+  it("allows assigned approver to find pending records in their queue", async () => {
+    const { toolingManager, toolingWorker } = await setupCompany();
+    const draft = await createActivityRecord(
+      toolingWorker,
+      "Draft tooling report",
+      "Work in progress.",
       "PENDING_APPROVAL",
     );
 
-    const sonuc = await searchActivities(testDb, viewer(kalipMudur), "kalıp");
+    const result = await searchActivities(testDb, viewer(toolingManager), "tooling");
 
-    expect(sonuc.hits.map((h) => h.id)).toContain(taslak.id);
+    expect(result.hits.map((h) => h.id)).toContain(draft.id);
   });
 
-  it("yazan kendi onaylanmamış kaydını bulur", async () => {
-    const { kalipCalisan } = await sirket();
-    const taslak = await faaliyet(
-      kalipCalisan,
-      "Taslak kalıp raporu",
-      "Henüz tamamlanmadı.",
+  it("allows author to find their own pending unapproved record", async () => {
+    const { toolingWorker } = await setupCompany();
+    const draft = await createActivityRecord(
+      toolingWorker,
+      "Draft tooling report",
+      "Work in progress.",
       "PENDING_APPROVAL",
     );
 
-    const sonuc = await searchActivities(testDb, viewer(kalipCalisan), "kalıp");
+    const result = await searchActivities(testDb, viewer(toolingWorker), "tooling");
 
-    expect(sonuc.hits.map((h) => h.id)).toContain(taslak.id);
+    expect(result.hits.map((h) => h.id)).toContain(draft.id);
   });
 
-  it("iptal edilmiş kayıt aramada kalır (§5.5)", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    const iptal = await faaliyet(
-      kalipMudur,
-      "İptal edilen kalıp işi",
-      "Yanlış girilmişti.",
+  it("includes cancelled records in search results", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    const cancelled = await createActivityRecord(
+      toolingManager,
+      "Cancelled tooling task",
+      "Mistakenly logged.",
       "CANCELLED",
     );
 
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "kalıp");
+    const result = await searchActivities(testDb, viewer(ceo), "tooling");
 
-    const bulunan = sonuc.hits.find((h) => h.id === iptal.id);
-    expect(bulunan).toBeDefined();
-    // Etiketi ekranın gösterebilmesi için durum sonuçta taşınır.
-    expect(bulunan?.approvalStatus).toBe("CANCELLED");
+    const found = result.hits.find((h) => h.id === cancelled.id);
+    expect(found).toBeDefined();
+    expect(found?.approvalStatus).toBe("CANCELLED");
   });
 });
 
-describe("sayfalama", () => {
-  it("bütün sonuçlar gezilebilir, hiçbiri kesilmez", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
+describe("pagination", () => {
+  it("paginates through all results without skipping records", async () => {
+    const { ceo, toolingManager } = await setupCompany();
     for (let i = 0; i < 30; i += 1) {
-      await faaliyet(kalipMudur, `Kalıp işi ${i + 1}`, "Kalıp bakımı yapıldı.");
+      await createActivityRecord(toolingManager, `Tooling task ${i + 1}`, "Tooling maintenance completed.");
     }
 
-    const ilk = await searchActivities(testDb, viewer(genelMudur), "kalıp", 1, 10);
-    expect(ilk.total).toBe(30);
-    expect(ilk.pageCount).toBe(3);
-    expect(ilk.hits).toHaveLength(10);
+    const first = await searchActivities(testDb, viewer(ceo), "tooling", 1, 10);
+    expect(first.total).toBe(30);
+    expect(first.pageCount).toBe(3);
+    expect(first.hits).toHaveLength(10);
 
-    const idler = new Set(ilk.hits.map((h) => h.id));
-    for (const sayfa of [2, 3]) {
-      const sonraki = await searchActivities(
+    const seenIds = new Set(first.hits.map((h) => h.id));
+    for (const page of [2, 3]) {
+      const next = await searchActivities(
         testDb,
-        viewer(genelMudur),
-        "kalıp",
-        sayfa,
+        viewer(ceo),
+        "tooling",
+        page,
         10,
       );
-      expect(sonraki.hits).toHaveLength(10);
-      for (const hit of sonraki.hits) idler.add(hit.id);
+      expect(next.hits).toHaveLength(10);
+      for (const hit of next.hits) seenIds.add(hit.id);
     }
 
-    // Tekrar eden ya da atlanan kayıt yok.
-    expect(idler.size).toBe(30);
+    expect(seenIds.size).toBe(30);
   });
 
-  it("sayfa numarası bozuk verilse de sorgu çalışır", async () => {
-    const { genelMudur, kalipMudur } = await sirket();
-    await faaliyet(kalipMudur, "Kalıp işi", "Kalıp bakımı yapıldı.");
+  it("handles invalid page numbers gracefully", async () => {
+    const { ceo, toolingManager } = await setupCompany();
+    await createActivityRecord(toolingManager, "Tooling task", "Tooling maintenance completed.");
 
-    const sonuc = await searchActivities(testDb, viewer(genelMudur), "kalıp", -5);
+    const result = await searchActivities(testDb, viewer(ceo), "tooling", -5);
 
-    expect(sonuc.page).toBe(1);
-    expect(sonuc.hits).toHaveLength(1);
+    expect(result.page).toBe(1);
+    expect(result.hits).toHaveLength(1);
   });
 });
 
-describe("özet ayrıştırma", () => {
-  it("işaretli ve işaretsiz parçalara böler", () => {
-    const snippet = `Sabah ${HIGHLIGHT_START}arıza${HIGHLIGHT_END} vardı`;
+describe("highlight parsing", () => {
+  it("splits snippet into marked and unmarked parts", () => {
+    const snippet = `Morning ${HIGHLIGHT_START}issue${HIGHLIGHT_END} reported`;
 
     expect(splitHighlights(snippet)).toEqual([
-      { text: "Sabah ", marked: false },
-      { text: "arıza", marked: true },
-      { text: " vardı", marked: false },
+      { text: "Morning ", marked: false },
+      { text: "issue", marked: true },
+      { text: " reported", marked: false },
     ]);
   });
 
-  it("işaretsiz metni olduğu gibi verir", () => {
-    expect(splitHighlights("düz metin")).toEqual([
-      { text: "düz metin", marked: false },
+  it("returns unmarked text as single chunk", () => {
+    expect(splitHighlights("plain text")).toEqual([
+      { text: "plain text", marked: false },
     ]);
   });
 
-  it("eşleşmemiş işaretleyicide metin yutmaz", () => {
-    const parcalar = splitHighlights(`açık ${HIGHLIGHT_START}kaldı`);
+  it("handles unclosed highlight tags without swallowing content", () => {
+    const parts = splitHighlights(`open ${HIGHLIGHT_START}tag`);
 
-    expect(parcalar.map((p) => p.text).join("")).toBe("açık kaldı");
+    expect(parts.map((p) => p.text).join("")).toBe("open tag");
   });
 });
 
-/** §4.4'ün çözdüğü yönetici; onay kısıtını sağlamak için gerçek kural. */
-async function onaylayiciIdsi(userId: string): Promise<string | null> {
-  const { resolveManager } = await import("@/server/org/resolve-manager");
-  const sonuc = await resolveManager(testDb, userId);
-  return sonuc.found ? sonuc.managerId : null;
+async function setupFilterScenario() {
+  const { toolingManager, toolingWorker, planningManager } = await setupCompany();
+  await createActivityRecord(toolingWorker, "Tooling maintenance", "Wear on mold 3.");
+  await createActivityRecord(toolingManager, "Tooling handover", "Handed over to shift.");
+  return { manager: toolingManager, employee: toolingWorker, peerManager: planningManager };
 }
 
-/** Süzgeç testleri için ortak kurulum: kalıphaneden iki kayıt. */
-async function suzgecKurulumu() {
-  const { kalipMudur, kalipCalisan, planlamaMudur } = await sirket();
-  await faaliyet(kalipCalisan, "Kalıp bakımı", "Üç numaralı kalıpta aşınma.");
-  await faaliyet(kalipMudur, "Kalıp devri", "Kalıp vardiyaya devredildi.");
-  return { mudur: kalipMudur, calisan: kalipCalisan, akran: planlamaMudur };
-}
+describe("search filters", () => {
+  it("cannot expand visibility scope via filters", async () => {
+    const { employee, peerManager, manager } = await setupFilterScenario();
 
-describe("arama süzgeçleri (Görev 10.9)", () => {
-  it("süzgeç kapsamı genişletemez", async () => {
-    const { calisan, akran, mudur } = await suzgecKurulumu();
-
-    // Akran, çalışanın kaydını süzgeçle **isteyerek** hedeflese bile göremez.
-    const sonuc = await searchActivities(
+    const result = await searchActivities(
       testDb,
-      { id: akran.id, isSystemAdmin: false },
-      "kalıp",
+      { id: peerManager.id, isSystemAdmin: false },
+      "tooling",
       1,
       undefined,
       undefined,
       {
         period: "all",
-        authorId: calisan.id,
+        authorId: employee.id,
         authorOrgUnitId: "",
         targetOrgUnitId: "",
       },
     );
 
-    expect(sonuc.hits).toHaveLength(0);
+    expect(result.hits).toHaveLength(0);
 
-    // Aynı süzgeçle müdür görebiliyor: sonuç boşluğu süzgeçten değil,
-    // görünürlükten geliyor.
-    const mudurunSonucu = await searchActivities(
+    const managerResult = await searchActivities(
       testDb,
-      { id: mudur.id, isSystemAdmin: false },
-      "kalıp",
+      { id: manager.id, isSystemAdmin: false },
+      "tooling",
       1,
       undefined,
       undefined,
       {
         period: "all",
-        authorId: calisan.id,
+        authorId: employee.id,
         authorOrgUnitId: "",
         targetOrgUnitId: "",
       },
     );
-    expect(mudurunSonucu.hits.length).toBeGreaterThan(0);
+    expect(managerResult.hits.length).toBeGreaterThan(0);
   });
 
-  it("kişi süzgeci sonucu daraltır", async () => {
-    const { mudur, calisan } = await suzgecKurulumu();
+  it("narrows results when filtered by author", async () => {
+    const { manager, employee } = await setupFilterScenario();
 
-    const hepsi = await searchActivities(
+    const allHits = await searchActivities(
       testDb,
-      { id: mudur.id, isSystemAdmin: false },
-      "kalıp",
+      { id: manager.id, isSystemAdmin: false },
+      "tooling",
       1,
     );
-    const daraltilmis = await searchActivities(
+    const narrowed = await searchActivities(
       testDb,
-      { id: mudur.id, isSystemAdmin: false },
-      "kalıp",
+      { id: manager.id, isSystemAdmin: false },
+      "tooling",
       1,
       undefined,
       undefined,
       {
         period: "all",
-        authorId: calisan.id,
+        authorId: employee.id,
         authorOrgUnitId: "",
         targetOrgUnitId: "",
       },
     );
 
-    expect(daraltilmis.hits.length).toBeLessThanOrEqual(hepsi.hits.length);
+    expect(narrowed.hits.length).toBeLessThanOrEqual(allHits.hits.length);
     expect(
-      daraltilmis.hits.every((hit) => hit.authorName === "Kalıphane Çalışanı"),
+      narrowed.hits.every((hit) => hit.authorName === "Tooling Worker"),
     ).toBe(true);
   });
 
-  it("dönem süzgeci eski kaydı eler", async () => {
-    const { mudur } = await suzgecKurulumu();
+  it("filters out older records when period is specified", async () => {
+    const { manager } = await setupFilterScenario();
 
-    const bugun = await searchActivities(
+    const todayResults = await searchActivities(
       testDb,
-      { id: mudur.id, isSystemAdmin: false },
-      "kalıp",
+      { id: manager.id, isSystemAdmin: false },
+      "tooling",
       1,
       undefined,
       undefined,
@@ -405,7 +389,6 @@ describe("arama süzgeçleri (Görev 10.9)", () => {
       new Date("2026-09-30T09:00:00.000Z"),
     );
 
-    // Kayıtlar ağustosta; eylül sonundaki "bugün" süzgeci hepsini eler.
-    expect(bugun.hits).toHaveLength(0);
+    expect(todayResults.hits).toHaveLength(0);
   });
 });

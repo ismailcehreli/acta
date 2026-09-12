@@ -1,7 +1,6 @@
 import type { ReportScope } from "@/server/authz/visibility";
 import {
   isKnownEvent,
-  NOTIFICATION_EVENT_DETAILS,
 } from "@/server/notifications/events";
 import { companyDayStart } from "@/shared/format/date-time";
 
@@ -9,6 +8,8 @@ import type { ReportDb } from "./db";
 import type { ReportPeriodRange } from "./range";
 import { rollupByOrgUnit } from "./rollup";
 import type { NotificationsReport } from "./types";
+import { compareLocalized } from "@/shared/format/locale";
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n";
 
 interface NotificationCounters {
   total: number;
@@ -36,6 +37,7 @@ function addNotificationCounters(
 function notificationUnitRows(
   scope: ReportScope,
   direct: Map<string, NotificationCounters>,
+  locale: Locale,
 ): NotificationsReport["units"] {
   const totals = rollupByOrgUnit(scope.units, scope.rootOrgUnitId, direct, {
     createEmpty: emptyNotificationCounters,
@@ -45,23 +47,18 @@ function notificationUnitRows(
 
   return scope.units
     .filter((unit) => (totals.get(unit.id)?.total ?? 0) > 0)
-    .sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name, "tr"))
+    .sort((a, b) => a.depth - b.depth || compareLocalized(a.name, b.name, locale))
     .map((unit) => {
       const total = totals.get(unit.id) ?? emptyNotificationCounters();
       return { id: unit.id, name: unit.name, depth: unit.depth, ...total };
     });
 }
 
-function notificationLabel(eventType: string): string {
-  return isKnownEvent(eventType)
-    ? NOTIFICATION_EVENT_DETAILS[eventType].label
-    : "Diğer bildirim";
-}
-
 export async function readNotificationsReport(
   db: ReportDb,
   scope: ReportScope,
   range: ReportPeriodRange,
+  locale: Locale = DEFAULT_LOCALE,
 ): Promise<NotificationsReport> {
   const rows = await db.notificationQueue.findMany({
     where: {
@@ -116,13 +113,16 @@ export async function readNotificationsReport(
     successRate: attempted === 0 ? null : Math.round((sent / attempted) * 100),
     byChannel: [...channelCounts.entries()]
       .map(([channel, count]) => ({
-        label: channel === "EMAIL" ? "E-posta" : "Tarayıcı bildirimi",
+        key: channel,
         count,
       }))
       .sort((a, b) => b.count - a.count),
     byEvent: [...eventCounts.entries()]
-      .map(([eventType, count]) => ({ label: notificationLabel(eventType), count }))
+      .map(([eventType, count]) => ({
+        key: isKnownEvent(eventType) ? eventType : "other",
+        count,
+      }))
       .sort((a, b) => b.count - a.count),
-    units: notificationUnitRows(scope, direct),
+    units: notificationUnitRows(scope, direct, locale),
   };
 }

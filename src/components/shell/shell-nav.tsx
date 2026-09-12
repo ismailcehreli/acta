@@ -22,35 +22,37 @@ import {
   type NavItem,
   type NavUser,
 } from "./nav-model";
+import type { Locale } from "@/shared/i18n";
 
-// Uygulama kabuğu (brief §5).
+
 //
-// Üç düzen, tek öğrenilen dil:
+
 //
-//   ≥1280 px  Kalıcı sol operasyon omurgası. Marka, birincil eylem,
-//             bölümler, en altta hesap. İçerik omurganın sağında.
-//   768–1279  Üstte bağlam çubuğu + tam etiketli drawer. Dar ikon şeridi
-//             **kullanılmadı**: ikon tek başına metnin yerini almamalı (§3).
-//   <768      Üstte bağlam çubuğu + altta en fazla beş öğeli gezinme.
-//             "Daha" aynı drawer'ı açar.
+
+
+
+
+
+
 //
-// Drawer ve menüler odak yönetimi, Escape ve geri odaklandırma taşır (§10).
+
 
 export interface ShellNavUser extends NavUser {
   profileHref: string;
   fullName: string;
-  /** Hesap satırında görünen tek yetki. */
+
   roleLabel: string;
-  /** Hesap menüsünde görünen tam yetki listesi. */
+
   roleDetail: string;
   initials: string;
-  /** Hesap rozeti için: kimlik ve profil resmi uzantısı (Görev 11.5). */
+
   id: string;
   avatarExtension: string | null;
+  locale: Locale;
 }
 
-/** Tıklanan bağlantının bekleme göstergesi; HTTP anlamını değiştirmez. */
-function LinkBekliyor() {
+
+function LinkPending() {
   const t = useTranslations();
   const { pending } = useLinkStatus();
   if (!pending) return null;
@@ -64,15 +66,16 @@ function LinkBekliyor() {
   );
 }
 
-/** Sayı rozeti; sıfırda hiç çizilmez. */
+
 function Count({ item }: { item: NavItem }) {
+  const t = useTranslations();
   if (!item.count) return null;
 
   return (
     <span className="ms-auto inline-flex min-w-5 items-center justify-center rounded-(--radius-xs) bg-primary px-1 text-[length:var(--text-2xs)] font-semibold text-white tabular">
       <span aria-hidden>{item.count > 99 ? "99+" : item.count}</span>
       <span className="sr-only">
-        {item.count} {item.countLabel ?? "bekleyen"}
+        {item.count} {item.countLabel ?? t("common.pending")}
       </span>
     </span>
   );
@@ -87,35 +90,34 @@ function SpineLink({
   pathname: string;
   onNavigate?: () => void;
 }) {
-  const aktif = isActive(pathname, item.href);
+  const active = isActive(pathname, item.href);
 
   return (
     <Link
       href={item.href}
       onClick={onNavigate}
-      aria-current={aktif ? "page" : undefined}
+      aria-current={active ? "page" : undefined}
       className={[
         "group relative flex min-h-(--spacing-touch) items-center gap-3 px-3 py-2",
         "text-[length:var(--text-sm)] transition-colors duration-(--duration-fast)",
-        aktif
+        active
           ? "bg-surface font-semibold text-ink"
           : "text-muted hover:bg-surface-hover hover:text-ink",
       ].join(" ")}
     >
-      {/* Aktif bölümün kenar işareti: renk tek taşıyıcı değil, konum ve
-          ağırlık da ayırt ediyor. */}
+
       <span
         aria-hidden
         className={
-          aktif
+          active
             ? "absolute inset-y-0 start-0 w-[3px] bg-primary"
             : "absolute inset-y-0 start-0 w-[3px] bg-transparent"
         }
       />
-      <NavIcon name={item.icon} className={aktif ? "size-5 shrink-0 text-primary" : "size-5 shrink-0"} />
+      <NavIcon name={item.icon} className={active ? "size-5 shrink-0 text-primary" : "size-5 shrink-0"} />
       <span className="truncate">{item.label}</span>
       <Count item={item} />
-      <LinkBekliyor />
+      <LinkPending />
     </Link>
   );
 }
@@ -155,12 +157,12 @@ function Brand({
   brand: { pageTitle: string; logoUrl: string | null };
   compact?: boolean;
 }) {
-  // Bu alan **logonun yeri**. Logo yüklendiğinde tek görünen o olur.
+
   //
-  // Logo yokken sayfa başlığı yazılır ama başlık gibi değil, sakin bir künye
-  // gibi: küçük punto, iki satıra kadar sarar. Önce tek satırda kırpılıyordu
-  // ("Faaliyet Raporlama Sis…") — yarısı görünmeyen bir metin, hem yer
-  // kaplıyor hem bilgi vermiyordu.
+
+
+
+
   return (
     <Link
       href="/"
@@ -203,8 +205,8 @@ function AccountMenu({
     <Menu
       label={t("nav.accountMenu")}
       align={align}
-      // Hesap bloğu kabuğun **en altında**: menü aşağı açılsa ekran dışına
-      // taşar ve tıklanamaz olurdu.
+
+
       placement="top"
       trigger={
         <>
@@ -215,6 +217,7 @@ function AccountMenu({
               avatarExtension: user.avatarExtension,
             }}
             size={32}
+            locale={user.locale}
           />
           <span className="min-w-0 flex-1 text-start">
             <span className="block truncate text-[length:var(--text-sm)] font-medium text-ink">
@@ -241,7 +244,7 @@ function AccountMenu({
       </Link>
 
       <Link
-        href="/parola"
+        href="/password"
         role="menuitem"
         className="flex min-h-(--spacing-touch) w-full items-center px-3 text-[length:var(--text-sm)] text-ink transition-colors hover:bg-surface-hover"
       >
@@ -264,10 +267,7 @@ function AccountMenu({
   );
 }
 
-/**
- * Gezinme çekmecesi. Odak içeride tutulur, Escape kapatır ve odak açan
- * düğmeye geri döner (§10).
- */
+
 function NavDrawer({
   open,
   onClose,
@@ -295,45 +295,45 @@ function NavDrawer({
 }) {
   const t = useTranslations();
   const panel = useRef<HTMLDivElement>(null);
-  const basligiId = useId();
+  const headingId = useId();
 
   useEffect(() => {
     if (!open) return;
 
-    const onceki = document.activeElement as HTMLElement | null;
+    const previous = document.activeElement as HTMLElement | null;
     panel.current?.querySelector<HTMLElement>("a, button")?.focus();
 
-    function tus(olay: KeyboardEvent) {
-      if (olay.key === "Escape") {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
         onClose();
         return;
       }
-      if (olay.key !== "Tab" || !panel.current) return;
+      if (event.key !== "Tab" || !panel.current) return;
 
-      const odaklanabilir = panel.current.querySelectorAll<HTMLElement>(
+      const focusable = panel.current.querySelectorAll<HTMLElement>(
         'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
       );
-      if (odaklanabilir.length === 0) return;
+      if (focusable.length === 0) return;
 
-      const ilk = odaklanabilir[0];
-      const son = odaklanabilir[odaklanabilir.length - 1];
+      const initial = focusable[0];
+      const last = focusable[focusable.length - 1];
 
-      if (olay.shiftKey && document.activeElement === ilk) {
-        olay.preventDefault();
-        son.focus();
-      } else if (!olay.shiftKey && document.activeElement === son) {
-        olay.preventDefault();
-        ilk.focus();
+      if (event.shiftKey && document.activeElement === initial) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        initial.focus();
       }
     }
 
-    document.addEventListener("keydown", tus);
+    document.addEventListener("keydown", handleKeyDown);
     document.body.style.overflow = "hidden";
 
     return () => {
-      document.removeEventListener("keydown", tus);
+      document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = "";
-      onceki?.focus();
+      previous?.focus();
     };
   }, [open, onClose]);
 
@@ -352,11 +352,11 @@ function NavDrawer({
         ref={panel}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={basligiId}
+        aria-labelledby={headingId}
         className="absolute inset-y-0 start-0 flex w-[min(86vw,320px)] flex-col border-e border-line bg-raised shadow-(--shadow-dialog)"
       >
         <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-          <h2 id={basligiId} className="sr-only">
+          <h2 id={headingId} className="sr-only">
             {t("nav.navigation")}
           </h2>
           <Brand brand={brand} compact />
@@ -380,7 +380,7 @@ function NavDrawer({
                 onClick={onClose}
                 className="flex min-h-(--spacing-control-lg) items-center justify-center gap-2 rounded-(--radius-sm) bg-primary px-4 text-[length:var(--text-sm)] font-medium text-white hover:bg-primary-hover"
               >
-                <NavIcon name="yeni" className="size-4" />
+                <NavIcon name="new" className="size-4" />
                 {primaryAction.label}
               </Link>
             </div>
@@ -422,43 +422,32 @@ export function ShellNav({
   const model = buildNav(user, t);
   const tabs = mobileTabs(model);
 
-  // Sayfa değişince çekmece kapanır; açık kalırsa yeni sayfayı örter.
-  const [sonYol, setSonYol] = useState(pathname);
-  if (sonYol !== pathname) {
-    setSonYol(pathname);
+
+  const [lastPathname, setLastPathname] = useState(pathname);
+  if (lastPathname !== pathname) {
+    setLastPathname(pathname);
     if (drawer) setDrawer(false);
   }
 
   return (
     <>
-      {/* Anlık kutucuk sayfada **tek**: zil iki kırılım noktasında iki kez
-          monte oluyor (biri gizli), kutucuk zilin içinde kalsaydı aynı
-          bildirim iki kez belirirdi. */}
+
       <NotificationToast items={notifications} />
 
-      {/* ── Masaüstü omurgası (≥1280) ───────────────────────────────
-          `header` landmark'ı: masaüstünde uygulamanın başlık bölgesi budur
-          (§10). Bağlam çubuğu `display:none` olduğu için erişilebilirlik
-          ağacında aynı anda iki banner bulunmaz. */}
+
       <header className="fixed inset-y-0 start-0 z-[var(--z-spine)] hidden w-(--spacing-spine) flex-col border-e border-line bg-raised xl:flex">
-        {/* Marka kendi satırında ve tek başına. Zil buradan alındı: bildirim
-            gelince rozetle birlikte markayı sıkıştırıyor, alanı
-            karıştırıyordu. Yeri artık hesap satırı — kişisel olan her şey
-            omurganın altında toplanıyor. */}
+
         <div className="flex min-h-16 items-center border-b border-line px-4 py-3">
           <Brand brand={brand} />
         </div>
 
-        {/* Birincil eylem, bir yere iliştirilmiş düğme değil **omurganın ilk
-            satırı**: tam genişlikte, gezinme satırlarıyla aynı ritimde
-            (aynı sol boşluk, aynı ikon-metin aralığı, aynı yükseklik).
-            Böylece listenin vurgulu ilk maddesi gibi okunuyor. */}
+
         {model.primaryAction ? (
           <Link
             href={model.primaryAction.href}
             className="flex min-h-(--spacing-touch) items-center gap-3 border-b border-line bg-primary px-4 py-2.5 text-[length:var(--text-sm)] font-semibold text-white transition-colors duration-(--duration-fast) hover:bg-primary-hover active:bg-primary-pressed"
           >
-            <NavIcon name="yeni" className="size-5 shrink-0" />
+            <NavIcon name="new" className="size-5 shrink-0" />
             {model.primaryAction.label}
           </Link>
         ) : null}
@@ -478,14 +467,14 @@ export function ShellNav({
             items={notifications}
             unseen={unseenNotifications}
             onOpen={markNotificationsSeen}
-            // Zil omurganın **en altında**: kutu aşağı açılırsa ekran dışına
-            // taşar. Hesap menüsüyle aynı sebep, aynı çözüm.
+
+
             placement="top"
           />
         </div>
       </header>
 
-      {/* ── Bağlam çubuğu (<1280) ─────────────────────────────────── */}
+
       <header className="sticky top-0 z-[var(--z-topbar)] flex h-(--spacing-topbar) items-center justify-between gap-2 border-b border-line bg-raised px-3 xl:hidden">
         <div className="flex min-w-0 items-center gap-2">
           <button
@@ -495,7 +484,7 @@ export function ShellNav({
             aria-expanded={drawer}
             className="grid size-(--spacing-touch) shrink-0 place-items-center rounded-(--radius-sm) text-muted hover:bg-surface-hover hover:text-ink"
           >
-            <NavIcon name="daha" />
+            <NavIcon name="more" />
           </button>
           <Brand brand={brand} compact />
         </div>
@@ -523,25 +512,25 @@ export function ShellNav({
         primaryAction={model.primaryAction}
       />
 
-      {/* ── Mobil alt gezinme (<768) ──────────────────────────────── */}
+      {/* ── Mobile bottom navigation (<768) ───────────────────────── */}
       <nav
         aria-label={t("nav.primaryNav")}
         className="fixed inset-x-0 bottom-0 z-[var(--z-tabbar)] flex border-t border-line bg-raised pb-[env(safe-area-inset-bottom)] md:hidden"
       >
         {tabs.map((item) => {
-          const aktif = isActive(pathname, item.href);
+          const active = isActive(pathname, item.href);
           return (
             <Link
               key={item.href}
               href={item.href}
-              aria-current={aktif ? "page" : undefined}
+              aria-current={active ? "page" : undefined}
               className={[
                 "relative flex flex-1 flex-col items-center justify-center gap-0.5",
                 "min-h-(--spacing-tabbar) px-1 text-[length:var(--text-2xs)]",
-                aktif ? "font-semibold text-primary" : "text-muted",
+                active ? "font-semibold text-primary" : "text-muted",
               ].join(" ")}
             >
-              {aktif ? (
+              {active ? (
                 <span aria-hidden className="absolute inset-x-3 top-0 h-[2px] bg-primary" />
               ) : null}
               <span className="relative">
@@ -558,7 +547,7 @@ export function ShellNav({
               <span className="truncate">{item.label}</span>
               {item.count ? (
                 <span className="sr-only">
-                  {item.count} {item.countLabel ?? "bekleyen"}
+                  {item.count} {item.countLabel ?? t("common.pending")}
                 </span>
               ) : null}
             </Link>
@@ -571,7 +560,7 @@ export function ShellNav({
             className="flex flex-1 flex-col items-center justify-center gap-0.5 px-1 text-[length:var(--text-2xs)] font-medium text-primary"
           >
             <span className="grid size-7 place-items-center rounded-(--radius-xs) bg-primary text-white">
-              <NavIcon name="yeni" className="size-4" />
+              <NavIcon name="new" className="size-4" />
             </span>
             {t("nav.new")}
           </Link>
@@ -584,7 +573,7 @@ export function ShellNav({
           aria-expanded={drawer}
           className="flex flex-1 flex-col items-center justify-center gap-0.5 px-1 text-[length:var(--text-2xs)] text-muted"
         >
-          <NavIcon name="daha" />
+          <NavIcon name="more" />
           {t("nav.more")}
         </button>
       </nav>

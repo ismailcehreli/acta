@@ -26,38 +26,38 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function soruAc(activityId: string, askerId: string, responsibleId: string) {
+async function openQuestion(activityId: string, askerId: string, responsibleId: string) {
   return testDb.conversation.create({
     data: { activityId, askerId, responsibleId, status: "OPEN" },
   });
 }
 
-describe("dashboard sayaç kapsamı", () => {
-  it("kişisel ve yönetilen alan sayaçlarını birbirine karıştırmaz", async () => {
-    const birim = await createOrgUnit({ name: "Üretim" });
-    const yonetici = await createUser(birim.id, {
-      fullName: "Birim Yöneticisi",
+describe("dashboard metrics scope", () => {
+  it("keeps personal and managed scope metrics completely distinct", async () => {
+    const unit = await createOrgUnit({ name: "Production" });
+    const manager = await createUser(unit.id, {
+      fullName: "Unit Manager",
       isUnitManager: true,
     });
-    const calisan = await createUser(birim.id, { fullName: "Çalışan" });
+    const employee = await createUser(unit.id, { fullName: "Worker" });
 
-    await createActivity(yonetici, {
+    await createActivity(manager, {
       activityDate: new Date("2026-08-18T00:00:00.000Z"),
     });
-    await createActivity(calisan, {
+    await createActivity(employee, {
       activityDate: new Date("2026-08-18T00:00:00.000Z"),
     });
 
     const personal = await personalDashboardMetrics(
       testDb,
-      { id: yonetici.id, isSystemAdmin: false },
+      { id: manager.id, isSystemAdmin: false },
       "week",
       NOW,
     );
     const managed = await dashboardMetrics(
       testDb,
-      { id: yonetici.id, isSystemAdmin: false },
-      await subordinateUserIds(testDb, yonetici.id),
+      { id: manager.id, isSystemAdmin: false },
+      await subordinateUserIds(testDb, manager.id),
       "week",
       NOW,
     );
@@ -68,78 +68,70 @@ describe("dashboard sayaç kapsamı", () => {
     expect(managed.contributors).toBe(1);
   });
 
-  it("iptal edilen ve reddedilen kayıt sayaçlarda yer almaz", async () => {
-    // Sayaç "ne kadar iş yapıldı" sorusuna cevap veriyor; iptal edilen kayıt
-    // yapılmamış sayılır, reddedilen kayıt da yönetime sunulmaya uygun
-    // bulunmamıştır. Skor ikisini de saymıyordu (`scoring/collect.ts`);
-    // dashboard sayıyordu ve aynı ay için iki farklı sayı çıkıyordu.
-    const birim = await createOrgUnit({ name: "Üretim" });
-    const yonetici = await createUser(birim.id, {
-      fullName: "Birim Yöneticisi",
+  it("excludes cancelled and rejected records from metric counters", async () => {
+    const unit = await createOrgUnit({ name: "Production" });
+    const manager = await createUser(unit.id, {
+      fullName: "Unit Manager",
       isUnitManager: true,
     });
-    const calisan = await createUser(birim.id, { fullName: "Çalışan" });
+    const employee = await createUser(unit.id, { fullName: "Worker" });
 
-    const gun = new Date("2026-08-18T00:00:00.000Z");
-    // Reddedilen kayıtta gerekçe **ve** reddeden zorunlu; veritabanı kısıtları
-    // ikisini de arıyor. Reddeden yazarın kendisi olamaz, bu yüzden ret
-    // yalnız çalışanın kaydında kuruluyor.
-    const gerekce = await createApprovalReason("REJECTED");
+    const day = new Date("2026-08-18T00:00:00.000Z");
+    const reason = await createApprovalReason("REJECTED");
 
-    await createActivity(yonetici, { activityDate: gun });
-    await createActivity(yonetici, { activityDate: gun, approvalStatus: "CANCELLED" });
+    await createActivity(manager, { activityDate: day });
+    await createActivity(manager, { activityDate: day, approvalStatus: "CANCELLED" });
 
-    await createActivity(calisan, { activityDate: gun });
-    await createActivity(calisan, { activityDate: gun, approvalStatus: "CANCELLED" });
-    await createActivity(calisan, {
-      activityDate: gun,
+    await createActivity(employee, { activityDate: day });
+    await createActivity(employee, { activityDate: day, approvalStatus: "CANCELLED" });
+    await createActivity(employee, {
+      activityDate: day,
       approvalStatus: "REJECTED",
-      approverId: yonetici.id,
-      approvalReasonId: gerekce.id,
+      approverId: manager.id,
+      approvalReasonId: reason.id,
       approvalReasonKind: "REJECTED",
     });
 
     const personal = await personalDashboardMetrics(
       testDb,
-      { id: yonetici.id, isSystemAdmin: false },
+      { id: manager.id, isSystemAdmin: false },
       "week",
       NOW,
     );
-    const calisaninKendisi = await personalDashboardMetrics(
+    const employeePersonal = await personalDashboardMetrics(
       testDb,
-      { id: calisan.id, isSystemAdmin: false },
+      { id: employee.id, isSystemAdmin: false },
       "week",
       NOW,
     );
     const managed = await dashboardMetrics(
       testDb,
-      { id: yonetici.id, isSystemAdmin: false },
-      await subordinateUserIds(testDb, yonetici.id),
+      { id: manager.id, isSystemAdmin: false },
+      await subordinateUserIds(testDb, manager.id),
       "week",
       NOW,
     );
 
     expect(personal.activities).toBe(1);
-    // Reddedilen kayıt yazarın kendi sayacında da görünmez.
-    expect(calisaninKendisi.activities).toBe(1);
+    expect(employeePersonal.activities).toBe(1);
     expect(managed.activities).toBe(1);
   });
 
-  it("yalnız iptal/reddedilmiş kaydı olan kişi katkı veren sayılmaz", async () => {
-    const birim = await createOrgUnit({ name: "Üretim" });
-    const yonetici = await createUser(birim.id, {
-      fullName: "Birim Yöneticisi",
+  it("excludes users with only cancelled or rejected entries from contributor count", async () => {
+    const unit = await createOrgUnit({ name: "Production" });
+    const manager = await createUser(unit.id, {
+      fullName: "Unit Manager",
       isUnitManager: true,
     });
-    const calisan = await createUser(birim.id, { fullName: "Çalışan" });
+    const employee = await createUser(unit.id, { fullName: "Worker" });
 
-    const gun = new Date("2026-08-18T00:00:00.000Z");
-    await createActivity(calisan, { activityDate: gun, approvalStatus: "CANCELLED" });
+    const day = new Date("2026-08-18T00:00:00.000Z");
+    await createActivity(employee, { activityDate: day, approvalStatus: "CANCELLED" });
 
     const managed = await dashboardMetrics(
       testDb,
-      { id: yonetici.id, isSystemAdmin: false },
-      await subordinateUserIds(testDb, yonetici.id),
+      { id: manager.id, isSystemAdmin: false },
+      await subordinateUserIds(testDb, manager.id),
       "week",
       NOW,
     );
@@ -148,73 +140,71 @@ describe("dashboard sayaç kapsamı", () => {
     expect(managed.contributors).toBe(0);
   });
 
-  it("yönetilen açık soru sayacı faaliyeti bir kez sayar ve listeyle eşleşir", async () => {
-    const birim = await createOrgUnit({ name: "Üretim" });
-    const yonetici = await createUser(birim.id, {
-      fullName: "Birim Yöneticisi",
+  it("counts activities with open questions once and matches list results", async () => {
+    const unit = await createOrgUnit({ name: "Production" });
+    const manager = await createUser(unit.id, {
+      fullName: "Unit Manager",
       isUnitManager: true,
     });
-    const calisan = await createUser(birim.id, { fullName: "Çalışan" });
-    const soran = await createUser(birim.id, { fullName: "Soran" });
-    const ikinciSoran = await createUser(birim.id, { fullName: "İkinci Soran" });
+    const employee = await createUser(unit.id, { fullName: "Worker" });
+    const asker = await createUser(unit.id, { fullName: "Asker" });
+    const secondAsker = await createUser(unit.id, { fullName: "Second Asker" });
 
-    const kendiSorusu = await createActivity(calisan, { title: "Yalnız kendi sorusu" });
-    await soruAc(kendiSorusu.id, yonetici.id, calisan.id);
+    const selfQuestion = await createActivity(employee, { title: "Only self question" });
+    await openQuestion(selfQuestion.id, manager.id, employee.id);
 
-    const karisik = await createActivity(calisan, { title: "Kendi ve gelen soru" });
-    await soruAc(karisik.id, yonetici.id, calisan.id);
-    await soruAc(karisik.id, soran.id, calisan.id);
+    const mixed = await createActivity(employee, { title: "Self and incoming question" });
+    await openQuestion(mixed.id, manager.id, employee.id);
+    await openQuestion(mixed.id, asker.id, employee.id);
 
-    const ikiGelen = await createActivity(calisan, { title: "İki gelen soru" });
-    await soruAc(ikiGelen.id, soran.id, calisan.id);
-    await soruAc(ikiGelen.id, ikinciSoran.id, calisan.id);
+    const twoIncoming = await createActivity(employee, { title: "Two incoming questions" });
+    await openQuestion(twoIncoming.id, asker.id, employee.id);
+    await openQuestion(twoIncoming.id, secondAsker.id, employee.id);
 
-    const viewer = { id: yonetici.id, isSystemAdmin: false };
-    const asts = await subordinateUserIds(testDb, yonetici.id);
+    const viewer = { id: manager.id, isSystemAdmin: false };
+    const subordinates = await subordinateUserIds(testDb, manager.id);
     const filters = { period: "all" as const, openQuestions: true };
-    const [metrics, liste, sayac] = await Promise.all([
-      dashboardMetrics(testDb, viewer, asts, "week", NOW),
+    const [metrics, list, count] = await Promise.all([
+      dashboardMetrics(testDb, viewer, subordinates, "week", NOW),
       listScopeActivities(testDb, viewer, filters, NOW, {
         managedOnly: true,
-        subordinates: asts,
+        subordinates,
       }),
       countScopeActivities(testDb, viewer, filters, NOW, {
         managedOnly: true,
-        subordinates: asts,
+        subordinates,
       }),
     ]);
 
     expect(metrics.openQuestions).toBe(2);
-    expect(sayac).toBe(2);
-    expect(liste.items).toHaveLength(sayac);
-    expect(new Set(liste.items.map((item) => item.id))).toEqual(
-      new Set([karisik.id, ikiGelen.id]),
+    expect(count).toBe(2);
+    expect(list.items).toHaveLength(count);
+    expect(new Set(list.items.map((item) => item.id))).toEqual(
+      new Set([mixed.id, twoIncoming.id]),
     );
   });
 
-  it("kişisel açık soru sayacı kendi sorusunu saymaz", async () => {
-    const birim = await createOrgUnit({ name: "Üretim" });
-    const calisan = await createUser(birim.id, { fullName: "Çalışan" });
-    const soran = await createUser(birim.id, { fullName: "Soran" });
+  it("excludes self-asked questions from personal open question metric", async () => {
+    const unit = await createOrgUnit({ name: "Production" });
+    const employee = await createUser(unit.id, { fullName: "Worker" });
+    const asker = await createUser(unit.id, { fullName: "Asker" });
 
-    const kendiSorusu = await createActivity(calisan, { title: "Kendi sorusu" });
-    await soruAc(kendiSorusu.id, calisan.id, soran.id);
+    const selfQuestion = await createActivity(employee, { title: "Self question" });
+    await openQuestion(selfQuestion.id, employee.id, asker.id);
 
-    const gelenSoru = await createActivity(calisan, { title: "Gelen soru" });
-    await soruAc(gelenSoru.id, soran.id, calisan.id);
+    const incomingQuestion = await createActivity(employee, { title: "Incoming question" });
+    await openQuestion(incomingQuestion.id, asker.id, employee.id);
 
-    const viewer = { id: calisan.id, isSystemAdmin: false };
+    const viewer = { id: employee.id, isSystemAdmin: false };
     const filters = { period: "all" as const, now: NOW, openQuestions: true };
-    const [metrics, liste, sayac] = await Promise.all([
+    const [metrics, list, count] = await Promise.all([
       personalDashboardMetrics(testDb, viewer, "week", NOW),
-      // Kişisel dashboard sayacı faaliyetlerim listesindeki aynı koşulu kullanır.
-      // Listeyi burada ayrıca çağırmak, count/list eşitliğini kanıtlar.
       listOwnActivities(testDb, viewer, filters),
       countOwnActivities(testDb, viewer, filters),
     ]);
 
     expect(metrics.openQuestions).toBe(1);
-    expect(liste.map((item) => item.id)).toEqual([gelenSoru.id]);
-    expect(sayac).toBe(1);
+    expect(list.map((item) => item.id)).toEqual([incomingQuestion.id]);
+    expect(count).toBe(1);
   });
 });

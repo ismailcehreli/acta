@@ -9,6 +9,8 @@ import {
   type FeedFilters,
 } from "@/server/activities/scope-feed";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocale } from "@/server/i18n/locale";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { subordinateUserIds } from "@/server/authz/visibility";
 import { prisma } from "@/server/db";
 import { resolvePageSize } from "@/server/preferences/page-size";
@@ -19,45 +21,39 @@ import { toShellUser } from "@/components/shell/shell-user";
 import { Card, CardBody } from "@/components/ui/card";
 import { Page, PageHeader } from "@/components/ui/page";
 
-// Kayıt akışı (20.08.2026'da ana ekrandan buraya taşındı).
-//
-// **Neden ayrı sayfa:** ana ekran bir özet olmalı. Kapsam akışı büyüdükçe
-// uzuyor ve bin kayıtlık bir şirkette ana ekran sonu gelmeyen bir listeye
-// dönüşüyordu; özetin kendisi ekranın dışında kalıyordu.
-//
-// **Neden imleçli sayfalama, numaralı değil:** akış canlı. Numaralı
-// (offset) sayfalamada araya yeni kayıt girdiğinde ikinci sayfa bir satır
-// atlar ya da aynı satırı tekrar gösterir — kullanıcı bunu fark etmez.
-// İmleç, "şu kayıttan sonrakiler" der ve araya kayıt girse de sıra bozulmaz.
-// Bedeli: doğrudan "sayfa 7"ye atlanamaz. Bu akış için doğru takas —
-// kullanıcı belli bir sayfayı değil, belli bir kaydı arıyor ve onun için
-// arama ekranı var.
 
-export const metadata = { title: "Kayıt akışı" };
+//
+
+
+
+//
+
+
+
+
+
+
+
+
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.feed.title");
+}
 
 function parsePeriod(value: string | undefined): FeedFilters["period"] {
   return value === "today" || value === "all" || value === "week" ? value : "week";
 }
 
-const DURUMLAR: Record<string, NonNullable<FeedFilters["status"]>> = {
-  onay: "PENDING_APPROVAL",
-  duzeltme: "CHANGES_REQUESTED",
-  reddedilen: "REJECTED",
-  iptal: "CANCELLED",
+const STATUS_FILTERS: Record<string, NonNullable<FeedFilters["status"]>> = {
+  approval: "PENDING_APPROVAL",
+  changesRequested: "CHANGES_REQUESTED",
+  rejected: "REJECTED",
+  cancelled: "CANCELLED",
 };
 
-// "soru" bir onay durumu değil, kaydın üzerindeki konuşmalara bakan ayrı bir
-// daraltma (Görev 11.2). Aynı adres parametresini paylaşırlar çünkü kullanıcı
-// için ikisi de "hangi kayıtlar" sorusunun cevabıdır.
-const SORU_DURUMU = "soru";
 
-const DURUM_ETIKETLERI: Record<string, string> = {
-  onay: "onay bekleyenler",
-  duzeltme: "düzeltme istenenler",
-  reddedilen: "uygun bulunmayanlar",
-  iptal: "iptal edilenler",
-  [SORU_DURUMU]: "cevap bekleyen faaliyetler",
-};
+
+
+const QUESTIONS_FILTER = "questions";
 
 export default async function FeedPage({
   searchParams,
@@ -67,15 +63,18 @@ export default async function FeedPage({
     authorId?: string;
     authorOrgUnitId?: string;
     targetOrgUnitId?: string;
-    durum?: string;
-    okunmamis?: string;
-    /** Sayfada kaç kayıt; seçim çerezde de hatırlanır. */
-    boyut?: string;
+    status?: string;
+    unread?: string;
+
+    pageSize?: string;
     cursor?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
 
   const params = await searchParams;
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
@@ -86,21 +85,21 @@ export default async function FeedPage({
     authorId: params.authorId || undefined,
     authorOrgUnitId: params.authorOrgUnitId || undefined,
     targetOrgUnitId: params.targetOrgUnitId || undefined,
-    status: params.durum ? DURUMLAR[params.durum] : undefined,
-    openQuestions: params.durum === SORU_DURUMU || undefined,
-    unreadOnly: params.okunmamis === "1",
+    status: params.status ? STATUS_FILTERS[params.status] : undefined,
+    openQuestions: params.status === QUESTIONS_FILTER || undefined,
+    unreadOnly: params.unread === "1",
   };
 
-  const sayfaBoyu = await resolvePageSize(params.boyut);
+  const pageSize = await resolvePageSize(params.pageSize);
   const subordinates = await subordinateUserIds(prisma, viewer.id);
 
-  const [shellUser, scope, feed, toplam, people, departments] = await Promise.all([
+  const [shellUser, scope, feed, total, people, departments] = await Promise.all([
     toShellUser(user, subordinates),
     describeScope(prisma, viewer, subordinates),
     listScopeActivities(prisma, viewer, filters, now, {
       cursor: decodeCursor(params.cursor),
       subordinates,
-      limit: sayfaBoyu,
+      limit: pageSize,
       managedOnly: true,
       order: filters.unreadOnly ? "oldest" : "newest",
     }),
@@ -116,14 +115,8 @@ export default async function FeedPage({
     }),
   ]);
 
-  /**
-   * Süzgeçleri koruyan adres üretici; sayfalama ve daraltma bunu kullanır.
-   *
-   * `cikar` ile bir süzgeç bilerek düşürülür. "Daraltmayı kaldır" bağlantısı
-   * bunu kullanmıyordu ve durumu koruyan bir adres üretiyordu: tıklamak
-   * hiçbir şeyi değiştirmiyordu (Görev 11.2'de bulundu).
-   */
-  const adres = (ek: Record<string, string> = {}, cikar: string[] = []) =>
+
+  const address = (attachment: Record<string, string> = {}, removeKeys: string[] = []) =>
     buildQueryAddress(
       "/feed",
       {
@@ -131,39 +124,56 @@ export default async function FeedPage({
         authorId: params.authorId,
         authorOrgUnitId: params.authorOrgUnitId,
         targetOrgUnitId: params.targetOrgUnitId,
-        durum: params.durum,
-        okunmamis: params.okunmamis === "1" ? "1" : undefined,
-        boyut: String(sayfaBoyu),
+        status: params.status,
+        unread: params.unread === "1" ? "1" : undefined,
+        pageSize: String(pageSize),
       },
-      ek,
-      cikar,
+      attachment,
+      removeKeys,
     );
 
   return (
     <AppShell user={shellUser}>
-      <Page isaret="akis">
+      <Page marker="feed">
         <PageHeader
-          marker="Akış"
-          title="Kayıt akışı"
+          marker={t("screens.feed.marker")}
+          title={t("screens.feed.title")}
           description={
             scope.hasScope
-              ? "Kapsamınızdaki kayıtlar, tarihine göre. Süzgeçler yalnızca daraltır; kimseye erişim açmaz."
+              ? t("screens.feed.description")
               : undefined
           }
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Kayıt akışı" }]}
+          breadcrumbs={[
+            { label: t("screens.feed.dashboard"), href: "/" },
+            { label: t("screens.feed.title") },
+          ]}
         />
 
         {scope.hasScope ? (
           <ScopeFeed
-            label={scope.label}
+            locale={locale}
+            t={t}
+            label={t(scope.label)}
             items={feed.items}
-            totalCount={toplam}
-            pageSize={sayfaBoyu}
-            statusLabel={params.durum ? DURUM_ETIKETLERI[params.durum] : null}
-            clearStatusHref={adres({}, ["durum"])}
+            totalCount={total}
+            pageSize={pageSize}
+            statusLabel={
+              params.status === "approval"
+                ? t("screens.feed.approval")
+                : params.status === "changesRequested"
+                  ? t("screens.feed.changesRequested")
+                  : params.status === "rejected"
+                    ? t("screens.feed.rejected")
+                    : params.status === "cancelled"
+                      ? t("screens.feed.cancelled")
+                      : params.status === QUESTIONS_FILTER
+                        ? t("screens.feed.questions")
+                        : null
+            }
+            clearStatusHref={address({}, ["status"])}
             unreadOnly={filters.unreadOnly}
-            unreadHref={adres({ period: "all", okunmamis: "1" }, ["cursor"])}
-            clearUnreadHref={adres({}, ["okunmamis", "cursor"])}
+            unreadHref={address({ period: "all", unread: "1" }, ["cursor"])}
+            clearUnreadHref={address({}, ["unread", "cursor"])}
             personCount={scope.personCount}
             unreadCount={shellUser.unreadCount}
             filters={{ people, departments }}
@@ -174,21 +184,19 @@ export default async function FeedPage({
               authorOrgUnitId: params.authorOrgUnitId ?? "",
               targetOrgUnitId: params.targetOrgUnitId ?? "",
             }}
-            // Devamı varsa adresi verilir; liste sessizce kesilmez.
+
             nextPageHref={
-              feed.nextCursor ? adres({ cursor: encodeCursor(feed.nextCursor) }) : null
+              feed.nextCursor ? address({ cursor: encodeCursor(feed.nextCursor) }) : null
             }
-            // İmleçli sayfalamada "önceki" yoktur; başa dönüş vardır.
-            // Tarayıcının geri düğmesi bir önceki sayfayı zaten getiriyor.
-            firstPageHref={params.cursor ? adres() : null}
+
+
+            firstPageHref={params.cursor ? address() : null}
           />
         ) : (
           <Card>
             <CardBody>
               <p className="text-[length:var(--text-sm)] text-muted">
-                Bu ekranda kendi kayıtlarınızı görürsünüz. Başkalarının
-                faaliyetleri, yalnızca organizasyonda sizin altınızda kalan
-                kişilere aitse görünür.
+                {t("screens.feed.noScope")}
               </p>
             </CardBody>
           </Card>

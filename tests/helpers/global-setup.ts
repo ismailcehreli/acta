@@ -4,14 +4,14 @@ import { assertTestDatabaseUrl } from "./assert-test-database";
 import { prepareTestDatabase } from "./prepare-test-database";
 import { assertSentinelPresent, isRequiredSchemaPresent } from "./test-db";
 
-// Test koşusu başlamadan önce test veritabanına migration'lar uygulanır.
-// Böylece "şema güncel mi" sorusu testin kendi sorunu olmaz; şema her koşuda
-// migration dosyalarından kurulur — üretimde çalışacak olanın aynısı.
+
+
+
 //
-// Sıra `prepare-test-database.ts` içinde tanımlı ve orada sınanıyor: adres,
-// işaret, migration. İşaret **doğrulanır, oluşturulmaz** — test süreci onu
-// kendisi yaratırsa bağımsız bir kanıt olmaz; işareti veritabanı kurulumu
-// koyar (docker/postgres-init/02-test-sentinel.sh).
+
+
+
+// creates it (docker/postgres-init/02-test-sentinel.sh).
 
 export default async function setup(): Promise<void> {
   await prepareTestDatabase({

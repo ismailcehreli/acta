@@ -14,13 +14,11 @@ import {
 import { createActivity, createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Takip maddeleri (§11).
-//
-// Üç şey kritik:
-//   1. Görünürlük — göremediğin faaliyetin maddesi sana görünmez.
-//   2. Kapanış notu zorunlu — Excel'de ölen Açık/Kapalı sütununu yeniden
-//      üretmemek için.
-//   3. Bir faaliyetin aynı anda tek açık maddesi olur.
+// Follow-up items tests.
+// Invariants:
+//   1. Visibility — an item is never visible if the underlying activity is not visible.
+//   2. Closing note is required.
+//   3. An activity has at most one open follow-up item at any time.
 
 const NOW = new Date("2026-08-19T09:00:00.000Z");
 
@@ -32,241 +30,237 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const kok = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const gm = await createOrgUnit({ name: "Genel Müdürlük", parentId: kok.id });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: gm.id });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: gm.id });
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
+  const executive = await createOrgUnit({ name: "Executive Management", parentId: root.id });
+  const tooling = await createOrgUnit({ name: "Tooling", parentId: executive.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: executive.id });
 
-  const genelMudur = await createUser(gm.id, {
-    fullName: "Genel Müdür",
+  const ceo = await createUser(executive.id, {
+    fullName: "Chief Executive",
     isUnitManager: true,
   });
-  const mudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const manager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const calisan = await createUser(kaliphane.id, { fullName: "Kadir Usta" });
-  const akran = await createUser(planlama.id, {
-    fullName: "Planlama Müdürü",
+  const employee = await createUser(tooling.id, { fullName: "Worker" });
+  const peerManager = await createUser(planning.id, {
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
 
-  return { genelMudur, mudur, calisan, akran };
+  return { ceo, manager, employee, peerManager };
 }
 
-const bakan = (id: string) => ({ id, isSystemAdmin: false });
+const viewer = (id: string) => ({ id, isSystemAdmin: false });
 
-async function onaylanmisKayit(
-  yazan: { id: string; orgUnitId: string },
-  baslik = "Kalıp bakımı",
+async function createApprovedActivity(
+  author: { id: string; orgUnitId: string },
+  title = "Tooling maintenance",
 ) {
-  return createActivity(yazan, { title: baslik, approvalStatus: "APPROVED" });
+  return createActivity(author, { title, approvalStatus: "APPROVED" });
 }
 
-describe("açma", () => {
-  it("kayıt sahibi takip açar ve sahibi olur", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
+describe("opening follow-ups", () => {
+  it("author can open follow-up and becomes its owner", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
 
-    const sonuc = await openFollowUp(
+    const result = await openFollowUp(
       testDb,
-      bakan(calisan.id),
-      { activityId: activity.id, nextStep: "Parça gelince haber ver" },
+      viewer(employee.id),
+      { activityId: activity.id, nextStep: "Notify when parts arrive" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.item.ownerId).toBe(calisan.id);
-    expect(sonuc.item.nextStep).toBe("Parça gelince haber ver");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.item.ownerId).toBe(employee.id);
+    expect(result.item.nextStep).toBe("Notify when parts arrive");
 
-    // Olay geçmişi tutuluyor (§16.4): madde boolean değil.
-    const olaylar = await testDb.followUpItemEvent.findMany({
-      where: { followUpId: sonuc.item.id },
+    const events = await testDb.followUpItemEvent.findMany({
+      where: { followUpId: result.item.id },
     });
-    expect(olaylar.map((olay) => olay.kind)).toEqual(["OPENED"]);
+    expect(events.map((e) => e.kind)).toEqual(["OPENED"]);
   });
 
-  it("faaliyeti göremeyen takip açamaz", async () => {
-    const { calisan, akran } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
+  it("user who cannot view activity cannot open follow-up", async () => {
+    const { employee, peerManager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
 
-    const sonuc = await openFollowUp(
+    const result = await openFollowUp(
       testDb,
-      bakan(akran.id),
+      viewer(peerManager.id),
       { activityId: activity.id },
       NOW,
     );
 
-    // Kaydın varlığı da bildirilmez.
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("activity_not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("activity_not_found");
   });
 
-  it("bir faaliyetin ikinci açık maddesi olmaz", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    await openFollowUp(testDb, bakan(calisan.id), { activityId: activity.id }, NOW);
+  it("an activity cannot have two open follow-ups concurrently", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    await openFollowUp(testDb, viewer(employee.id), { activityId: activity.id }, NOW);
 
-    const ikinci = await openFollowUp(
+    const second = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
 
-    // İki açık madde "bu konu kapandı mı" sorusunu cevapsız bırakırdı.
-    expect(ikinci.ok).toBe(false);
-    if (ikinci.ok) return;
-    expect(ikinci.error).toBe("already_open");
+    expect(second.ok).toBe(false);
+    if (second.ok) return;
+    expect(second.error).toBe("already_open");
   });
 
-  it("iptal edilmiş faaliyete takip açılamaz", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
+  it("cannot open follow-up on cancelled activity", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
     await cancelActivity(
       testDb,
-      { id: calisan.id, isSystemAdmin: false },
+      { id: employee.id, isSystemAdmin: false },
       activity.id,
-      "Yanlış girildi.",
+      "Entered incorrectly.",
       NOW,
     );
 
-    const sonuc = await openFollowUp(
+    const result = await openFollowUp(
       testDb,
-      bakan(mudur.id),
+      viewer(manager.id),
       { activityId: activity.id },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("activity_closed");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("activity_closed");
   });
 });
 
-describe("kapatma", () => {
-  it("notsuz kapatılamaz", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+describe("closing follow-ups", () => {
+  it("cannot close without a closing note", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const sonuc = await closeFollowUp(testDb, bakan(calisan.id), acilan.item.id, "   ", NOW);
+    const result = await closeFollowUp(testDb, viewer(employee.id), opened.item.id, "   ", NOW);
 
-    // Kapatmanın bedeli yoksa herkes kapatır ve kimse ne olduğunu bilmez.
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("note_required");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("note_required");
   });
 
-  it("sahibi notuyla kapatır; not kayıtta kalır", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+  it("owner closes with note; note is preserved", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const sonuc = await closeFollowUp(
+    const result = await closeFollowUp(
       testDb,
-      bakan(calisan.id),
-      acilan.item.id,
-      "Parça geldi, 22 Ağustos'ta takıldı.",
+      viewer(employee.id),
+      opened.item.id,
+      "Parts received and installed on August 22.",
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    const kayit = await testDb.followUpItem.findUniqueOrThrow({
-      where: { id: acilan.item.id },
+    expect(result.ok).toBe(true);
+    const record = await testDb.followUpItem.findUniqueOrThrow({
+      where: { id: opened.item.id },
     });
-    expect(kayit.status).toBe("CLOSED");
-    expect(kayit.closingNote).toContain("22 Ağustos");
-    expect(kayit.closedById).toBe(calisan.id);
+    expect(record.status).toBe("CLOSED");
+    expect(record.closingNote).toContain("August 22");
+    expect(record.closedById).toBe(employee.id);
   });
 
-  it("sahibinin üstü de kapatabilir", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+  it("owner's manager can also close the item", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const sonuc = await closeFollowUp(
+    const result = await closeFollowUp(
       testDb,
-      bakan(mudur.id),
-      acilan.item.id,
-      "Konu bende kapandı.",
+      viewer(manager.id),
+      opened.item.id,
+      "Resolved at manager level.",
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
-  it("ilgisiz kişi kapatamaz", async () => {
-    const { calisan, akran } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+  it("unrelated user cannot close the item", async () => {
+    const { employee, peerManager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const sonuc = await closeFollowUp(
+    const result = await closeFollowUp(
       testDb,
-      bakan(akran.id),
-      acilan.item.id,
-      "Ben kapatıyorum.",
+      viewer(peerManager.id),
+      opened.item.id,
+      "Closing attempt.",
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("not_allowed");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("not_allowed");
   });
 
-  it("kapalı madde gerekçeyle yeniden açılır", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+  it("closed item can be reopened with a reason note", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
-    await closeFollowUp(testDb, bakan(calisan.id), acilan.item.id, "Kapandı.", NOW);
+    if (!opened.ok) throw new Error("Setup failed");
+    await closeFollowUp(testDb, viewer(employee.id), opened.item.id, "Closed.", NOW);
 
-    const sonuc = await reopenFollowUp(
+    const result = await reopenFollowUp(
       testDb,
-      bakan(calisan.id),
-      acilan.item.id,
-      "Parça bozuk çıktı.",
+      viewer(employee.id),
+      opened.item.id,
+      "Defect resurfaced.",
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    const olaylar = await testDb.followUpItemEvent.findMany({
-      where: { followUpId: acilan.item.id },
+    expect(result.ok).toBe(true);
+    const events = await testDb.followUpItemEvent.findMany({
+      where: { followUpId: opened.item.id },
       orderBy: { createdAt: "asc" },
     });
-    expect(olaylar.map((olay) => olay.kind)).toEqual([
+    expect(events.map((e) => e.kind)).toEqual([
       "OPENED",
       "CLOSED",
       "REOPENED",
@@ -274,179 +268,173 @@ describe("kapatma", () => {
   });
 });
 
-describe("devir", () => {
-  it("faaliyeti göremeyen kişiye devredilemez", async () => {
-    const { calisan, akran } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+describe("transferring ownership", () => {
+  it("cannot transfer to user who cannot view the activity", async () => {
+    const { employee, peerManager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const sonuc = await transferFollowUp(
+    const result = await transferFollowUp(
       testDb,
-      bakan(calisan.id),
-      acilan.item.id,
-      akran.id,
+      viewer(employee.id),
+      opened.item.id,
+      peerManager.id,
       NOW,
     );
 
-    // Takip edemeyeceği bir iş üstlenmiş olurdu.
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("owner_cannot_see");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("owner_cannot_see");
   });
 
-  it("kapsamdaki kişiye devredilir ve iz bırakır", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+  it("transfers to eligible user and records audit trail", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const sonuc = await transferFollowUp(
+    const result = await transferFollowUp(
       testDb,
-      bakan(calisan.id),
-      acilan.item.id,
-      mudur.id,
+      viewer(employee.id),
+      opened.item.id,
+      manager.id,
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.item.ownerId).toBe(mudur.id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.item.ownerId).toBe(manager.id);
 
-    const iz = await testDb.auditLog.findFirst({
+    const log = await testDb.auditLog.findFirst({
       where: {
-        objectId: acilan.item.id,
+        objectId: opened.item.id,
         action: AUDIT_ACTIONS.followUpTransferred,
       },
     });
-    expect(iz).not.toBeNull();
+    expect(log).not.toBeNull();
   });
 });
 
-describe("son hareket", () => {
-  it("faaliyete soru gelince hareketsizlik sayacı sıfırlanır", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+describe("recent movement updates", () => {
+  it("resets idle timer when question is asked on activity", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const sonra = new Date("2026-08-25T09:00:00.000Z");
+    const later = new Date("2026-08-25T09:00:00.000Z");
     await askQuestion(
       testDb,
-      { id: mudur.id, isSystemAdmin: false },
-      { activityId: activity.id, text: "Bu ne durumda?" },
-      sonra,
+      { id: manager.id, isSystemAdmin: false },
+      { activityId: activity.id, text: "What is the status?" },
+      later,
     );
 
-    const kayit = await testDb.followUpItem.findUniqueOrThrow({
-      where: { id: acilan.item.id },
+    const record = await testDb.followUpItem.findUniqueOrThrow({
+      where: { id: opened.item.id },
     });
-    // Konuşma sürüyorsa konu ölü değildir (§11.1).
-    expect(kayit.lastMovedAt.toISOString()).toBe(sonra.toISOString());
+    expect(record.lastMovedAt.toISOString()).toBe(later.toISOString());
   });
 });
 
-describe("iptal yan etkisi", () => {
-  it("faaliyet iptal edilince açık madde otomatik kapanır", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+describe("cancellation side effect", () => {
+  it("open item is automatically closed when activity is cancelled", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
     await cancelActivity(
       testDb,
-      { id: calisan.id, isSystemAdmin: false },
+      { id: employee.id, isSystemAdmin: false },
       activity.id,
-      "Yanlış girildi.",
+      "Entered incorrectly.",
       NOW,
     );
 
-    const kayit = await testDb.followUpItem.findUniqueOrThrow({
-      where: { id: acilan.item.id },
+    const record = await testDb.followUpItem.findUniqueOrThrow({
+      where: { id: opened.item.id },
     });
-    // Açık bırakmak, kimsenin kapatamayacağı bir madde üretirdi.
-    expect(kayit.status).toBe("CLOSED");
-    expect(kayit.closingNote).toBe("Faaliyet iptal edildi.");
+    expect(record.status).toBe("CLOSED");
+    expect(record.closingNote).toBe("Activity cancelled.");
   });
 });
 
-describe("listeleme ve görünürlük", () => {
-  it("göremediği faaliyetin maddesi listede yok", async () => {
-    const { calisan, akran } = await sirket();
-    const activity = await onaylanmisKayit(calisan, "Gizli konu");
-    await openFollowUp(testDb, bakan(calisan.id), { activityId: activity.id }, NOW);
+describe("listing and visibility", () => {
+  it("item is not listed for user who cannot view activity", async () => {
+    const { employee, peerManager } = await setupCompany();
+    const activity = await createApprovedActivity(employee, "Confidential task");
+    await openFollowUp(testDb, viewer(employee.id), { activityId: activity.id }, NOW);
 
-    const liste = await listFollowUps(testDb, bakan(akran.id), NOW);
+    const list = await listFollowUps(testDb, viewer(peerManager.id), NOW);
 
-    // Başlık ve "sonraki adım" metni de içerik taşır.
-    expect(liste.items).toHaveLength(0);
+    expect(list.items).toHaveLength(0);
   });
 
-  it("yöneticinin kapsamındaki madde listede", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    await openFollowUp(testDb, bakan(calisan.id), { activityId: activity.id }, NOW);
+  it("item appears in manager's list", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    await openFollowUp(testDb, viewer(employee.id), { activityId: activity.id }, NOW);
 
-    const liste = await listFollowUps(testDb, bakan(mudur.id), NOW);
+    const list = await listFollowUps(testDb, viewer(manager.id), NOW);
 
-    expect(liste.items).toHaveLength(1);
-    // Sahibi bakan kişi değil; sahiplik satırın kendi alanında duruyor.
-    expect(liste.items[0]?.ownerId).not.toBe(mudur.id);
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]?.ownerId).not.toBe(manager.id);
   });
 
-  it("hareketsiz madde işaretlenir", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+  it("flags stale items with idle business days", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       new Date("2026-08-05T09:00:00.000Z"),
     );
-    if (!acilan.ok) throw new Error("kurulum");
+    if (!opened.ok) throw new Error("Setup failed");
 
-    const liste = await listFollowUps(testDb, bakan(calisan.id), NOW);
+    const list = await listFollowUps(testDb, viewer(employee.id), NOW);
 
-    // Hareketsizlik artık ayrı liste değil, satırın kendi alanı (Görev 11.3).
-    expect(liste.items).toHaveLength(1);
-    expect(liste.items[0]?.stale).toBe(true);
-    expect(liste.items[0]?.idleBusinessDays).toBeGreaterThanOrEqual(5);
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]?.stale).toBe(true);
+    expect(list.items[0]?.idleBusinessDays).toBeGreaterThanOrEqual(5);
   });
 
-  it("kapanan madde listeden düşer", async () => {
-    const { calisan } = await sirket();
-    const activity = await onaylanmisKayit(calisan);
-    const acilan = await openFollowUp(
+  it("closed item is excluded from active list", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createApprovedActivity(employee);
+    const opened = await openFollowUp(
       testDb,
-      bakan(calisan.id),
+      viewer(employee.id),
       { activityId: activity.id },
       NOW,
     );
-    if (!acilan.ok) throw new Error("kurulum");
-    await closeFollowUp(testDb, bakan(calisan.id), acilan.item.id, "Bitti.", NOW);
+    if (!opened.ok) throw new Error("Setup failed");
+    await closeFollowUp(testDb, viewer(employee.id), opened.item.id, "Done.", NOW);
 
-    const liste = await listFollowUps(testDb, bakan(calisan.id), NOW);
+    const list = await listFollowUps(testDb, viewer(employee.id), NOW);
 
-    expect(liste.items).toHaveLength(0);
+    expect(list.items).toHaveLength(0);
   });
 });

@@ -8,14 +8,12 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Bölüm müdürünün işlevsel yetkisi (Görev 11.7).
+// Unit Manager Administrative Permissions
 //
-// Yetki **kendi alt ağacıyla** sınırlıdır ve §15.1'deki ayrımı korur: işlevsel
-// yetki içerik erişimi vermez. Müdür zaten kendi ekibinin faaliyetlerini
-// görüyor; bu yetki yalnız kullanıcı kaydı üzerinde işlem açıyor.
+// Authority is strictly bounded to the manager's subtree and preserves the §15.1
+// distinction: functional management permissions do not expand content visibility.
 //
-// Sınanan asıl şey **sınırın kendisi**: müdür kendi ağacının dışına çıkamaz
-// ve kimseye yetki dağıtamaz.
+// Managers cannot manage entities outside their subtree or escalate permissions.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -25,146 +23,141 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const kok = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const uretim = await createOrgUnit({ name: "Üretim", parentId: kok.id });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: uretim.id });
-  const boyahane = await createOrgUnit({ name: "Boyahane", parentId: uretim.id });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: kok.id });
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company Root", type: "Root" });
+  const production = await createOrgUnit({ name: "Production", parentId: root.id });
+  const workshop = await createOrgUnit({ name: "Workshop", parentId: production.id });
+  const paintShop = await createOrgUnit({ name: "Paint Shop", parentId: production.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: root.id });
 
-  const gm = await createUser(kok.id, { fullName: "Genel Müdür", isUnitManager: true });
-  const uretimMudur = await createUser(uretim.id, {
-    fullName: "Üretim Müdürü",
+  const gm = await createUser(root.id, { fullName: "General Manager", isUnitManager: true });
+  const productionManager = await createUser(production.id, {
+    fullName: "Production Manager",
     isUnitManager: true,
   });
-  const kaliphaneMudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const workshopManager = await createUser(workshop.id, {
+    fullName: "Workshop Manager",
     isUnitManager: true,
   });
-  const kadir = await createUser(kaliphane.id, { fullName: "Kadir Usta" });
-  const boyaci = await createUser(boyahane.id, { fullName: "Boyacı" });
-  const planlamaci = await createUser(planlama.id, { fullName: "Planlamacı" });
-  const admin = await createUser(kok.id, {
-    fullName: "Sistem Yöneticisi",
+  const craftsman = await createUser(workshop.id, { fullName: "Senior Craftsman" });
+  const painter = await createUser(paintShop.id, { fullName: "Painter" });
+  const planner = await createUser(planning.id, { fullName: "Planner" });
+  const admin = await createUser(root.id, {
+    fullName: "System Admin",
     isSystemAdmin: true,
   });
 
   return {
-    birimler: { kok, uretim, kaliphane, boyahane, planlama },
+    units: { root, production, workshop, paintShop, planning },
     gm,
-    uretimMudur,
-    kaliphaneMudur,
-    kadir,
-    boyaci,
-    planlamaci,
+    productionManager,
+    workshopManager,
+    craftsman,
+    painter,
+    planner,
     admin,
   };
 }
 
-describe("yönetilebilir birimler", () => {
-  it("müdür kendi birimini ve altını yönetir", async () => {
-    const { birimler, uretimMudur } = await sirket();
+describe("manageable units", () => {
+  it("manager manages their own unit and all descendant units", async () => {
+    const { units, productionManager } = await setupCompany();
 
-    const idler = await manageableUnitIds(testDb, uretimMudur.id);
+    const unitIds = await manageableUnitIds(testDb, productionManager.id);
 
-    expect(new Set(idler)).toEqual(
-      new Set([birimler.uretim.id, birimler.kaliphane.id, birimler.boyahane.id]),
+    expect(new Set(unitIds)).toEqual(
+      new Set([units.production.id, units.workshop.id, units.paintShop.id]),
     );
   });
 
-  it("kardeş birim listede yok", async () => {
-    const { birimler, uretimMudur } = await sirket();
+  it("sibling unit is not in manageable list", async () => {
+    const { units, productionManager } = await setupCompany();
 
-    const idler = await manageableUnitIds(testDb, uretimMudur.id);
+    const unitIds = await manageableUnitIds(testDb, productionManager.id);
 
-    expect(idler).not.toContain(birimler.planlama.id);
+    expect(unitIds).not.toContain(units.planning.id);
   });
 
-  it("üst birim listede yok", async () => {
-    const { birimler, kaliphaneMudur } = await sirket();
+  it("parent unit is not in manageable list", async () => {
+    const { units, workshopManager } = await setupCompany();
 
-    const idler = await manageableUnitIds(testDb, kaliphaneMudur.id);
+    const unitIds = await manageableUnitIds(testDb, workshopManager.id);
 
-    expect(idler).toEqual([birimler.kaliphane.id]);
+    expect(unitIds).toEqual([units.workshop.id]);
   });
 
-  it("yönetici olmayan kullanıcının listesi boş", async () => {
-    const { kadir } = await sirket();
+  it("non-manager user has empty manageable units list", async () => {
+    const { craftsman } = await setupCompany();
 
-    expect(await manageableUnitIds(testDb, kadir.id)).toEqual([]);
+    expect(await manageableUnitIds(testDb, craftsman.id)).toEqual([]);
   });
 
-  it("sistem yöneticisi bütün aktif birimleri yönetir", async () => {
-    const { birimler, admin } = await sirket();
+  it("system admin manages all active units", async () => {
+    const { units, admin } = await setupCompany();
 
-    const idler = await manageableUnitIds(testDb, admin.id);
+    const unitIds = await manageableUnitIds(testDb, admin.id);
 
-    expect(new Set(idler)).toEqual(new Set(Object.values(birimler).map((b) => b.id)));
+    expect(new Set(unitIds)).toEqual(new Set(Object.values(units).map((u) => u.id)));
   });
 });
 
-describe("kullanıcı yönetme yetkisi", () => {
-  it("müdür kendi ağacındaki çalışanı yönetir", async () => {
-    const { uretimMudur, kadir } = await sirket();
+describe("user management permission", () => {
+  it("manager can manage an employee in their subtree", async () => {
+    const { productionManager, craftsman } = await setupCompany();
 
-    expect(await canManageUser(testDb, uretimMudur.id, kadir.id)).toBe(true);
+    expect(await canManageUser(testDb, productionManager.id, craftsman.id)).toBe(true);
   });
 
-  it("müdür kardeş ağaçtaki kişiyi yönetemez", async () => {
-    const { uretimMudur, planlamaci } = await sirket();
+  it("manager cannot manage a user in a sibling tree", async () => {
+    const { productionManager, planner } = await setupCompany();
 
-    expect(await canManageUser(testDb, uretimMudur.id, planlamaci.id)).toBe(false);
+    expect(await canManageUser(testDb, productionManager.id, planner.id)).toBe(false);
   });
 
-  it("müdür üstündeki kişiyi yönetemez", async () => {
-    const { kaliphaneMudur, gm } = await sirket();
+  it("manager cannot manage a user above them in the tree", async () => {
+    const { workshopManager, gm } = await setupCompany();
 
-    expect(await canManageUser(testDb, kaliphaneMudur.id, gm.id)).toBe(false);
+    expect(await canManageUser(testDb, workshopManager.id, gm.id)).toBe(false);
   });
 
-  // Kendi hesabını yönetim ekranından değiştirmek, kendi yetkisini kaldırma
-  // ya da kendini kilitleme yollarını açardı; profil ekranı bunun için var.
-  it("müdür kendi hesabını bu yoldan yönetemez", async () => {
-    const { uretimMudur } = await sirket();
+  it("manager cannot manage their own account via administrative endpoint", async () => {
+    const { productionManager } = await setupCompany();
 
-    expect(await canManageUser(testDb, uretimMudur.id, uretimMudur.id)).toBe(false);
+    expect(await canManageUser(testDb, productionManager.id, productionManager.id)).toBe(false);
   });
 
-  it("yönetici olmayan kimseyi yönetemez", async () => {
-    const { kadir, boyaci } = await sirket();
+  it("non-manager cannot manage any user", async () => {
+    const { craftsman, painter } = await setupCompany();
 
-    expect(await canManageUser(testDb, kadir.id, boyaci.id)).toBe(false);
+    expect(await canManageUser(testDb, craftsman.id, painter.id)).toBe(false);
   });
 
-  it("sistem yöneticisi herkesi yönetir", async () => {
-    const { admin, planlamaci } = await sirket();
+  it("system admin can manage any user", async () => {
+    const { admin, planner } = await setupCompany();
 
-    expect(await canManageUser(testDb, admin.id, planlamaci.id)).toBe(true);
+    expect(await canManageUser(testDb, admin.id, planner.id)).toBe(true);
   });
 
-  it("root hesabı diğer sistem yöneticilerine bile kapalıdır", async () => {
-    const { birimler, admin } = await sirket();
-    const root = await createUser(birimler.kok.id, {
-      fullName: "Ana Hesap",
-      email: "root@ornek.test",
+  it("root account is protected even from other system admins", async () => {
+    const { units, admin } = await setupCompany();
+    const rootUser = await createUser(units.root.id, {
+      fullName: "Root Account",
+      email: "root@example.test",
       isSystemAdmin: true,
       isRoot: true,
     });
 
-    expect(await canManageUser(testDb, admin.id, root.id)).toBe(false);
-    expect(await canManageUser(testDb, root.id, admin.id)).toBe(true);
+    expect(await canManageUser(testDb, admin.id, rootUser.id)).toBe(false);
+    expect(await canManageUser(testDb, rootUser.id, admin.id)).toBe(true);
   });
 
-  // Ağaçta alt kademede olsa bile sistem yöneticisi hesabına dokunulmamalı:
-  // işlevsel yetkiyi bir bölüm müdürünün eline bırakmak, yetki modelinin
-  // tamamını atlatmanın kısa yolu olurdu.
-  it("müdür kendi ağacındaki sistem yöneticisini yönetemez", async () => {
-    const { birimler, uretimMudur } = await sirket();
-    const altAdmin = await createUser(birimler.kaliphane.id, {
-      fullName: "Ağaçtaki Yönetici",
+  it("manager cannot manage a system admin located in their subtree", async () => {
+    const { units, productionManager } = await setupCompany();
+    const subordinateAdmin = await createUser(units.workshop.id, {
+      fullName: "Subordinate Admin",
       isSystemAdmin: true,
     });
 
-    expect(await canManageUser(testDb, uretimMudur.id, altAdmin.id)).toBe(false);
+    expect(await canManageUser(testDb, productionManager.id, subordinateAdmin.id)).toBe(false);
   });
 });

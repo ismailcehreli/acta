@@ -12,15 +12,10 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §8.2 yetki matrisinin **Sürüm 1'de uygulanan** her hücresi ayrı ayrı sınanır:
-// yazan, üst zincir ve sistem yöneticisi sütunları. "Aktif onaylayıcı" sütunu
-// bu sürümde uygulanmadı (onay görevi tablosu açılmadı, §18.2) ve burada
-// **test edilmiş sayılmaz**; o sütunun hücreleri Sürüm 2'de yazılacak. Sürüm
-// 1'de onaya tabi birimde faaliyet girişi reddedildiği için ilgili durumlar
-// hiç oluşmuyor.
+// §8.2 Permission Matrix Tests
 //
-// Bu suite her CI koşusunda çalışır; kırıldığında yapılacak tek şey kodu
-// düzeltmektir. Sızıntı toleransı sıfırdır (§18.4).
+// Tests author, supervisor chain, and system administrator columns.
+// Zero tolerance for authorization leaks (§18.4).
 
 beforeEach(async () => {
   await resetDatabase();
@@ -31,44 +26,44 @@ afterAll(async () => {
 });
 
 /**
- * Üç kademeli örnek ağaç:
+ * Three-tier sample hierarchy:
  *
- *   Genel Müdürlük ── GM (birim yöneticisi)
- *     └─ Üretim Direktörlüğü ── Direktör
- *          ├─ Kalıphane ── Müdür + Çalışan
- *          └─ Planlama  ── Akran Müdür
+ *   General Directorate ── GM (unit manager)
+ *     └─ Operations Directorate ── Director
+ *          ├─ Workshop ── Manager + Worker
+ *          └─ Planning ── Peer Manager
  *
- *   Bilgi İşlem ── Sistem Yöneticisi (ağaçta kimsenin üstünde değil)
+ *   IT Dept ── System Admin (not supervisor of anyone in hierarchy)
  */
 async function buildTree() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
+  const root = await createOrgUnit({ name: "General Directorate", type: "Root" });
   const directorate = await createOrgUnit({
-    name: "Üretim Direktörlüğü",
+    name: "Operations Directorate",
     parentId: root.id,
   });
-  const moldShop = await createOrgUnit({ name: "Kalıphane", parentId: directorate.id });
-  const planning = await createOrgUnit({ name: "Planlama", parentId: directorate.id });
-  const it = await createOrgUnit({ name: "Bilgi İşlem", parentId: root.id });
+  const moldShop = await createOrgUnit({ name: "Workshop", parentId: directorate.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: directorate.id });
+  const it = await createOrgUnit({ name: "IT Dept", parentId: root.id });
 
   const generalManager = await createUser(root.id, {
-    fullName: "Genel Müdür",
+    fullName: "General Manager",
     isUnitManager: true,
   });
   const director = await createUser(directorate.id, {
-    fullName: "Direktör",
+    fullName: "Director",
     isUnitManager: true,
   });
   const manager = await createUser(moldShop.id, {
-    fullName: "Kalıphane Müdürü",
+    fullName: "Workshop Manager",
     isUnitManager: true,
   });
-  const worker = await createUser(moldShop.id, { fullName: "Kalıphane Çalışanı" });
+  const worker = await createUser(moldShop.id, { fullName: "Workshop Worker" });
   const peer = await createUser(planning.id, {
-    fullName: "Planlama Müdürü",
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
   const sysAdmin = await createUser(it.id, {
-    fullName: "Sistem Yöneticisi",
+    fullName: "System Admin",
     isSystemAdmin: true,
   });
 
@@ -84,75 +79,64 @@ async function buildTree() {
 }
 
 /**
- * Onay sürecindeki kaydın onaylayıcısı olmak **zorundadır** (veritabanı kısıtı
- * `Activity_approver_required_in_approval`). Test verisi de bu kurala uyar;
- * uymayan veri üretmek, üretimde imkânsız bir durumu sınamak olurdu.
+ * Creates activity adhering to database constraints.
  */
 async function writeActivity(
   author: { id: string; orgUnitId: string },
   status: ActivityApprovalStatus,
-  title = "Faaliyet",
+  title = "Activity",
   approverId?: string,
 ) {
-  const onayGerekir =
+  const requiresApproval =
     status === "PENDING_APPROVAL" ||
     status === "CHANGES_REQUESTED" ||
     status === "REJECTED";
 
-  // Yöneticisi olmayan kişi için bu durumlar üretimde de doğamaz: §4.4
-  // çözülemezse kayıt MANAGER_NOT_FOUND olur. Test verisi de öyle davranır.
-  const onaylayanId = onayGerekir
-    ? (approverId ?? (await onaylayiciVarsa(author.id)))
+  const resolvedApproverId = requiresApproval
+    ? (approverId ?? (await resolveApproverIfExists(author.id)))
     : null;
 
-  if (onayGerekir && onaylayanId === null) {
+  if (requiresApproval && resolvedApproverId === null) {
     return testDb.activity.create({
       data: {
         authorId: author.id,
         authorOrgUnitId: author.orgUnitId,
         activityDate: new Date("2026-08-17T00:00:00.000Z"),
         title,
-        description: "GIZLI ICERIK",
+        description: "CONFIDENTIAL CONTENT",
         approvalStatus: "MANAGER_NOT_FOUND",
       },
     });
   }
 
-  const kayit = await testDb.activity.create({
+  const activity = await testDb.activity.create({
     data: {
       authorId: author.id,
       authorOrgUnitId: author.orgUnitId,
       activityDate: new Date("2026-08-17T00:00:00.000Z"),
       title,
-      description: "GIZLI ICERIK",
+      description: "CONFIDENTIAL CONTENT",
       approvalStatus: status,
-      approverId: onaylayanId,
-      ...(await gerekceAlanlari(status)),
+      approverId: resolvedApproverId,
+      ...(await reasonFields(status)),
     },
   });
 
-  // Uygun onaylayıcılar listesi gerçek yazma yolunda kayıtla birlikte
-  // doğuyor (20.08.2026: birimde birden fazla müdür olabilir). Test verisi
-  // de öyle davranmalı, yoksa görünürlük sorgusu üretimden farklı çalışır.
-  if (onaylayanId) {
+  if (resolvedApproverId) {
     await testDb.activityApprover.create({
-      data: { activityId: kayit.id, userId: onaylayanId },
+      data: { activityId: activity.id, userId: resolvedApproverId },
     });
   }
 
-  return kayit;
+  return activity;
 }
 
-/**
- * Gerekçe alanları. "Düzeltme istendi" ve "reddedildi" durumlarında kategori
- * **zorunludur** (veritabanı kısıtı); test verisi de gerçek kurala uyar.
- */
-async function gerekceAlanlari(status: ActivityApprovalStatus) {
+async function reasonFields(status: ActivityApprovalStatus) {
   if (status !== "CHANGES_REQUESTED" && status !== "REJECTED") return {};
 
   const reason = await testDb.approvalReason.upsert({
-    where: { kind_label: { kind: status, label: "Test gerekçesi" } },
-    create: { kind: status, label: "Test gerekçesi" },
+    where: { kind_label: { kind: status, label: "Test reason" } },
+    create: { kind: status, label: "Test reason" },
     update: {},
   });
 
@@ -162,11 +146,10 @@ async function gerekceAlanlari(status: ActivityApprovalStatus) {
   } as const;
 }
 
-/** §4.4'ün çözdüğü yönetici; kısıtı sağlamak için gerçek kural kullanılır. */
-async function onaylayiciVarsa(userId: string): Promise<string | null> {
+async function resolveApproverIfExists(userId: string): Promise<string | null> {
   const { resolveManager } = await import("@/server/org/resolve-manager");
-  const sonuc = await resolveManager(testDb, userId);
-  return sonuc.found ? sonuc.managerId : null;
+  const result = await resolveManager(testDb, userId);
+  return result.found ? result.managerId : null;
 }
 
 const ALL_STATUSES: ActivityApprovalStatus[] = [
@@ -179,12 +162,12 @@ const ALL_STATUSES: ActivityApprovalStatus[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// §8.2 — durum × ilişki matrisi
+// §8.2 — status × relationship matrix
 // ---------------------------------------------------------------------------
 
-describe("§8.2 matrisi — yazan sütunu", () => {
+describe("§8.2 matrix — author column", () => {
   it.each(ALL_STATUSES)(
-    "%s durumunda yazan kişi kendi faaliyetini görür",
+    "author sees their own activity in status %s",
     async (status) => {
       const { worker } = await buildTree();
       const activity = await writeActivity(worker, status);
@@ -200,7 +183,7 @@ describe("§8.2 matrisi — yazan sütunu", () => {
   );
 });
 
-describe("§8.2 matrisi — üst zincir sütunu", () => {
+describe("§8.2 matrix — supervisor chain column", () => {
   const chainVisible: ActivityApprovalStatus[] = ["APPROVED", "CANCELLED"];
   const chainHidden: ActivityApprovalStatus[] = [
     "DRAFT",
@@ -209,7 +192,7 @@ describe("§8.2 matrisi — üst zincir sütunu", () => {
     "MANAGER_NOT_FOUND",
   ];
 
-  it.each(chainVisible)("%s durumunda üst zincir görür", async (status) => {
+  it.each(chainVisible)("supervisor chain sees activities in status %s", async (status) => {
     const { worker, manager, director, generalManager } = await buildTree();
     const activity = await writeActivity(worker, status);
 
@@ -223,14 +206,10 @@ describe("§8.2 matrisi — üst zincir sütunu", () => {
     }
   });
 
-  it.each(chainHidden)("%s durumunda üst zincir GÖRMEZ", async (status) => {
+  it.each(chainHidden)("supervisor chain CANNOT see activities in status %s", async (status) => {
     const { worker, director, generalManager } = await buildTree();
     const activity = await writeActivity(worker, status);
 
-    // `manager` bilerek listede yok: o, çalışanın **aktif onaylayıcısı**dır ve
-    // §8.2 matrisi onay sürecindeki kaydı ona açar. Onun üstündeki kademeler
-    // görmemeli — akışın varlık sebebi zaten bu (süzülmemiş içerik yukarı
-    // akmasın). Onaylayıcı sütunu ayrı bir describe'da sınanıyor.
     for (const viewer of [director, generalManager]) {
       const level = await canViewActivity(
         testDb,
@@ -242,8 +221,8 @@ describe("§8.2 matrisi — üst zincir sütunu", () => {
   });
 });
 
-describe("§8.2 matrisi — sistem yöneticisi sütunu", () => {
-  it("yalnızca yönetici bulunamadı kayıtlarında üst veri görür", async () => {
+describe("§8.2 matrix — system admin column", () => {
+  it("sees metadata only for MANAGER_NOT_FOUND activities", async () => {
     const { worker, sysAdmin } = await buildTree();
     const activity = await writeActivity(worker, "MANAGER_NOT_FOUND");
 
@@ -257,7 +236,7 @@ describe("§8.2 matrisi — sistem yöneticisi sütunu", () => {
   });
 
   it.each(ALL_STATUSES.filter((status) => status !== "MANAGER_NOT_FOUND"))(
-    "%s durumunda sistem yöneticisi içeriği GÖRMEZ",
+    "system admin CANNOT see content in status %s",
     async (status) => {
       const { worker, sysAdmin } = await buildTree();
       const activity = await writeActivity(worker, status);
@@ -272,12 +251,10 @@ describe("§8.2 matrisi — sistem yöneticisi sütunu", () => {
     },
   );
 
-  it("rol, ağaçtan gelmeyen erişim eklemez (§15.1)", async () => {
+  it("admin role does not grant content access outside hierarchy (§15.1)", async () => {
     const { worker, peer } = await buildTree();
     const activity = await writeActivity(worker, "APPROVED");
 
-    // Akran, sistem yöneticisi yapılsa bile bu faaliyeti göremez: yetkisi
-    // ağaçtaki konumundan gelir, rolünden değil.
     const level = await canViewActivity(
       testDb,
       { id: peer.id, isSystemAdmin: true },
@@ -287,7 +264,7 @@ describe("§8.2 matrisi — sistem yöneticisi sütunu", () => {
     expect(level).toBe<VisibilityLevel>("none");
   });
 
-  it("ağaçtan gelen yetki, sistem yöneticisi rolüyle daralmaz", async () => {
+  it("hierarchical authority is not restricted by having system admin role", async () => {
     const { worker, manager } = await buildTree();
     const activity = await writeActivity(worker, "APPROVED");
 
@@ -302,12 +279,12 @@ describe("§8.2 matrisi — sistem yöneticisi sütunu", () => {
 });
 
 // ---------------------------------------------------------------------------
-// §8.1 — akranlar ve yön
+// §8.1 — peers and direction
 // ---------------------------------------------------------------------------
 
-describe("§8.1 akranlar birbirini görmez", () => {
+describe("§8.1 peers cannot view each other", () => {
   it.each(ALL_STATUSES)(
-    "%s durumunda akran müdür faaliyeti görmez",
+    "peer manager cannot view activity in status %s",
     async (status) => {
       const { manager, peer } = await buildTree();
       const activity = await writeActivity(manager, status);
@@ -322,10 +299,10 @@ describe("§8.1 akranlar birbirini görmez", () => {
     },
   );
 
-  it("aynı birimdeki iki çalışan birbirini görmez", async () => {
+  it("two workers in the same unit cannot view each other", async () => {
     const { units } = await buildTree();
-    const first = await createUser(units.moldShop.id, { fullName: "Çalışan A" });
-    const second = await createUser(units.moldShop.id, { fullName: "Çalışan B" });
+    const first = await createUser(units.moldShop.id, { fullName: "Worker A" });
+    const second = await createUser(units.moldShop.id, { fullName: "Worker B" });
     const activity = await writeActivity(first, "APPROVED");
 
     const level = await canViewActivity(
@@ -337,7 +314,7 @@ describe("§8.1 akranlar birbirini görmez", () => {
     expect(level).toBe<VisibilityLevel>("none");
   });
 
-  it("ast, üstünün faaliyetini görmez", async () => {
+  it("subordinate cannot view supervisor's activity", async () => {
     const { worker, manager } = await buildTree();
     const activity = await writeActivity(manager, "APPROVED");
 
@@ -350,7 +327,7 @@ describe("§8.1 akranlar birbirini görmez", () => {
     expect(level).toBe<VisibilityLevel>("none");
   });
 
-  it("birim yöneticisi kendi birimindeki çalışanı görür", async () => {
+  it("unit manager sees employee in their unit", async () => {
     const { worker, manager } = await buildTree();
     const activity = await writeActivity(worker, "APPROVED");
 
@@ -365,20 +342,17 @@ describe("§8.1 akranlar birbirini görmez", () => {
 });
 
 // ---------------------------------------------------------------------------
-// §8.3 — muhatap departman erişim vermez
+// §8.3 — target department does not grant access
 // ---------------------------------------------------------------------------
 
-describe("§8.3 muhatap departman erişim vermez", () => {
-  it("etiketlenen departmanın müdürü faaliyeti göremez", async () => {
+describe("§8.3 target department does not grant access", () => {
+  it("manager of tagged department cannot view activity", async () => {
     const { manager, peer, units } = await buildTree();
-    // Planlama Müdürü, Kalıphane'yi muhatap göstererek faaliyet yazıyor.
-    const activity = await writeActivity(peer, "APPROVED", "Kalıp süreci");
+    const activity = await writeActivity(peer, "APPROVED", "Workshop process");
     await testDb.activityTargetDept.create({
       data: { activityId: activity.id, orgUnitId: units.moldShop.id },
     });
 
-    // Kalıphane Müdürü etiketlenmiş olmasına rağmen göremez: Planlama onun
-    // altında değildir.
     const level = await canViewActivity(
       testDb,
       { id: manager.id, isSystemAdmin: false },
@@ -388,9 +362,9 @@ describe("§8.3 muhatap departman erişim vermez", () => {
     expect(level).toBe<VisibilityLevel>("none");
   });
 
-  it("muhatap etiketi kapsam sorgusuna da kayıt eklemez", async () => {
+  it("target department tag does not add record to scope query", async () => {
     const { manager, peer, units } = await buildTree();
-    const activity = await writeActivity(peer, "APPROVED", "Kalıp süreci");
+    const activity = await writeActivity(peer, "APPROVED", "Workshop process");
     await testDb.activityTargetDept.create({
       data: { activityId: activity.id, orgUnitId: units.moldShop.id },
     });
@@ -406,14 +380,14 @@ describe("§8.3 muhatap departman erişim vermez", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Kapsam sorgusu — liste ve arama bu filtreyi kullanır
+// Scope queries
 // ---------------------------------------------------------------------------
 
-describe("kapsam sorgusu", () => {
-  it("yönetici olmayan kişi yalnızca kendi faaliyetlerini görür", async () => {
+describe("scope query", () => {
+  it("non-manager user only sees their own activities", async () => {
     const { worker, manager } = await buildTree();
-    const own = await writeActivity(worker, "APPROVED", "Kendi faaliyetim");
-    await writeActivity(manager, "APPROVED", "Müdürün faaliyeti");
+    const own = await writeActivity(worker, "APPROVED", "My activity");
+    await writeActivity(manager, "APPROVED", "Manager activity");
 
     const where = await visibleActivityWhere(testDb, {
       id: worker.id,
@@ -424,11 +398,11 @@ describe("kapsam sorgusu", () => {
     expect(visible.map((a) => a.id)).toEqual([own.id]);
   });
 
-  it("birim yöneticisi kendi birimini ve alt dalı görür, akranını görmez", async () => {
+  it("unit manager sees their unit and descendants, but not peers", async () => {
     const { worker, manager, peer, director } = await buildTree();
-    const workerActivity = await writeActivity(worker, "APPROVED", "Çalışan");
-    const managerActivity = await writeActivity(manager, "APPROVED", "Müdür");
-    const peerActivity = await writeActivity(peer, "APPROVED", "Akran");
+    const workerActivity = await writeActivity(worker, "APPROVED", "Worker");
+    const managerActivity = await writeActivity(manager, "APPROVED", "Manager");
+    const peerActivity = await writeActivity(peer, "APPROVED", "Peer");
 
     const where = await visibleActivityWhere(testDb, {
       id: director.id,
@@ -437,13 +411,12 @@ describe("kapsam sorgusu", () => {
     const visible = await testDb.activity.findMany({ where });
     const ids = visible.map((a) => a.id);
 
-    // Direktör: alt dalındaki herkesi görür (akran müdür de onun altındadır).
     expect(ids).toContain(workerActivity.id);
     expect(ids).toContain(managerActivity.id);
     expect(ids).toContain(peerActivity.id);
   });
 
-  it("akran müdürün kapsamı diğer departmanı içermez", async () => {
+  it("peer manager scope does not include other department", async () => {
     const { worker, peer } = await buildTree();
     const workerActivity = await writeActivity(worker, "APPROVED");
 
@@ -456,13 +429,11 @@ describe("kapsam sorgusu", () => {
     expect(visible.map((a) => a.id)).not.toContain(workerActivity.id);
   });
 
-  it("onay sürecindeki alt faaliyet üst kademelerin kapsamına girmez", async () => {
+  it("subordinate pending approval activity is not visible to upper levels", async () => {
     const { worker, director, generalManager } = await buildTree();
     const pending = await writeActivity(worker, "PENDING_APPROVAL");
     const approved = await writeActivity(worker, "APPROVED");
 
-    // Çalışanın onaylayıcısı müdürdür; direktör ve genel müdür onay
-    // sürecindeki kaydı görmemeli (§8.2).
     for (const viewer of [director, generalManager]) {
       const where = await visibleActivityWhere(testDb, {
         id: viewer.id,
@@ -475,29 +446,28 @@ describe("kapsam sorgusu", () => {
     }
   });
 
-  it("onay sürecindeki kayıt yalnız onaylayıcının kapsamına girer", async () => {
+  it("pending activity is only in scope for the active approver", async () => {
     const { worker, manager, peer } = await buildTree();
     const pending = await writeActivity(worker, "PENDING_APPROVAL");
 
-    const onaylayicininki = await visibleActivityWhere(testDb, {
+    const approverScope = await visibleActivityWhere(testDb, {
       id: manager.id,
       isSystemAdmin: false,
     });
     expect(
-      (await testDb.activity.findMany({ where: onaylayicininki })).map((a) => a.id),
+      (await testDb.activity.findMany({ where: approverScope })).map((a) => a.id),
     ).toContain(pending.id);
 
-    // Akran onaylayıcı değildir; kapsamına hiç girmemeli.
-    const akraninki = await visibleActivityWhere(testDb, {
+    const peerScope = await visibleActivityWhere(testDb, {
       id: peer.id,
       isSystemAdmin: false,
     });
     expect(
-      (await testDb.activity.findMany({ where: akraninki })).map((a) => a.id),
+      (await testDb.activity.findMany({ where: peerScope })).map((a) => a.id),
     ).not.toContain(pending.id);
   });
 
-  it("iptal edilmiş alt faaliyet kapsamda kalır (üstü çizili gösterilir)", async () => {
+  it("cancelled subordinate activity remains in scope", async () => {
     const { worker, manager } = await buildTree();
     const cancelled = await writeActivity(worker, "CANCELLED");
 
@@ -510,7 +480,7 @@ describe("kapsam sorgusu", () => {
     expect(visible.map((a) => a.id)).toContain(cancelled.id);
   });
 
-  it("sistem yöneticisinin kapsamı ağaçtan gelir, rolünden değil", async () => {
+  it("system admin scope is determined by hierarchy, not admin role", async () => {
     const { worker, sysAdmin } = await buildTree();
     const activity = await writeActivity(worker, "APPROVED");
 
@@ -523,12 +493,11 @@ describe("kapsam sorgusu", () => {
     expect(visible.map((a) => a.id)).not.toContain(activity.id);
   });
 
-  it("kapsam, tekil karar fonksiyonuyla tutarlıdır", async () => {
+  it("scope filter is fully consistent with canViewActivity", async () => {
     const { worker, manager, peer, director, generalManager, sysAdmin } =
       await buildTree();
     const people = [worker, manager, peer, director, generalManager, sysAdmin];
 
-    // Her kişi her durumda birer faaliyet yazsın.
     for (const person of people) {
       for (const status of ALL_STATUSES) {
         await writeActivity(person, status, `${person.fullName}-${status}`);
@@ -546,21 +515,20 @@ describe("kapsam sorgusu", () => {
 
       for (const activity of all) {
         const level = await canViewActivity(testDb, viewer, activity);
-        // Listede görünen her kayıt için tekil karar "full" olmalı ve tersi.
         expect(listed.has(activity.id)).toBe(level === "full");
       }
     }
   });
 });
 
-describe("astların belirlenmesi", () => {
-  it("yönetici olmayan kişinin astı yoktur", async () => {
+describe("subordinate determination", () => {
+  it("non-manager user has no subordinates", async () => {
     const { worker } = await buildTree();
 
     expect(await subordinateUserIds(testDb, worker.id)).toEqual([]);
   });
 
-  it("birim yöneticisi kendi birimi ve alt dalındaki herkesi kapsar", async () => {
+  it("unit manager covers everyone in their unit and subordinate subtree", async () => {
     const { manager, worker } = await buildTree();
 
     const ids = await subordinateUserIds(testDb, manager.id);
@@ -569,7 +537,7 @@ describe("astların belirlenmesi", () => {
     expect(ids).not.toContain(manager.id);
   });
 
-  it("üst kademe, aradaki yöneticileri de kapsar", async () => {
+  it("upper tier covers intermediate managers as well", async () => {
     const { generalManager, director, manager, worker, peer } = await buildTree();
 
     const ids = await subordinateUserIds(testDb, generalManager.id);
@@ -580,8 +548,8 @@ describe("astların belirlenmesi", () => {
   });
 });
 
-describe("müdahale kuyruğu (§8.2 sistem yöneticisi istisnası)", () => {
-  it("yalnızca yönetici bulunamadı kayıtlarını içerir", async () => {
+describe("intervention queue (§8.2 sysadmin exception)", () => {
+  it("only contains MANAGER_NOT_FOUND activities", async () => {
     const { worker, sysAdmin } = await buildTree();
     const orphan = await writeActivity(worker, "MANAGER_NOT_FOUND");
     await writeActivity(worker, "APPROVED");
@@ -594,7 +562,7 @@ describe("müdahale kuyruğu (§8.2 sistem yöneticisi istisnası)", () => {
     expect(rows.map((a) => a.id)).toEqual([orphan.id]);
   });
 
-  it("yalnızca üst veri döner; açıklama hiçbir şekilde taşınmaz", async () => {
+  it("returns metadata only; description is never included", async () => {
     const { worker, sysAdmin } = await buildTree();
     await writeActivity(worker, "MANAGER_NOT_FOUND");
 
@@ -603,7 +571,6 @@ describe("müdahale kuyruğu (§8.2 sistem yöneticisi istisnası)", () => {
       isSystemAdmin: true,
     });
 
-    // Dönen nesnenin alanları sabittir: açıklama ve ek alanları yoktur.
     expect(Object.keys(rows[0]).sort()).toEqual([
       "activityDate",
       "authorId",
@@ -611,10 +578,10 @@ describe("müdahale kuyruğu (§8.2 sistem yöneticisi istisnası)", () => {
       "id",
       "title",
     ]);
-    expect(JSON.stringify(rows)).not.toContain("GIZLI ICERIK");
+    expect(JSON.stringify(rows)).not.toContain("CONFIDENTIAL CONTENT");
   });
 
-  it("sistem yöneticisi olmayan için hiçbir kayıt döndürmez", async () => {
+  it("returns empty for non-system-admin", async () => {
     const { worker, manager } = await buildTree();
     await writeActivity(worker, "MANAGER_NOT_FOUND");
 

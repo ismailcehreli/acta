@@ -7,73 +7,74 @@ import {
   type RealtimeEvent,
 } from "./events";
 
-// Dinleyici (§13, Görev 7.3).
+
 //
-// Web sürecinde **tek** bir PostgreSQL bağlantısı `LISTEN` yapar ve gelen
-// bildirimi açık SSE akışlarına dağıtır. Her tarayıcı sekmesi için ayrı bir
-// veritabanı bağlantısı açmak, elli kişilik bir şirkette havuzu tüketirdi.
+
+
+
 //
-// Prisma bu işi yapamaz: `LISTEN` bağlantının ömrü boyunca açık kalmayı
-// gerektirir, Prisma ise havuzdan aldığı bağlantıyı sorgu bitince geri verir.
-// Bu yüzden `pg` doğrudan kullanılıyor — onaylanan LISTEN/NOTIFY kararının
+
+
+
 // zorunlu sonucu.
 
 type Listener = (event: RealtimeEvent) => void;
 
 interface Hub {
-  /** Kullanıcı kimliği → o kullanıcının açık akışları. */
-  aboneler: Map<string, Set<Listener>>;
+
+  subscribers: Map<string, Set<Listener>>;
   client: Client | null;
-  /** Bağlanma denemesi sürüyorsa aynı sözü paylaşır; iki bağlantı açılmaz. */
-  baglaniyor: Promise<void> | null;
-  yenidenDenemeGecikmesi: number;
-  kapaniyor: boolean;
+
+  connecting: Promise<void> | null;
+  reconnectDelay: number;
+  shuttingDown: boolean;
 }
 
-const ILK_GECIKME_MS = 500;
-const AZAMI_GECIKME_MS = 30_000;
+const INITIAL_RECONNECT_DELAY_MS = 500;
+const MAX_RECONNECT_DELAY_MS = 30_000;
 
-// Geliştirme modunda modül yeniden yüklendiğinde ikinci bir dinleyici açılmasın
-// diye hub global nesnede tutulur — `db.ts` ile aynı gerekçe.
+
+
 const globalForHub = globalThis as unknown as { realtimeHub: Hub | undefined };
 
 const hub: Hub = (globalForHub.realtimeHub ??= {
-  aboneler: new Map(),
+  subscribers: new Map(),
   client: null,
-  baglaniyor: null,
-  yenidenDenemeGecikmesi: ILK_GECIKME_MS,
-  kapaniyor: false,
+  connecting: null,
+  reconnectDelay: INITIAL_RECONNECT_DELAY_MS,
+  shuttingDown: false,
 });
 
-function log(mesaj: string): void {
-  console.log(`[realtime] ${new Date().toISOString()} ${mesaj}`);
+function log(message: string): void {
+  console.log(`[realtime] ${new Date().toISOString()} ${message}`);
 }
 
-/** Olayı yalnızca **adı geçen** kullanıcıların akışlarına yazar. */
-function dagit(userIds: string[], event: RealtimeEvent): void {
+/** Writes an event only to the streams of the named users. */
+function dispatch(userIds: string[], event: RealtimeEvent): void {
   for (const userId of userIds) {
-    const kume = hub.aboneler.get(userId);
-    if (!kume) continue;
+    const listeners = hub.subscribers.get(userId);
+    if (!listeners) continue;
 
-    for (const listener of kume) {
+    for (const listener of listeners) {
       try {
         listener(event);
       } catch (error) {
-        // Bir akışın hatası diğerlerini düşürmemeli; ama sessiz de geçilmemeli.
-        log(`akışa yazılamadı: ${String(error)}`);
+        // One stream must not take down the others, but failures must remain
+        // visible in the worker log.
+        log(`stream write failed: ${String(error)}`);
       }
     }
   }
 }
 
-/** Açık bütün akışlara gönderir. Yalnızca yeniden bağlanma işareti için. */
-function hepsineDagit(event: RealtimeEvent): void {
-  for (const kume of hub.aboneler.values()) {
-    for (const listener of kume) {
+/** Sends an event to every open stream, only for reconnection signals. */
+function dispatchToAll(event: RealtimeEvent): void {
+  for (const listeners of hub.subscribers.values()) {
+    for (const listener of listeners) {
       try {
         listener(event);
       } catch (error) {
-        log(`akışa yazılamadı: ${String(error)}`);
+        log(`stream write failed: ${String(error)}`);
       }
     }
   }
@@ -82,29 +83,29 @@ function hepsineDagit(event: RealtimeEvent): void {
 function onNotification(payload: string | undefined): void {
   if (!payload) return;
 
-  let ham: unknown;
+  let rawPayload: unknown;
   try {
-    ham = JSON.parse(payload);
+    rawPayload = JSON.parse(payload);
   } catch {
-    log("bozuk yük (JSON değil) — atlandı");
+    log("malformed payload (not JSON); skipped");
     return;
   }
 
-  const sonuc = realtimeNotifySchema.safeParse(ham);
-  if (!sonuc.success) {
-    // Kanalı başka bir süreç de besleyebilir. Tanımadığımız yükü **işlemeyiz**
-    // ama görmezden de gelmeyiz: günlüğe düşer.
-    log(`tanınmayan yük — atlandı: ${sonuc.error.issues[0]?.message ?? ""}`);
+  const result = realtimeNotifySchema.safeParse(rawPayload);
+  if (!result.success) {
+    // Another process may publish to the channel. Do not process an unknown
+    // payload, but log it instead of silently ignoring it.
+    log(`unknown payload; skipped: ${result.error.issues[0]?.message ?? ""}`);
     return;
   }
 
-  dagit(sonuc.data.userIds, { kind: sonuc.data.kind });
+  dispatch(result.data.userIds, { kind: result.data.kind });
 }
 
-async function baglan(): Promise<void> {
+async function connect(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
-    throw new Error("DATABASE_URL tanımlı değil; gerçek zamanlı akış kurulamaz.");
+    throw new Error("DATABASE_URL is not defined; the realtime stream cannot start.");
   }
 
   const client = new Client({ connectionString });
@@ -115,113 +116,113 @@ async function baglan(): Promise<void> {
   });
 
   client.on("error", (error) => {
-    log(`bağlantı hatası: ${error.message}`);
-    void yenidenBagla();
+    log(`connection error: ${error.message}`);
+    void reconnect();
   });
 
   await client.connect();
   await client.query(`LISTEN ${REALTIME_CHANNEL}`);
 
   hub.client = client;
-  hub.yenidenDenemeGecikmesi = ILK_GECIKME_MS;
-  log("dinleniyor");
+  hub.reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+  log("listening");
 }
 
-async function yenidenBagla(): Promise<void> {
-  if (hub.kapaniyor) return;
+async function reconnect(): Promise<void> {
+  if (hub.shuttingDown) return;
 
-  const eski = hub.client;
+  const old = hub.client;
   hub.client = null;
-  hub.baglaniyor = null;
+  hub.connecting = null;
 
-  if (eski) {
-    // Kapanma hatası yutulur: bağlantı zaten kopuk olabilir.
-    await eski.end().catch(() => undefined);
+  if (old) {
+    // The connection may already be gone, so ignore close errors.
+    await old.end().catch(() => undefined);
   }
 
-  if (hub.aboneler.size === 0) return;
+  if (hub.subscribers.size === 0) return;
 
-  const gecikme = hub.yenidenDenemeGecikmesi;
-  hub.yenidenDenemeGecikmesi = Math.min(gecikme * 2, AZAMI_GECIKME_MS);
+  const delay = hub.reconnectDelay;
+  hub.reconnectDelay = Math.min(delay * 2, MAX_RECONNECT_DELAY_MS);
 
-  await new Promise((resolve) => setTimeout(resolve, gecikme));
-  if (hub.kapaniyor || hub.aboneler.size === 0) return;
+  await new Promise((resolve) => setTimeout(resolve, delay));
+  if (hub.shuttingDown || hub.subscribers.size === 0) return;
 
   try {
-    await baglantiyiSagla();
-    // Kopukluk boyunca gelen olaylar kayboldu. Açık akışlara koşulsuz tazeleme
-    // işareti gönderilir; eksik kalmaktansa bir kez fazladan tazelensin.
-    hepsineDagit({ kind: REALTIME_EVENTS.reconnected });
+    await ensureConnection();
+    // Events during the outage may have been missed. A refresh signal is sent
+    // to every open stream so missing data is recovered safely.
+    dispatchToAll({ kind: REALTIME_EVENTS.reconnected });
   } catch (error) {
-    log(`yeniden bağlanamadı: ${String(error)}`);
-    void yenidenBagla();
+    log(`reconnection failed: ${String(error)}`);
+    void reconnect();
   }
 }
 
-function baglantiyiSagla(): Promise<void> {
+function ensureConnection(): Promise<void> {
   if (hub.client) return Promise.resolve();
-  hub.baglaniyor ??= baglan().finally(() => {
-    hub.baglaniyor = null;
+  hub.connecting ??= connect().finally(() => {
+    hub.connecting = null;
   });
-  return hub.baglaniyor;
+  return hub.connecting;
 }
 
 /**
- * Kullanıcı adına akış açar. Dönen fonksiyon aboneliği kapatır.
+ * Opens a stream for a user. The returned function closes the subscription.
  *
- * Abone yoksa bağlantı da kapatılır: kimsenin dinlemediği bir `LISTEN`
- * bağlantısını açık tutmak, boşuna bir bağlantı tutmak demek.
+ * The connection closes when there are no subscribers; keeping an unused
+ * `LISTEN` connection open would waste a database connection.
  */
 export async function subscribe(
   userId: string,
   listener: Listener,
 ): Promise<() => void> {
-  const kume = hub.aboneler.get(userId) ?? new Set<Listener>();
-  kume.add(listener);
-  hub.aboneler.set(userId, kume);
+  const listeners = hub.subscribers.get(userId) ?? new Set<Listener>();
+  listeners.add(listener);
+  hub.subscribers.set(userId, listeners);
 
   try {
-    await baglantiyiSagla();
+    await ensureConnection();
   } catch (error) {
-    // Bağlantı kurulamadıysa abonelik geri alınır; yarım bir kayıt bırakılmaz.
-    kume.delete(listener);
-    if (kume.size === 0) hub.aboneler.delete(userId);
+    // Roll back the subscription if the connection cannot be established.
+    listeners.delete(listener);
+    if (listeners.size === 0) hub.subscribers.delete(userId);
     throw error;
   }
 
   return () => {
-    const mevcut = hub.aboneler.get(userId);
-    if (!mevcut) return;
+    const currentListeners = hub.subscribers.get(userId);
+    if (!currentListeners) return;
 
-    mevcut.delete(listener);
-    if (mevcut.size === 0) hub.aboneler.delete(userId);
+    currentListeners.delete(listener);
+    if (currentListeners.size === 0) hub.subscribers.delete(userId);
 
-    if (hub.aboneler.size === 0 && hub.client) {
+    if (hub.subscribers.size === 0 && hub.client) {
       const client = hub.client;
       hub.client = null;
       void client.end().catch(() => undefined);
-      log("abone kalmadı, bağlantı kapatıldı");
+      log("no subscribers remain; connection closed");
     }
   };
 }
 
-/** Testlerin ve kapanış sinyalinin kullandığı temizlik. */
+/** Cleanup used by tests and the shutdown signal. */
 export async function shutdownRealtimeHub(): Promise<void> {
-  hub.kapaniyor = true;
-  hub.aboneler.clear();
+  hub.shuttingDown = true;
+  hub.subscribers.clear();
 
   const client = hub.client;
   hub.client = null;
-  hub.baglaniyor = null;
+  hub.connecting = null;
 
   if (client) await client.end().catch(() => undefined);
-  hub.kapaniyor = false;
-  hub.yenidenDenemeGecikmesi = ILK_GECIKME_MS;
+  hub.shuttingDown = false;
+  hub.reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
 }
 
-/** Testler için: kaç akış açık? */
+/** Number of open streams, used by tests. */
 export function subscriberCount(): number {
-  let toplam = 0;
-  for (const kume of hub.aboneler.values()) toplam += kume.size;
-  return toplam;
+  let total = 0;
+  for (const listeners of hub.subscribers.values()) total += listeners.size;
+  return total;
 }

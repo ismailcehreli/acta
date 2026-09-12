@@ -23,12 +23,12 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function kisi() {
-  const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
+async function setupUser() {
+  const unit = await createOrgUnit({ name: "Company", type: "Root" });
   return createUser(unit.id);
 }
 
-async function olayEkle(userId: string, idempotencyKey: string) {
+async function enqueueItem(userId: string, idempotencyKey: string) {
   return enqueueNotification(testDb, {
     userId,
     eventType: NOTIFICATION_EVENTS.questionAsked,
@@ -38,37 +38,37 @@ async function olayEkle(userId: string, idempotencyKey: string) {
   });
 }
 
-describe("bildirim olay ayarları", () => {
-  it("kapatılan olay kuyruğa yazılmaz", async () => {
-    const user = await kisi();
-    const sonuc = await saveSettings(testDb, {
+describe("notification event settings", () => {
+  it("disabled event is not written to queue", async () => {
+    const user = await setupUser();
+    const result = await saveSettings(testDb, {
       [notificationEnabledKey(NOTIFICATION_EVENTS.questionAsked)]: "false",
     });
 
-    expect(sonuc.ok).toBe(true);
-    expect(await olayEkle(user.id, "kapali:1")).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(await enqueueItem(user.id, "disabled:1")).toBe(false);
     expect(await testDb.notificationQueue.count()).toBe(0);
   });
 
-  it("yalnız seçilen kanala kayıt yazar", async () => {
-    const user = await kisi();
+  it("enqueues only to the selected channel", async () => {
+    const user = await setupUser();
     await saveSubscription(
       testDb,
       user.id,
       {
-        endpoint: "https://push.ornek.test/policy-1",
+        endpoint: "https://push.example.test/policy-1",
         p256dh: "BExampleKeyMaterial",
         auth: "ExampleAuthSecret",
       },
       NOW,
     );
 
-    const sonuc = await saveSettings(testDb, {
+    const result = await saveSettings(testDb, {
       [notificationChannelKey(NOTIFICATION_EVENTS.questionAsked)]: "PUSH",
     });
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
 
-    expect(await olayEkle(user.id, "push:1")).toBe(true);
+    expect(await enqueueItem(user.id, "push:1")).toBe(true);
     expect(
       await testDb.notificationQueue.findMany({
         select: { channel: true },
@@ -77,23 +77,29 @@ describe("bildirim olay ayarları", () => {
     ).toEqual([{ channel: "PUSH" }]);
   });
 
-  it("parola bağlantısı taşıyan olayın kapatma anahtarı yoktur", async () => {
+  it("events carrying password links do not have a disable key", async () => {
     const key = notificationEnabledKey(NOTIFICATION_EVENTS.passwordReset);
 
     expect(findSetting(key)).toBeUndefined();
 
-    const sonuc = await saveSettings(testDb, { [key]: "false" });
-    expect(sonuc).toEqual({ ok: false, message: `Tanımsız ayar: ${key}` });
+    const result = await saveSettings(testDb, { [key]: "false" });
+    expect(result).toEqual({
+      ok: false,
+      error: "undefined_setting",
+      message: `Undefined setting: ${key}`,
+      messageKey: "errors.settings.undefinedSetting",
+      messageValues: { key },
+    });
   });
 
-  it("parola bağlantısı olayları varsayılan olarak e-postayı korur", async () => {
-    const user = await kisi();
+  it("password link events preserve email by default", async () => {
+    const user = await setupUser();
 
     expect(
       await enqueueNotification(testDb, {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.passwordReset,
-        payload: { token: "sifirlama-belirteci" },
+        payload: { token: "reset-token" },
         idempotencyKey: "reset:1",
         now: NOW,
       }),
@@ -105,13 +111,13 @@ describe("bildirim olay ayarları", () => {
     expect(queue).toEqual([{ channel: "EMAIL" }]);
   });
 
-  it("zorunlu olay elle push kanalına çekilse bile e-postayı korur", async () => {
-    const user = await kisi();
+  it("mandatory events preserve email even if manually forced to push", async () => {
+    const user = await setupUser();
     await testDb.systemSetting.create({
       data: {
         key: notificationChannelKey(NOTIFICATION_EVENTS.passwordReset),
         value: "PUSH",
-        description: "Test ayarı",
+        description: "Test setting",
       },
     });
 
@@ -119,8 +125,8 @@ describe("bildirim olay ayarları", () => {
       await enqueueNotification(testDb, {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.passwordReset,
-        payload: { token: "sifirlama-belirteci" },
-        idempotencyKey: "reset:elle-push",
+        payload: { token: "reset-token" },
+        idempotencyKey: "reset:manual-push",
         now: NOW,
       }),
     ).toBe(true);
@@ -132,7 +138,7 @@ describe("bildirim olay ayarları", () => {
     ).toEqual([{ channel: "EMAIL" }]);
   });
 
-  it("parola bağlantısı olayında yalnız push seçilemez", async () => {
+  it("cannot select push-only for password link event", async () => {
     const definition = findSetting(
       notificationChannelKey(NOTIFICATION_EVENTS.passwordReset),
     );
@@ -142,12 +148,15 @@ describe("bildirim olay ayarları", () => {
       "EMAIL",
       "BOTH",
     ]);
-    const sonuc = await saveSettings(testDb, {
+    const result = await saveSettings(testDb, {
       [notificationChannelKey(NOTIFICATION_EVENTS.passwordReset)]: "PUSH",
     });
-    expect(sonuc).toEqual({
+    expect(result).toEqual({
       ok: false,
-      message: "Parola sıfırlama kanalı: geçerli bir seçenek seçin.",
+      error: "invalid_value",
+      message: "Password reset channel: choose a valid option.",
+      messageKey: "errors.settings.option",
+      messageValues: { label: "Password reset channel" },
     });
   });
 });

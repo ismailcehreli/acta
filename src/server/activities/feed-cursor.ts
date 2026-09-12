@@ -1,11 +1,11 @@
 import type { FeedCursor } from "./scope-feed";
 
-// İmlecin adres satırındaki gösterimi. Ayrı dosyada tutulur: sayfa bileşeni
-// "use server" kısıtları yüzünden yardımcı dışa aktaramaz.
+
+
 //
-// İmleç gizli veri taşımaz — sıralama alanlarından ibarettir — bu yüzden
-// imzalanmaz. Bozuk ya da uydurma bir değer listenin başına döner; yetki
-// kararı her hâlükârda görünürlük modülünden gelir.
+
+
+
 
 export function encodeCursor(cursor: FeedCursor): string {
   return Buffer.from(

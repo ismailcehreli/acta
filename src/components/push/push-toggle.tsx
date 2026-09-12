@@ -2,45 +2,39 @@
 
 import { useEffect, useState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
-// Tarayıcı bildirim izni akışı (Görev 5.3b).
-//
-// **İzin kendiliğinden istenmez.** Sayfa açılır açılmaz izin kutusu çıkarmak,
-// kullanıcının çoğunlukla "engelle" demesine yol açar ve o karar kalıcıdır —
-// sonra açmak için tarayıcı ayarlarına girmek gerekir. Bu yüzden izin, ancak
-// kullanıcı düğmeye bastığında isteniyor.
 
-type Durum =
-  | "yukleniyor"
-  | "desteklenmiyor"
-  | "kurulmamis"
-  | "engellenmis"
-  | "kapali"
-  | "acik";
-
-/** base64url → ArrayBuffer; tarayıcı `applicationServerKey`'i böyle istiyor. */
-function anahtariCevir(base64: string): ArrayBuffer {
-  const doldurma = "=".repeat((4 - (base64.length % 4)) % 4);
-  const duz = (base64 + doldurma).replace(/-/g, "+").replace(/_/g, "/");
-  const ham = atob(duz);
-  const bayt = new Uint8Array(ham.length);
-  for (let i = 0; i < ham.length; i += 1) bayt[i] = ham.charCodeAt(i);
-  return bayt.buffer;
+type PushStatus =
+  | "loading"
+  | "unsupported"
+  | "not_configured"
+  | "blocked"
+  | "disabled"
+  | "enabled";
+function decodeVapidKey(base64: string): ArrayBuffer {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const normalized = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(normalized);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  return bytes.buffer;
 }
 
 export function PushToggle({ publicKey }: { publicKey: string | null }) {
-  const [durum, setDurum] = useState<Durum>("yukleniyor");
-  const [hata, setHata] = useState<string | null>(null);
-  const [calisiyor, setCalisiyor] = useState(false);
+  const t = useTranslations();
+  const [status, setStatus] = useState<PushStatus>("loading");
+  const [error, setError] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
 
   useEffect(() => {
-    let iptal = false;
+    let cancelled = false;
 
-    async function baslangic() {
+    async function start() {
       if (publicKey === null) {
-        if (!iptal) setDurum("kurulmamis");
+        if (!cancelled) setStatus("not_configured");
         return;
       }
 
@@ -50,152 +44,161 @@ export function PushToggle({ publicKey }: { publicKey: string | null }) {
         !("PushManager" in window) ||
         !("Notification" in window)
       ) {
-        if (!iptal) setDurum("desteklenmiyor");
+        if (!cancelled) setStatus("unsupported");
         return;
       }
 
       if (Notification.permission === "denied") {
-        if (!iptal) setDurum("engellenmis");
+        if (!cancelled) setStatus("blocked");
         return;
       }
 
-      const kayit = await navigator.serviceWorker.getRegistration();
-      const abonelik = await kayit?.pushManager.getSubscription();
-      if (!iptal) setDurum(abonelik ? "acik" : "kapali");
+      const record = await navigator.serviceWorker.getRegistration();
+      const subscription = await record?.pushManager.getSubscription();
+      if (!cancelled) setStatus(subscription ? "enabled" : "disabled");
     }
 
-    void baslangic();
+    void start();
     return () => {
-      iptal = true;
+      cancelled = true;
     };
   }, [publicKey]);
 
-  async function ac() {
+  async function enable() {
     if (publicKey === null) return;
-    setCalisiyor(true);
-    setHata(null);
+    setWorking(true);
+    setError(null);
 
     try {
-      const izin = await Notification.requestPermission();
-      if (izin !== "granted") {
-        setDurum(izin === "denied" ? "engellenmis" : "kapali");
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setStatus(permission === "denied" ? "blocked" : "disabled");
         return;
       }
 
-      const kayit = await navigator.serviceWorker.register("/sw.js");
+      const record = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
 
-      const abonelik = await kayit.pushManager.subscribe({
+      const subscription = await record.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: anahtariCevir(publicKey),
+        applicationServerKey: decodeVapidKey(publicKey),
       });
 
-      const yanit = await fetch("/api/push/subscribe", {
+      const response = await fetch("/api/push/subscribe", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(abonelik.toJSON()),
+        body: JSON.stringify(subscription.toJSON()),
       });
 
-      if (!yanit.ok) {
-        // Sunucu kaydetmediyse tarayıcıdaki abonelik de bırakılmaz: aksi
-        // hâlde kullanıcı "açık" görür ama hiç bildirim gelmez.
-        await abonelik.unsubscribe();
-        setHata("Abonelik sunucuya kaydedilemedi. Tekrar deneyin.");
-        setDurum("kapali");
+      if (!response.ok) {
+        await subscription.unsubscribe();
+        setError(t("screens.profile.pushSubscribeFailed"));
+        setStatus("disabled");
         return;
       }
 
-      setDurum("acik");
+      setStatus("enabled");
     } catch (error) {
-      setHata(error instanceof Error ? error.message : "Bildirim açılamadı.");
+      const detail = error instanceof Error && error.message
+        ? error.message
+        : t("screens.profile.pushEnableFailed");
+      setError(t("screens.profile.pushOperationFailed", { message: detail }));
     } finally {
-      setCalisiyor(false);
+      setWorking(false);
     }
   }
 
-  async function kapat() {
-    setCalisiyor(true);
-    setHata(null);
+  async function disable() {
+    setWorking(true);
+    setError(null);
 
     try {
-      const kayit = await navigator.serviceWorker.getRegistration();
-      const abonelik = await kayit?.pushManager.getSubscription();
-      if (!abonelik) {
-        setDurum("kapali");
+      const record = await navigator.serviceWorker.getRegistration();
+      const subscription = await record?.pushManager.getSubscription();
+      if (!subscription) {
+        setStatus("disabled");
         return;
       }
 
       await fetch("/api/push/subscribe", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ endpoint: abonelik.endpoint }),
+        body: JSON.stringify({ endpoint: subscription.endpoint }),
       });
-      await abonelik.unsubscribe();
-      setDurum("kapali");
+      await subscription.unsubscribe();
+      setStatus("disabled");
     } catch (error) {
-      setHata(error instanceof Error ? error.message : "Bildirim kapatılamadı.");
+      const detail = error instanceof Error && error.message
+        ? error.message
+        : t("screens.profile.pushDisableFailed");
+      setError(t("screens.profile.pushOperationFailed", { message: detail }));
     } finally {
-      setCalisiyor(false);
+      setWorking(false);
     }
   }
 
-  if (durum === "yukleniyor") {
-    return <p className="text-[length:var(--text-sm)] text-muted">Kontrol ediliyor…</p>;
+  if (status === "loading") {
+    return (
+      <p className="text-[length:var(--text-sm)] text-muted">
+        {t("screens.profile.pushChecking")}
+      </p>
+    );
   }
 
-  if (durum === "kurulmamis") {
+  if (status === "not_configured") {
     return (
       <Alert tone="correction">
-        Tarayıcı bildirimleri henüz kurulmadı. Sistem yöneticisi{" "}
-        <span className="font-medium">Sistem ayarları → Tarayıcı bildirimleri</span>{" "}
-        bölümünden anahtar üretmeli.
+        {t("screens.profile.pushNotConfigured")}
       </Alert>
     );
   }
 
-  if (durum === "desteklenmiyor") {
+  if (status === "unsupported") {
     return (
       <Alert tone="info">
-        Bu tarayıcı bildirimleri desteklemiyor. iPhone&apos;da uygulamayı önce ana
-        ekrana eklemeniz gerekir.
+        {t("screens.profile.pushUnsupported")}
       </Alert>
     );
   }
 
-  if (durum === "engellenmis") {
+  if (status === "blocked") {
     return (
-      // Testlerin bakabilmesi için işaretli: hangi dalın çıktığı tarayıcının
-      // varsayılan bildirim iznine göre değişiyor, metne bakmak kırılgan.
-      <div data-test="push-engellenmis">
-      <Alert tone="correction">
-        Bildirimler tarayıcı ayarlarından engellenmiş. Açmak için adres
-        çubuğundaki kilit simgesinden izin vermeniz gerekiyor.
-      </Alert>
+      <div data-test="push-blocked">
+        <Alert tone="correction">{t("screens.profile.pushBlocked")}</Alert>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2" data-test="push-anahtari">
+    <div className="flex flex-col gap-2" data-test="push-toggle">
       <p className="text-[length:var(--text-sm)] text-muted">
-        {durum === "acik"
-          ? "Bu cihaz bildirim alıyor. Faaliyet içeriği bildirime girmez; yalnız başlık ve bağlantı gönderilir."
-          : "Size soru sorulduğunda, onayınız beklendiğinde ve düzeltme istendiğinde bu cihaza bildirim gelsin."}
+        {status === "enabled"
+          ? t("screens.profile.pushEnabledDescription")
+          : t("screens.profile.pushDisabledDescription")}
       </p>
 
       <div>
-        {durum === "acik" ? (
-          <Button type="button" onClick={kapat} disabled={calisiyor}>
-            {calisiyor ? "Kapatılıyor…" : "Bu cihazda kapat"}
+        {status === "enabled" ? (
+          <Button type="button" onClick={disable} disabled={working}>
+            {working
+              ? t("screens.profile.pushDisablePending")
+              : t("screens.profile.pushDisable")}
           </Button>
         ) : (
-          <Button type="button" variant="primary" onClick={ac} disabled={calisiyor}>
-            {calisiyor ? "Açılıyor…" : "Bu cihazda aç"}
+          <Button
+            type="button"
+            variant="primary"
+            onClick={enable}
+            disabled={working}
+          >
+            {working
+              ? t("screens.profile.pushEnablePending")
+              : t("screens.profile.pushEnable")}
           </Button>
         )}
       </div>
 
-      {hata ? <Alert tone="danger">{hata}</Alert> : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
     </div>
   );
 }

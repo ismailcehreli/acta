@@ -30,11 +30,12 @@ Acta consists of three primary components:
 
 ## 🛡️ Core Architectural Principles
 
-### 1. Zero Physical Deletions
-Enterprise operational systems must remain verifiable for audits.
-* **No `DELETE` cascades:** Core entities (`User`, `OrgUnit`, `Activity`, `ConversationMessage`, `FollowUp`) are never physically deleted.
-* **Status Transitions:** Records transition through explicit lifecycle states (`ACTIVE`, `INACTIVE`, `CANCELLED`, `REJECTED`).
-* **Database Triggers:** PostgreSQL triggers actively block attempts to bypass application logic and delete constrained rows.
+### 1. Controlled Physical Deletions
+Enterprise operational systems must remain verifiable for audits, so records are preserved by default.
+* **No routine `DELETE` operations:** Users and organizational units are deactivated, while activities are cancelled during normal workflows. Their history remains available to authorized readers.
+* **Explicit activity-deletion exception:** The root system administrator has a separate confirmation-code workflow for permanently deleting an activity when explicitly requested. It validates the closed-period and authorization rules, runs transactionally, and leaves an audit entry.
+* **Status transitions:** Records transition through explicit lifecycle states (`ACTIVE`, `INACTIVE`, `CANCELLED`, `REJECTED`) whenever permanent deletion is not explicitly authorized.
+* **Database triggers:** PostgreSQL triggers actively block direct deletes and allow the controlled activity-deletion path only through its transaction-scoped authorization marker.
 
 ### 2. Centralized Visibility & Authorization Layer
 Acta strictly isolates departmental data:

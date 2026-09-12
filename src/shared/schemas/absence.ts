@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { isoDaySchema } from "./iso-date";
 
-// "Faaliyet beklenmiyor" günleri için giriş ve onay doğrulamaları.
+// Validation for leave periods and their decisions.
 
 export const absenceDateSchema = isoDaySchema();
 
@@ -10,19 +10,18 @@ export const markAbsenceSchema = z.object({
   userId: z.string().uuid(),
   startDate: absenceDateSchema,
   endDate: absenceDateSchema,
-  note: z.string().trim().max(500, "Not en fazla 500 karakter olabilir").optional(),
+  note: z.string().trim().max(500, "Note must be 500 characters or fewer").optional(),
   deputyId: z.string().uuid().optional(),
 });
 
-// Kayıt silinmez, gerekçeyle iptal edilir (§4.5, bulgu 7): vekilin
-// geçmiş görünürlüğü bu satırdan türüyor.
+// Records are cancelled with a reason instead of being deleted.
 export const cancelAbsenceSchema = z.object({
   id: z.string().uuid(),
   reason: z
     .string()
     .trim()
-    .min(1, "İptal gerekçesi yazılmalı")
-    .max(500, "Gerekçe en fazla 500 karakter olabilir"),
+    .min(1, "Cancellation reason is required")
+    .max(500, "Reason must be 500 characters or fewer"),
 });
 
 export const absenceDecisionSchema = z
@@ -32,7 +31,7 @@ export const absenceDecisionSchema = z
     reason: z
       .string()
       .trim()
-      .max(500, "Gerekçe en fazla 500 karakter olabilir")
+      .max(500, "Reason must be 500 characters or fewer")
       .optional(),
   })
   .superRefine((value, context) => {
@@ -40,7 +39,7 @@ export const absenceDecisionSchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["reason"],
-        message: "Reddetmek için gerekçe yazılmalı",
+        message: "A reason is required to reject a leave request",
       });
     }
   });

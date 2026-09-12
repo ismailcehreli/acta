@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getTranslations } from "@/server/i18n/server";
 
 export interface AdminTab {
   href: string;
@@ -6,19 +7,17 @@ export interface AdminTab {
   hint?: string;
 }
 
-/**
- * Uzun yönetim ekranlarını aynı sayfada üst üste yığmak yerine çalışma
- * alanlarına ayıran, URL ile kalıcı sekme gezinmesi.
- */
-export function AdminTabs({
+
+export async function AdminTabs({
   tabs,
   activeHref,
 }: {
   tabs: AdminTab[];
   activeHref: string;
 }) {
+  const t = await getTranslations();
   return (
-    <nav aria-label="Bu sayfanın bölümleri" className="border-b border-line">
+    <nav aria-label={t("nav.allSections")} className="border-b border-line">
       <ul className="flex gap-1 overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.href === activeHref;

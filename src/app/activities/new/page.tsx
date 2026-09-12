@@ -14,25 +14,30 @@ import { readAttachmentLimits } from "@/server/attachments/service";
 
 import { ActivityForm } from "../activity-form";
 import { readActivityTextLimits } from "@/server/settings/system-settings";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
-export const metadata = { title: "Yeni faaliyet" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("activities.newActivity");
+}
 
 export default async function NewActivityPage({
   searchParams,
 }: {
-  searchParams: Promise<{ taslak?: string }>;
+  searchParams: Promise<{ draft?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const t = await getTranslations();
+
   const params = await searchParams;
 
-  const [options, taslak, taslakSayisi, limits, ekSinirlari] = await Promise.all([
+  const [options, draft, draftCount, limits, attachmentLimits] = await Promise.all([
     listTargetDepartments(prisma, user.orgUnitId),
-    // Taslaktan devam ediliyorsa içeriği yüklenir. Bulunamazsa (başkasının
-    // taslağı ya da silinmiş) form boş açılır — hata vermek yerine
-    // kullanıcıyı yazmaya bırakmak doğru davranış.
-    params.taslak ? findDraft(prisma, user.id, params.taslak) : Promise.resolve(null),
+
+
+
+    params.draft ? findDraft(prisma, user.id, params.draft) : Promise.resolve(null),
     countDrafts(prisma, user.id),
     readActivityTextLimits(prisma),
     readAttachmentLimits(prisma),
@@ -42,12 +47,12 @@ export default async function NewActivityPage({
     <AppShell user={await toShellUser(user)}>
       <Page>
         <PageHeader
-          title={taslak ? "Taslağa devam et" : "Yeni faaliyet"}
-          description="Gün içindeki çalışmalarınız, yaptığınız tespitler, karşılaşılan sorunlar ve nasıl çözüldüğü. Üst yönetimin karar vermesi gereken bir konu varsa onu da buraya yazın. Kaydettikten sonra kısa bir süre düzeltebilirsiniz; kaydı bir başkası okuduktan sonra değiştirilemez."
+          title={draft ? t("activities.continueDraft") : t("activities.newActivity")}
+          description={t("activities.newActivityDescription")}
           breadcrumbs={[
-            { label: "Ana ekran", href: "/" },
-            { label: "Faaliyetlerim", href: "/activities" },
-            { label: "Yeni" },
+            { label: "Dashboard", href: "/" },
+            { label: "My activities", href: "/activities" },
+            { label: t("nav.new") },
           ]}
         />
 
@@ -55,33 +60,26 @@ export default async function NewActivityPage({
           <CardBody>
             <ActivityForm
               limits={limits}
-              attachmentLimits={ekSinirlari}
+              attachmentLimits={attachmentLimits}
               mode="create"
-              // Anahtar kullanıcıya özel: ortak bir tarayıcıda birinin yarım
-              // metni diğerine teklif edilmemeli.
-              draftKey={`faaliyet-yarim:yeni:${user.id}`}
+
+
+              draftKey={`activity-local-draft:new:${user.id}`}
               options={options}
-              draftCount={taslakSayisi}
+              draftCount={draftCount}
               values={{
-                draftId: taslak?.id,
-                activityDate: taslak
-                  ? taslak.activityDate.toISOString().slice(0, 10)
+                draftId: draft?.id,
+                activityDate: draft
+                  ? draft.activityDate.toISOString().slice(0, 10)
                   : companyDay(new Date()),
-                title: taslak?.title ?? "",
-                description: taslak?.description ?? "",
-                attachments: taslak?.attachments,
-                // Departman çalışanına kendi birimi önseçili gelir (§5.3); onaya
-                // tabi olmayan kademelerde önseçim yapılmaz, çünkü etiketlenen
-                // departman çoğunlukla başkasıdır.
-                // §5.4: departman çalışanına kendi birimi **önceden seçili**
-                // gelir; müdür ve koordinatör kendisi seçer. Koordinatörün
-                // altındaki bütün birimleri işaretlemek yanlış olurdu — IT ile
-                // ilgili bir kayda Lojistik de iliştirilmiş olurdu.
-                //
-                // Eskiden bu, onaya tabi olma bayrağına bağlıydı; ikisinin
-                // birbiriyle ilgisi yok.
-                targetDepartmentIds: taslak
-                  ? taslak.targetOrgUnitIds
+                title: draft?.title ?? "",
+                description: draft?.description ?? "",
+                attachments: draft?.attachments,
+                // Regular employees start with their own unit selected. Managers
+                // choose related units explicitly because their records may span
+                // several parts of the organization.
+                targetDepartmentIds: draft
+                  ? draft.targetOrgUnitIds
                   : user.isUnitManager
                     ? []
                     : [user.orgUnitId],

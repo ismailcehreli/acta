@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocale } from "@/server/i18n/locale";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { activityMaintenanceReader } from "@/server/authz/activity-repository";
 import { canViewActivity } from "@/server/authz/visibility";
 import { canAskQuestion } from "@/server/conversations/service";
@@ -48,7 +50,9 @@ import {
 
 import { AppreciateButton } from "./appreciate-button";
 
-export const metadata = { title: "Faaliyet" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("activities.title");
+}
 
 export default async function ActivityDetailPage({
   params,
@@ -57,6 +61,9 @@ export default async function ActivityDetailPage({
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
 
   const { id } = await params;
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
@@ -85,20 +92,20 @@ export default async function ActivityDetailPage({
     },
   });
 
-  // Her okuma yolu görünürlük modülünden geçer (§8.4).
+
   const level = activity
     ? await canViewActivity(prisma, viewer, activity)
     : "none";
 
-  // Görülemeyen kaydın varlığı da bildirilmez.
+
   if (!activity || level === "none") notFound();
 
-  const iptal = activity.approvalStatus === "CANCELLED";
+  const isCancelled = activity.approvalStatus === "CANCELLED";
 
-  // Faaliyetin iki tarihi: ait olduğu gün ve yazıldığı an (Görev 11.1).
-  // Geçmişe dönük girişte ikisi ayrışır ve okuyanın bunu görmesi gerekir.
-  // Takdir yalnız yetkili kullanıcıya gösterilir; asıl kural serviste.
-  const [takdirAcik, takdirSayisi, kendiTakdiri] = await Promise.all([
+
+
+
+  const [appreciationOpen, appreciationCount, ownAppreciation] = await Promise.all([
     readBooleanSetting(prisma, SETTING_KEYS.appreciationEnabled),
     countAppreciations(prisma, activity.id),
     prisma.activityAppreciation.findUnique({
@@ -107,12 +114,19 @@ export default async function ActivityDetailPage({
     }),
   ]);
 
-  const tarihler = describeActivityDates({
+  const activityDates = describeActivityDates(
+    {
     ...activity,
     revisionNo: activity.currentRevisionNo,
-  });
+    },
+    locale,
+    {
+      saved: t("activities.saved"),
+      lastEdited: t("activities.lastEdited"),
+    },
+  );
 
-  // Üst veri seviyesinde açıklama ve konuşmalar gösterilmez (§8.2).
+
   if (level === "metadata") {
     return (
       <AppShell
@@ -121,15 +135,13 @@ export default async function ActivityDetailPage({
         <Page>
           <PageHeader
             title={activity.title}
-            description={`${activity.author.fullName} · ${formatDay(activity.activityDate)}`}
-            breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Faaliyet" }]}
+            description={`${activity.author.fullName} · ${formatDay(activity.activityDate, locale)}`}
+            breadcrumbs={[{ label: t("screens.activitiesPage.dashboard"), href: "/" }, { label: t("activities.title") }]}
           />
           <Card>
             <CardBody>
               <p className="text-sm text-muted">
-                Bu kayıt yönlendirme bekliyor. İçeriğini görüntüleme yetkiniz
-                yok: sistem yöneticiliği hesapları ve ayarları yönetmeye
-                yarar, faaliyet içeriğini okumaya değil.
+                {t("activityDetail.metadataDescription")}
               </p>
             </CardBody>
           </Card>
@@ -140,7 +152,7 @@ export default async function ActivityDetailPage({
 
   const [
     conversations,
-    sorabilir,
+    canAsk,
     readers,
     attachments,
     subordinates,
@@ -154,48 +166,44 @@ export default async function ActivityDetailPage({
     readNumericSetting(prisma, SETTING_KEYS.readDwellSeconds),
   ]);
 
-  const yazanMi = activity.authorId === user.id;
-  // Onay kararı uygun onaylayıcılara düşer (§8.2) — iki müdürlü birimde
-  // ikisine, vekâlet süresince vekile de. Yetki sunucu eyleminde ayrıca
-  // doğrulanır; buradaki tek iş paneli göstermek. Aynı fonksiyonu kullanmak,
-  // "düğme yok ama eylem kabul ediyor" ayrışmasını engelliyor.
-  const onaylayanMi = await canDecideOnActivity(prisma, user.id, activity.id);
-  const onayBekliyor = activity.approvalStatus === "PENDING_APPROVAL";
-  const duzeltmeIsteniyor = activity.approvalStatus === "CHANGES_REQUESTED";
-  const reddedildi = activity.approvalStatus === "REJECTED";
-  // Karar hâlâ onaylayıcıdaysa panel gösterilir. Düzeltme istenmiş kayıtta
-  // onaylanacak bir şey yoktur ama **reddetme** durur: yazan kaydı hiç
-  // düzeltmezse kayıt aksi hâlde sonsuza kadar askıda kalırdı.
-  const kararBekliyor = onayBekliyor || duzeltmeIsteniyor;
+  const isAuthor = activity.authorId === user.id;
+  // The panel mirrors the same authorization check used by the server action.
+  // Keeping both paths on one function prevents hidden-action mismatches.
+  const canDecide = await canDecideOnActivity(prisma, user.id, activity.id);
+  const approvalPending = activity.approvalStatus === "PENDING_APPROVAL";
+  const changesRequested = activity.approvalStatus === "CHANGES_REQUESTED";
+  const isRejected = activity.approvalStatus === "REJECTED";
+  // A pending decision shows the panel. A changes-requested record has no
+  // approval action, but rejection remains available so it cannot stay open forever.
+  const decisionPending = approvalPending || changesRequested;
 
-  // Takip maddesi (§11). Yalnız içeriği tam görebilen kişiye çizilir; yetkinin
-  // kendisi sunucu eyleminde ayrıca doğrulanıyor.
-  const [acikTakip, kapaliTakip, takvimAyarlari] = await Promise.all([
+  // Follow-up details are shown only after full-content visibility is confirmed.
+  const [openFollowUp, closedFollowUp, calendarSettings] = await Promise.all([
     findOpenFollowUp(prisma, activity.id),
     findLatestClosedFollowUp(prisma, activity.id),
     readWorkCalendar(prisma),
   ]);
 
-  const simdi = new Date();
-  const takipHareketsizlik = acikTakip
-    ? businessDaysBetween(acikTakip.lastMovedAt, simdi, {
-        workingDays: takvimAyarlari.workingDays,
+  const now = new Date();
+  const followUpInactivity = openFollowUp
+    ? businessDaysBetween(openFollowUp.lastMovedAt, now, {
+        workingDays: calendarSettings.workingDays,
       })
     : 0;
 
-  const takipYonetebilir = acikTakip
-    ? acikTakip.ownerId === user.id ||
-      acikTakip.openedById === user.id ||
-      (await isInManagementChain(prisma, acikTakip.ownerId, user.id))
-    : kapaliTakip
-      ? kapaliTakip.ownerId === user.id ||
-        kapaliTakip.openedById === user.id ||
-        (await isInManagementChain(prisma, kapaliTakip.ownerId, user.id))
+  const canManageFollowUp = openFollowUp
+    ? openFollowUp.ownerId === user.id ||
+      openFollowUp.openedById === user.id ||
+      (await isInManagementChain(prisma, openFollowUp.ownerId, user.id))
+    : closedFollowUp
+      ? closedFollowUp.ownerId === user.id ||
+        closedFollowUp.openedById === user.id ||
+        (await isInManagementChain(prisma, closedFollowUp.ownerId, user.id))
       : false;
 
-  // Gerekçe katalogları yalnız karar verecek kişiye yüklenir.
+  // Load reason catalogs only for a person who can make the decision.
   const [changesReasons, rejectReasons] =
-    kararBekliyor && onaylayanMi
+    decisionPending && canDecide
       ? await Promise.all([
           listActiveReasons(prisma, "CHANGES_REQUESTED"),
           listActiveReasons(prisma, "REJECTED"),
@@ -209,18 +217,18 @@ export default async function ActivityDetailPage({
       <Page>
         <PageHeader
           title={
-            <span className={iptal ? "text-muted line-through" : undefined}>
+            <span className={isCancelled ? "text-muted line-through" : undefined}>
               {activity.title}
             </span>
           }
           description={
             <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              {/* Sıra numarası (§3.1): konuşurken ve belgede atıf verirken
-                  kullanılan kısa kimlik. */}
+              {/* Short identifier used when referring to a record in conversation
+                  and documentation (§3.1). */}
               <span className="tabular text-muted">#{activity.activityNo}</span>
               <span aria-hidden>·</span>
-              {/* Yazarın profili: kayda bakan kişi zaten adı görüyor, bağlantı
-                  yeni bilgi vermez. Profil sayfası erişimi kendi denetler. */}
+              {/* The profile link is useful for the author's unit context; the
+                  profile page performs its own visibility check. */}
               <Avatar
                 user={{
                   id: activity.authorId,
@@ -228,6 +236,7 @@ export default async function ActivityDetailPage({
                   avatarExtension: activity.author.avatarExtension,
                 }}
                 size={24}
+                locale={locale}
               />
               <Link
                 href={`/users/${activity.authorId}`}
@@ -235,8 +244,7 @@ export default async function ActivityDetailPage({
               >
                 {activity.author.fullName}
               </Link>
-              {/* Unvan yetki değildir; okuyanın "bu kişi ne iş yapıyor"
-                  sorusuna cevap verir. Boşsa ayraç da yazılmaz. */}
+              {/* A title describes the person but grants no permission. */}
               {activity.author.title ? (
                 <>
                   <span aria-hidden>·</span>
@@ -247,47 +255,52 @@ export default async function ActivityDetailPage({
               <span>{activity.authorOrgUnit.name}</span>
               <span aria-hidden>·</span>
               <time dateTime={activity.activityDate.toISOString().slice(0, 10)}>
-                {tarihler.main}
+                {activityDates.main}
               </time>
-              {iptal ? <Badge tone="danger">iptal edildi</Badge> : null}
-              {onayBekliyor ? <Badge tone="waiting">onay bekliyor</Badge> : null}
-              {duzeltmeIsteniyor ? (
-                <Badge tone="correction">düzeltme istendi</Badge>
+              {isCancelled ? (
+                <Badge tone="danger">{t("activityStatus.CANCELLED")}</Badge>
               ) : null}
-              {reddedildi ? <Badge tone="danger">reddedildi</Badge> : null}
+              {approvalPending ? (
+                <Badge tone="waiting">{t("activityStatus.PENDING_APPROVAL")}</Badge>
+              ) : null}
+              {changesRequested ? (
+                <Badge tone="correction">{t("activityStatus.CHANGES_REQUESTED")}</Badge>
+              ) : null}
+              {isRejected ? (
+                <Badge tone="danger">{t("activityStatus.REJECTED")}</Badge>
+              ) : null}
               {activity.approvalStatus === "MANAGER_NOT_FOUND" ? (
-                <Badge tone="danger">yönetici bulunamadı</Badge>
+                <Badge tone="danger">{t("activityStatus.MANAGER_NOT_FOUND")}</Badge>
               ) : null}
               {activity.currentRevisionNo > 1 ? (
                 <Badge tone="neutral">
-                  düzenlendi (rev. {activity.currentRevisionNo})
+                  {t("activities.revisionLabel", {
+                    count: activity.currentRevisionNo,
+                  })}
                 </Badge>
               ) : null}
             </span>
           }
           breadcrumbs={[
-            { label: "Ana ekran", href: "/" },
-            yazanMi
-              ? { label: "Faaliyetlerim", href: "/activities" }
-              : { label: "Faaliyet" },
-            ...(yazanMi ? [{ label: "Kayıt" }] : []),
+            { label: t("screens.activitiesPage.dashboard"), href: "/" },
+            isAuthor
+              ? { label: t("screens.activitiesPage.pageTitle"), href: "/activities" }
+              : { label: t("activities.title") },
+            ...(isAuthor ? [{ label: t("activityDetail.record") }] : []),
           ]}
         />
 
-        {/* Onay durumu kaydın en üstünde: kim ne yapacak, sayfayı okumadan
-            görünmeli. */}
+        {/* The current decision state should be visible before the record content. */}
 
-        {/* ── Belge + karar rayı (brief §5, §7) ─────────────────────
-            Masaüstünde içerik solda belge yüzeyinde, kararlar sağda dar
-            bir rayda. Dar ekranda ray belgenin **altına** iner: karar
-            eylemleri içeriği kapatmaz, kullanıcı önce kaydı okur. */}
+        {/* The record occupies the main column; decision controls use a narrow
+            side rail on wide screens and move below the record on small screens. */}
         <div className="grid gap-(--spacing-section) xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start xl:gap-8">
           <div className="flex min-w-0 flex-col gap-(--spacing-block)">
         <Card>
           <CardBody className="flex flex-col gap-4">
             {activity.targetDepts.length > 0 ? (
               <p className="flex flex-wrap items-center gap-2 text-sm text-muted">
-                <span className="text-muted">İlgili departmanlar:</span>
+                <span className="text-muted">{t("activityDetail.relatedDepartments")}</span>
                 {activity.targetDepts.map((t) => (
                   <Badge key={t.orgUnit.name}>{t.orgUnit.name}</Badge>
                 ))}
@@ -298,65 +311,67 @@ export default async function ActivityDetailPage({
               {activity.description}
             </p>
 
-            {takdirAcik && user.canAppreciate ? (
+            {appreciationOpen && user.canAppreciate ? (
               <div className="border-t border-line pt-3">
                 <AppreciateButton
                   activityId={activity.id}
-                  count={takdirSayisi}
-                  already={kendiTakdiri !== null}
+                  count={appreciationCount}
+                  already={ownAppreciation !== null}
                 />
               </div>
-            ) : takdirAcik && takdirSayisi > 0 ? (
+            ) : appreciationOpen && appreciationCount > 0 ? (
               <p className="border-t border-line pt-3 text-[length:var(--text-sm)] text-muted">
-                Bu kayıt {takdirSayisi} takdir aldı.
+                {t("activities.appreciationCount", { count: appreciationCount })}
               </p>
             ) : null}
 
-            {/* Kaydın künyesi: ne zaman yazıldı, düzeltildiyse ne zaman.
-                Faaliyetin tarihi başlıkta duruyor; bu satır "bu kayıt ne
-                zaman tutuldu" sorusunun cevabı. Geçmişe dönük girişte ikisi
-                ayrışır ve fark okunabilir olmalı. */}
+            {/* The activity date is shown in the header; this line records when
+                the entry itself was saved and revised. */}
             <p className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-3 text-[length:var(--text-xs)] text-muted">
               <time dateTime={activity.createdAt.toISOString()}>
-                {tarihler.created}
+                {activityDates.created}
               </time>
-              {tarihler.revised ? (
+              {activityDates.revised ? (
                 <>
                   <span aria-hidden>·</span>
                   <time
                     dateTime={activity.updatedAt.toISOString()}
                     className="font-medium text-ink"
                   >
-                    {tarihler.revised}
+                    {activityDates.revised}
                   </time>
                 </>
               ) : null}
             </p>
 
-            {iptal && activity.cancellation ? (
+            {isCancelled && activity.cancellation ? (
               <div className="rounded-(--radius-sm) border border-danger/25 bg-danger-soft px-3.5 py-2.5 text-sm">
-                <span className="font-medium">İptal gerekçesi:</span>{" "}
+                <span className="font-medium">{t("activityDetail.cancellationReason")}</span>{" "}
                 {activity.cancellation.reason}
               </div>
             ) : null}
 
-            {/* Resim, PDF ve video sayfadan çıkmadan açılır; diğer türler
-                eskisi gibi indirilir (§15.4). */}
+            {/* Images, PDFs, and videos open without leaving the page; other
+                types are downloaded as before (§15.4). */}
             <AttachmentGallery attachments={attachments} />
 
             {readers.length > 0 ? (
               <p
-                id="okundu-bilgisi"
+                id="readers"
                 className="border-t border-line pt-4 text-sm text-muted"
               >
-                {yazanMi
-                  ? `Okuyanlar: ${readers
+                {isAuthor
+                  ? t("activities.readByUsers", {
+                      readers: readers
                       .map(
                         (reader) =>
-                          `${reader.fullName} · ${formatInstant(reader.firstReadAt)}`,
+                          `${reader.fullName} · ${formatInstant(reader.firstReadAt, locale)}`,
                       )
-                      .join(", ")}`
-                  : `Bu faaliyeti ${formatInstant(readers[0].firstReadAt)} tarihinde okudunuz.`}
+                      .join(", "),
+                    })
+                  : t("activities.readYourselfAt", {
+                      date: formatInstant(readers[0].firstReadAt, locale),
+                    })}
               </p>
             ) : null}
           </CardBody>
@@ -364,8 +379,8 @@ export default async function ActivityDetailPage({
 
         <Card>
           <CardHeader
-            title="Sorular"
-            description="Sorulan soru cevaplanana kadar hem soranın hem cevaplaması gerekenin listesinde durur. Kimse unutmaya güvenmez."
+            title={t("conversations.title")}
+            description={t("conversations.questionDescription")}
           />
           <CardBody>
             <ConversationList
@@ -373,7 +388,7 @@ export default async function ActivityDetailPage({
               viewerId={user.id}
               viewerIsSystemAdmin={user.isSystemAdmin}
             />
-            {sorabilir && !iptal ? (
+            {canAsk && !isCancelled ? (
               <div className="mt-4 border-t border-line pt-4">
                 <AskQuestionForm activityId={activity.id} />
               </div>
@@ -383,23 +398,23 @@ export default async function ActivityDetailPage({
 
           </div>
 
-          <aside aria-label="Karar ve takip" className="flex min-w-0 flex-col gap-(--spacing-block)">
-        {kararBekliyor && onaylayanMi ? (
+          <aside aria-label={t("activityDetail.decisionAndFollowUp")} className="flex min-w-0 flex-col gap-(--spacing-block)">
+        {decisionPending && canDecide ? (
           <Card>
             <CardHeader
-              title={onayBekliyor ? "Onayınızı bekliyor" : "Düzeltme bekleniyor"}
+              title={t("approvals.approvalCardTitle")}
               description={
-                onayBekliyor
+                approvalPending
                   ? activity.currentRevisionNo > 1
-                    ? "Bu faaliyet düzeltilerek tekrar onayınıza sunulmuştur. Onaylarsanız üst kademeler görebilir."
-                    : "Onaylarsanız üst kademeler görebilir. Düzeltme isterseniz kayıt yazana geri döner. Reddederseniz kayıt kapanır ve yukarı akmaz."
-                  : "Yazan kişi kaydı henüz düzeltmedi. Düzeltmeyle kurtulmayacak bir kayıtsa reddedebilirsiniz."
+                    ? t("approvals.revisedApprovalDescription")
+                    : t("approvals.pendingApprovalDescription")
+                  : t("approvals.changesPendingDescription")
               }
             />
             <CardBody>
               <ApprovalPanel
                 activityId={activity.id}
-                canApprove={onayBekliyor}
+                canApprove={approvalPending}
                 changesReasons={changesReasons}
                 rejectReasons={rejectReasons}
               />
@@ -407,32 +422,32 @@ export default async function ActivityDetailPage({
           </Card>
         ) : null}
 
-        {onayBekliyor && yazanMi ? (
-          <Alert tone="info" title="Onay bekliyor">
+        {approvalPending && isAuthor ? (
+          <Alert tone="info" title={t("approvals.awaitingApproval")}>
             {activity.approver
-              ? `${activity.approver.fullName} onayladıktan sonra üst kademeler görebilecek.`
-              : "Onaylandıktan sonra üst kademeler görebilecek."}{" "}
-            Bu sırada kayıt değiştirilemez.
+              ? t("approvals.approvedBy", { name: activity.approver.fullName })
+              : t("approvals.higherLevelsAfterApproval")}{" "}
+            {t("approvals.lockedWhilePending")}
           </Alert>
         ) : null}
 
-        {duzeltmeIsteniyor && activity.approvalReason ? (
-          <Card data-test="duzeltme-gerekcesi">
+        {changesRequested && activity.approvalReason ? (
+          <Card data-test="changes-requested-reason">
             <CardHeader
-              title="Düzeltme istendi"
+              title={t("approvals.changesRequested")}
               description={
                 activity.approver
-                  ? `${activity.approver.fullName} şunu istedi:`
+                  ? t("approvals.requestedBy", { name: activity.approver.fullName })
                   : undefined
               }
               action={
-                yazanMi ? (
+                isAuthor ? (
                   <ButtonLink
                     href={`/activities/${activity.id}/edit`}
                     variant="primary"
                     size="sm"
                   >
-                    Düzelt
+                    {t("activities.revise")}
                   </ButtonLink>
                 ) : null
               }
@@ -444,23 +459,23 @@ export default async function ActivityDetailPage({
                   {activity.approvalReasonNote}
                 </p>
               ) : null}
-              {yazanMi ? (
+              {isAuthor ? (
                 <p className="mt-3 text-[length:var(--text-sm)] text-muted">
-                  Düzeltip kaydettiğinizde kayıt yeniden onaya gider.
+                  {t("approvals.reviseAndResubmit")}
                 </p>
               ) : null}
             </CardBody>
           </Card>
         ) : null}
 
-        {reddedildi && activity.approvalReason ? (
-          <Card data-test="ret-gerekcesi">
+        {isRejected && activity.approvalReason ? (
+          <Card data-test="rejection-reason">
             <CardHeader
-              title="Uygun bulunmadı"
+              title={t("approvals.rejected")}
               description={
                 activity.approver
-                  ? `${activity.approver.fullName} bu kaydı reddetti. Kayıt kapandı ve üst kademelere akmadı.`
-                  : "Kayıt kapandı ve üst kademelere akmadı."
+                  ? t("approvals.rejectedBy", { name: activity.approver.fullName })
+                  : t("approvals.rejectedDescription")
               }
             />
             <CardBody>
@@ -470,9 +485,9 @@ export default async function ActivityDetailPage({
                   {activity.approvalReasonNote}
                 </p>
               ) : null}
-              {yazanMi ? (
+              {isAuthor ? (
                 <p className="mt-3 text-[length:var(--text-sm)] text-muted">
-                  Bu kayıt düzenlenemez. Gerekiyorsa yeni bir faaliyet yazın.
+                  {t("approvals.cannotReviseRejected")}
                 </p>
               ) : null}
             </CardBody>
@@ -482,43 +497,43 @@ export default async function ActivityDetailPage({
         <FollowUpPanel
           activityId={activity.id}
           item={
-            acikTakip
+            openFollowUp
               ? {
-                  id: acikTakip.id,
-                  ownerName: acikTakip.owner.fullName,
-                  openedByName: acikTakip.openedBy.fullName,
-                  nextStep: acikTakip.nextStep,
-                  reviewDate: acikTakip.reviewDate
-                    ? formatDay(acikTakip.reviewDate)
+                  id: openFollowUp.id,
+                  ownerName: openFollowUp.owner.fullName,
+                  openedByName: openFollowUp.openedBy.fullName,
+                  nextStep: openFollowUp.nextStep,
+                  reviewDate: openFollowUp.reviewDate
+                    ? formatDay(openFollowUp.reviewDate, locale)
                     : null,
-                  idleBusinessDays: takipHareketsizlik,
+                  idleBusinessDays: followUpInactivity,
                 }
               : null
           }
           closed={
-            !acikTakip && kapaliTakip && kapaliTakip.closedAt
+            !openFollowUp && closedFollowUp && closedFollowUp.closedAt
               ? {
-                  id: kapaliTakip.id,
-                  closedByName: kapaliTakip.closedBy?.fullName ?? "—",
-                  closingNote: kapaliTakip.closingNote ?? "",
-                  closedAt: formatDay(kapaliTakip.closedAt),
+                  id: closedFollowUp.id,
+                  closedByName: closedFollowUp.closedBy?.fullName ?? "—",
+                  closingNote: closedFollowUp.closingNote ?? "",
+                  closedAt: formatDay(closedFollowUp.closedAt, locale),
                 }
               : null
           }
-          canManage={takipYonetebilir}
-          canOpen={!iptal && !reddedildi}
+          canManage={canManageFollowUp}
+            canOpen={!isCancelled && !isRejected}
         />
 
           </aside>
         </div>
 
-        {/* Okuma ölçümü yalnızca başkasının kaydında anlamlıdır. */}
-        {yazanMi ? null : (
+        {/* Read-time measurement is meaningful only for another person's record. */}
+        {isAuthor ? null : (
           <ReadTracker
             activityId={activity.id}
             dwellMs={readDwellSeconds * 1_000}
-            // Bilet burada, görünürlük doğrulandıktan sonra üretilir; zamanı
-            // sunucu koyar (§10.2).
+            // The ticket is issued here, after visibility is verified; the server
+            // supplies the timestamp (§10.2).
             ticket={issueReadTicket(activity.id, user.id, new Date(), appSecret())}
           />
         )}

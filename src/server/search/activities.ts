@@ -7,33 +7,24 @@ import {
 } from "@/server/authz/activity-repository";
 import type { Viewer } from "@/server/authz/visibility";
 
-// Faaliyet araması (§16.2 tam metin indeksi). Sonuçlar **her zaman** görünürlük
-// kapsamıyla sınırlıdır ve süzgeç sorgunun içindedir: önce metinle eşleşenleri
-// bulup sonra daraltmak, kullanıcının göremediği kayıtların aday listesini
-// doldurmasına ve kendi sonuçlarının sessizce dışarıda kalmasına yol açardı.
-//
-// İptal edilmiş kayıtlar aramada **kalır** ve "iptal" etiketiyle görünür
-// (§5.5): silme yoktur, kayıt üstü çizili olarak durur.
-//
-// Sıralama alaka (`ts_rank`) sonra tarih; eşitlikte `id` ile kesinleşir, aksi
-// halde sayfalar arasında satır tekrarlayabilir ya da atlanabilir.
 
-/**
- * Metin indeksinin birebir karşılığı. İndeks `to_tsvector('turkish',
- * "title" || ' ' || "description")` ifadesi üzerinde tanımlı
- * (`20260817141637_veritabani_kisitlari`); sorgu aynı ifadeyi kullanmazsa
- * indeks kullanılmaz ve arama tam tarama olur.
- */
+
+
+
+//
+
+
+//
+
+
+
+
 const DOCUMENT = Prisma.raw(`to_tsvector('turkish', a."title" || ' ' || a."description")`);
 
-/** Sayfa başına sonuç. */
+
 export const SEARCH_PAGE_SIZE = 25;
 
-/**
- * Özetteki eşleşme işaretleyicileri. Kontrol karakterleri seçildi: kullanıcının
- * yazdığı metinde bulunmaları pratikte imkânsız, bulunsalar bile zararsız —
- * ekranda görünmezler.
- */
+
 export const HIGHLIGHT_START = "\u0001";
 export const HIGHLIGHT_END = "\u0002";
 
@@ -46,31 +37,31 @@ const HEADLINE_OPTIONS = [
   `StopSel=${HIGHLIGHT_END}`,
 ].join(", ");
 
-/** Özeti işaretli ve işaretsiz parçalara böler; ekran bunu bileşene çevirir. */
+/** Split a snippet into marked and unmarked parts for the display component. */
 export function splitHighlights(
   snippet: string,
 ): { text: string; marked: boolean }[] {
   const parts: { text: string; marked: boolean }[] = [];
-  let kalan = snippet;
+  let remaining = snippet;
 
-  while (kalan.length > 0) {
-    const basla = kalan.indexOf(HIGHLIGHT_START);
-    if (basla === -1) {
-      parts.push({ text: kalan, marked: false });
+  while (remaining.length > 0) {
+    const start = remaining.indexOf(HIGHLIGHT_START);
+    if (start === -1) {
+      parts.push({ text: remaining, marked: false });
       break;
     }
 
-    if (basla > 0) parts.push({ text: kalan.slice(0, basla), marked: false });
+    if (start > 0) parts.push({ text: remaining.slice(0, start), marked: false });
 
-    const bitir = kalan.indexOf(HIGHLIGHT_END, basla + 1);
-    if (bitir === -1) {
-      // Eşleşmemiş işaretleyici: kalanı düz metin say, hiçbir şey yutma.
-      parts.push({ text: kalan.slice(basla + 1), marked: false });
+    const end = remaining.indexOf(HIGHLIGHT_END, start + 1);
+    if (end === -1) {
+      // An unmatched marker is plain text; do not discard the remainder.
+      parts.push({ text: remaining.slice(start + 1), marked: false });
       break;
     }
 
-    parts.push({ text: kalan.slice(basla + 1, bitir), marked: true });
-    kalan = kalan.slice(bitir + 1);
+    parts.push({ text: remaining.slice(start + 1, end), marked: true });
+    remaining = remaining.slice(end + 1);
   }
 
   return parts.filter((part) => part.text.length > 0);
@@ -80,30 +71,29 @@ export type SearchDb = ActivityRepositoryDb;
 
 export interface SearchHit {
   id: string;
-  /** İnsan okur sıra numarası (§3.1). */
+  /** Human-readable sequence number (§3.1). */
   activityNo: number;
   activityDate: Date;
   title: string;
   approvalStatus: string;
   authorName: string;
-  /** Yazarın unvanı; boş olabilir. */
+  /** Author's title; may be empty. */
   authorTitle: string | null;
   authorUnitName: string;
-  /** Kaydın yazıldığı an; faaliyetin gününden ayrıdır (Görev 11.1). */
+  /** When the record was saved; distinct from its activity date (Task 11.1). */
   createdAt: Date;
   /**
-   * Kısa özet; eşleşen yerler `HIGHLIGHT_START`/`HIGHLIGHT_END` ile
-   * çevrelenir. **HTML değildir** — `ts_headline` `<mark>` etiketi üretebilir
-   * ama o çıktıyı ekrana basmak, kullanıcının yazdığı metni HTML olarak
-   * çalıştırmak demekti. İşaretleme metin içinde taşınır, ekran onu
-   * bileşene çevirir.
+   * Short snippet; matching regions are wrapped with `HIGHLIGHT_START`/
+   * `HIGHLIGHT_END`. It is **not HTML**: `ts_headline` can produce a `<mark>` tag,
+   * but rendering that output as HTML would execute user-provided content. The
+   * markers travel in the text and the screen turns them into components.
    */
   snippet: string;
 }
 
 export interface SearchResult {
   hits: SearchHit[];
-  /** Kapsam içindeki toplam eşleşme; "kaç sonuç var" sorusu sessiz kalmaz. */
+  /** Total matches in scope; the result count is always explicit. */
   total: number;
   page: number;
   pageCount: number;
@@ -123,11 +113,11 @@ interface RawHit {
 }
 
 /**
- * Aramaya uygulanan daraltmalar (Görev 10.9). Kapsam akışıyla **aynı** alanlar;
- * ortak süzgeç bileşeninden geliyorlar.
+ * Filters applied to search (Task 10.9). The fields are **the same** as the scope
+ * feed and come from the shared filter component.
  *
- * **Süzgeç yetki vermez:** hepsi görünürlük süzgecinin üstüne ekleniyor, hiçbiri
- * kapsamı genişletemiyor.
+ * **Filters do not grant access:** they are applied on top of the visibility scope
+ * and none can widen it.
  */
 export interface SearchFilters {
   period: "today" | "week" | "all";
@@ -144,26 +134,25 @@ export const EMPTY_SEARCH_FILTERS: SearchFilters = {
 };
 
 /**
- * Daraltmaları SQL parçasına çevirir. Değerler **parametre olarak** gidiyor;
- * metin birleştirme yok — arama zaten ham SQL kullanıyor ve buradaki değerler
- * adres çubuğundan geliyor.
+ * Convert filters into a SQL fragment. Values are passed **as parameters**; no
+ * string concatenation is used because these values come from the address bar.
  */
 function filterSql(filters: SearchFilters, now: Date): Prisma.Sql {
-  const parcalar: Prisma.Sql[] = [];
+  const fragments: Prisma.Sql[] = [];
 
   const start = periodStart(filters.period, now);
-  if (start) parcalar.push(Prisma.sql`AND a."activityDate" >= ${start}`);
+  if (start) fragments.push(Prisma.sql`AND a."activityDate" >= ${start}`);
 
   if (filters.authorId !== "") {
-    parcalar.push(Prisma.sql`AND a."authorId" = ${filters.authorId}`);
+    fragments.push(Prisma.sql`AND a."authorId" = ${filters.authorId}`);
   }
 
   if (filters.authorOrgUnitId !== "") {
-    parcalar.push(Prisma.sql`AND a."authorOrgUnitId" = ${filters.authorOrgUnitId}`);
+    fragments.push(Prisma.sql`AND a."authorOrgUnitId" = ${filters.authorOrgUnitId}`);
   }
 
   if (filters.targetOrgUnitId !== "") {
-    parcalar.push(Prisma.sql`
+    fragments.push(Prisma.sql`
       AND EXISTS (
         SELECT 1 FROM "ActivityTargetDept" t
         WHERE t."activityId" = a."id" AND t."orgUnitId" = ${filters.targetOrgUnitId}
@@ -171,7 +160,7 @@ function filterSql(filters: SearchFilters, now: Date): Prisma.Sql {
     `);
   }
 
-  return parcalar.length === 0 ? Prisma.empty : Prisma.join(parcalar, " ");
+  return fragments.length === 0 ? Prisma.empty : Prisma.join(fragments, " ");
 }
 
 export async function searchActivities(
@@ -187,25 +176,25 @@ export async function searchActivities(
   const trimmed = query.trim();
   if (trimmed === "") return { hits: [], total: 0, page: 1, pageCount: 0 };
 
-  const daraltma = filterSql(filters, now);
-  const guvenliSayfa = Math.max(1, Math.trunc(page));
-  const offset = (guvenliSayfa - 1) * pageSize;
+  const filterFragment = filterSql(filters, now);
+  const safePage = Math.max(1, Math.trunc(page));
+  const offset = (safePage - 1) * pageSize;
 
-  const [sayim] = await queryVisibleActivities<{ total: bigint }>(
+  const [countRow] = await queryVisibleActivities<{ total: bigint }>(
     db,
     viewer,
     (scope) => Prisma.sql`
     SELECT count(*)::bigint AS total
     FROM "Activity" a, plainto_tsquery('turkish', ${trimmed}) q
-    WHERE ${DOCUMENT} @@ q AND ${scope} ${daraltma}
+    WHERE ${DOCUMENT} @@ q AND ${scope} ${filterFragment}
   `,
     subordinates,
     now,
   );
 
-  const total = Number(sayim?.total ?? 0);
+  const total = Number(countRow?.total ?? 0);
   if (total === 0) {
-    return { hits: [], total: 0, page: guvenliSayfa, pageCount: 0 };
+    return { hits: [], total: 0, page: safePage, pageCount: 0 };
   }
 
   const rows = await queryVisibleActivities<RawHit>(
@@ -227,7 +216,7 @@ export async function searchActivities(
     JOIN "User" u ON u."id" = a."authorId"
     JOIN "OrgUnit" o ON o."id" = a."authorOrgUnitId",
       plainto_tsquery('turkish', ${trimmed}) q
-    WHERE ${DOCUMENT} @@ q AND ${scope} ${daraltma}
+    WHERE ${DOCUMENT} @@ q AND ${scope} ${filterFragment}
     ORDER BY ts_rank(${DOCUMENT}, q) DESC, a."activityDate" DESC, a."id" DESC
     LIMIT ${pageSize} OFFSET ${offset}
   `,
@@ -238,7 +227,7 @@ export async function searchActivities(
   return {
     hits: rows,
     total,
-    page: guvenliSayfa,
+    page: safePage,
     pageCount: Math.ceil(total / pageSize),
   };
 }

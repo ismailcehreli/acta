@@ -1,87 +1,86 @@
-// Tarih ve saat biçimlendirmenin **tek kaynağı**.
-//
-// Bu modül tekrarı azaltmak için değil, **zaman dilimi ayrımını tek yerde
-// kilitlemek** için var. Ayrım şu ve her çağrıda yeniden yapılırsa er geç
-// biri yanlış yapar:
-//
-//   - `date` kolonları — faaliyet tarihi, izin aralığı, tatil — zaman dilimi
-//     **taşımaz.** Veritabanından her zaman `T00:00:00.000Z` olarak okunur ve
-//     **UTC** ile biçimlenir. Şirket saatiyle biçimlenirse +03 farkı yüzünden
-//     gün bir geriye kayar.
-//   - `timestamptz` kolonları — oluşturma, düzeltme, denetim izi — gerçek bir
-//     andır ve **şirket saatiyle** (Europe/Istanbul) gösterilir. UTC ile
-//     biçimlenirse gece yarısından önceki üç saatte hem gün hem saat yanlış
-//     çıkar.
-//
-// Fonksiyon adları bu ayrımı taşır: `…Day` gün alanları içindir, `…Instant`
-// ve `…Time` an alanları için.
+import {
+  DEFAULT_LOCALE,
+  LOCALE_LANGUAGE_TAGS,
+  type Locale,
+} from "@/shared/i18n/config";
+import { createTranslator } from "@/shared/i18n/translator";
 
+/** The company time zone used for all timestamp calculations and displays. */
 export const COMPANY_TIME_ZONE = "Europe/Istanbul";
 
-// Biçimlendiriciler modül düzeyinde bir kez kurulur: `Intl.DateTimeFormat`
-// kurulumu pahalıdır ve bu fonksiyonlar liste satırı başına çağrılır.
+interface Formatters {
+  day: Intl.DateTimeFormat;
+  dayLong: Intl.DateTimeFormat;
+  dayShort: Intl.DateTimeFormat;
+  instantDate: Intl.DateTimeFormat;
+  time: Intl.DateTimeFormat;
+  instantShortDate: Intl.DateTimeFormat;
+  second: Intl.DateTimeFormat;
+  weekday: Intl.DateTimeFormat;
+}
 
-const dayFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: "UTC",
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-});
+const formatterCache = new Map<Locale, Formatters>();
 
-const dayLongFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: "UTC",
-  day: "numeric",
-  month: "long",
-  year: "numeric",
-  weekday: "long",
-});
+function getFormatters(locale: Locale = DEFAULT_LOCALE): Formatters {
+  const cached = formatterCache.get(locale);
+  if (cached) return cached;
 
-const dayShortFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: "UTC",
-  day: "numeric",
-  month: "short",
-});
+  const language =
+    LOCALE_LANGUAGE_TAGS[locale] ?? LOCALE_LANGUAGE_TAGS[DEFAULT_LOCALE];
+  const formatters: Formatters = {
+    day: new Intl.DateTimeFormat(language, {
+      timeZone: "UTC",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }),
+    dayLong: new Intl.DateTimeFormat(language, {
+      timeZone: "UTC",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      weekday: "long",
+    }),
+    dayShort: new Intl.DateTimeFormat(language, {
+      timeZone: "UTC",
+      day: "numeric",
+      month: "short",
+    }),
+    instantDate: new Intl.DateTimeFormat(language, {
+      timeZone: COMPANY_TIME_ZONE,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }),
+    time: new Intl.DateTimeFormat(language, {
+      timeZone: COMPANY_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }),
+    instantShortDate: new Intl.DateTimeFormat(language, {
+      timeZone: COMPANY_TIME_ZONE,
+      day: "numeric",
+      month: "short",
+    }),
+    second: new Intl.DateTimeFormat(language, {
+      timeZone: COMPANY_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }),
+    weekday: new Intl.DateTimeFormat(language, {
+      timeZone: "UTC",
+      weekday: "long",
+    }),
+  };
 
-const instantDateFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: COMPANY_TIME_ZONE,
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-});
+  formatterCache.set(locale, formatters);
+  return formatters;
+}
 
-const timeFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: COMPANY_TIME_ZONE,
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-});
-
-const instantShortDateFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: COMPANY_TIME_ZONE,
-  day: "numeric",
-  month: "short",
-});
-
-const secondFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: COMPANY_TIME_ZONE,
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
-});
-
-const hourFormatter = new Intl.DateTimeFormat("en-GB", {
-  timeZone: COMPANY_TIME_ZONE,
-  hour: "2-digit",
-  hour12: false,
-});
-
-const weekdayFormatter = new Intl.DateTimeFormat("tr-TR", {
-  timeZone: "UTC",
-  weekday: "long",
-});
-
-/** Şirket saatindeki günü `YYYY-MM-DD` olarak verir (§16.6). */
+/** Formats an instant as the company's local date and time parts. */
 const companyDayFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: COMPANY_TIME_ZONE,
   year: "numeric",
@@ -89,12 +88,7 @@ const companyDayFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
-/**
- * Verilen ana karşılık gelen **şirket günü** (`YYYY-MM-DD`).
- *
- * Sunucu UTC'de çalışsa da "bugün" İstanbul'daki bugündür. Gün sınırına yakın
- * saatlerde ikisi ayrışır ve kullanıcının gördüğü gün burada belirlenir.
- */
+/** Returns the calendar day in the company's time zone as `YYYY-MM-DD`. */
 export function companyDay(instant: Date): string {
   return companyDayFormatter.format(instant);
 }
@@ -110,145 +104,144 @@ const companyPartFormatter = new Intl.DateTimeFormat("en-CA", {
   second: "2-digit",
 });
 
-/** Verilen anda şirket saatinin UTC'ye göre kayması (milisaniye). */
+/** Returns the company's offset from UTC at a given instant. */
 function companyOffsetMs(instant: Date): number {
-  const parcalar = companyPartFormatter.formatToParts(instant);
-  const al = (tur: string): number =>
-    Number(parcalar.find((parca) => parca.type === tur)?.value ?? "0");
+  const parts = companyPartFormatter.formatToParts(instant);
+  const value = (type: string): number =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
 
-  const yerelUtc = Date.UTC(
-    al("year"),
-    al("month") - 1,
-    al("day"),
-    al("hour") % 24,
-    al("minute"),
-    al("second"),
+  const localUtc = Date.UTC(
+    value("year"),
+    value("month") - 1,
+    value("day"),
+    value("hour") % 24,
+    value("minute"),
+    value("second"),
   );
 
-  return yerelUtc - instant.getTime();
+  return localUtc - instant.getTime();
 }
 
-/**
- * Şirket gününün **başladığı an**.
- *
- * Gün alanları (`@db.Date`) ile zaman damgaları aynı sınırla
- * karşılaştırılamaz: "31 Ağustos" bir gün alanı için kapsayıcı üst sınırdır,
- * ama bir zaman damgası için o günün **00:00**'ıdır ve gün içinde olan her
- * şeyi dışarıda bırakır (denetim 23.08.2026, P3-3). Zaman damgalı
- * aralıklar bu yüzden `[günBaşı, sonrakiGünBaşı)` biçiminde kuruluyor ve
- * sınır şirket saatiyle hesaplanıyor — sunucu UTC'de koşsa da gün İstanbul'da
- * başlar.
- */
+/** Returns the instant at which a company calendar day begins. */
 export function companyDayStart(day: string): Date {
-  const utcGeceYarisi = new Date(`${day}T00:00:00.000Z`);
-  const kayma = companyOffsetMs(utcGeceYarisi);
-  const ilk = new Date(utcGeceYarisi.getTime() - kayma);
+  const utcMidnight = new Date(`${day}T00:00:00.000Z`);
+  const offset = companyOffsetMs(utcMidnight);
+  const initial = new Date(utcMidnight.getTime() - offset);
 
-  // Yaz saati sınırında kayma değişebilir; bir kez daha düzeltilir.
-  const ikinciKayma = companyOffsetMs(ilk);
-  return ikinciKayma === kayma
-    ? ilk
-    : new Date(utcGeceYarisi.getTime() - ikinciKayma);
+  // Recalculate once because the offset may change at a daylight-saving boundary.
+  const correctedOffset = companyOffsetMs(initial);
+  return correctedOffset === offset
+    ? initial
+    : new Date(utcMidnight.getTime() - correctedOffset);
 }
 
-/** Verilen şirket gününü izleyen günün başladığı an. */
+/** Returns the start of the company day after the supplied calendar day. */
 export function nextCompanyDayStart(day: string): Date {
-  const sonraki = new Date(`${day}T00:00:00.000Z`);
-  sonraki.setUTCDate(sonraki.getUTCDate() + 1);
+  const next = new Date(`${day}T00:00:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
 
-  return companyDayStart(sonraki.toISOString().slice(0, 10));
+  return companyDayStart(next.toISOString().slice(0, 10));
 }
 
-/** `YYYY-MM-DD` metnini bir gün alanına yazılacak değere çevirir. */
+/** Converts a `YYYY-MM-DD` calendar value to a UTC date-only value. */
 export function toDateValue(day: string): Date {
   return new Date(`${day}T00:00:00.000Z`);
 }
 
-/** Gün alanı → `21.08.2026`. Faaliyet tarihi, izin aralığı, tatil. */
-export function formatDay(day: Date): string {
-  return dayFormatter.format(day);
+/** Formats a date-only value. Date-only values are always formatted in UTC. */
+export function formatDay(day: Date, locale: Locale = DEFAULT_LOCALE): string {
+  return getFormatters(locale).day.format(day);
 }
 
-/** Gün alanı → `21 Ağustos 2026 Cuma`. Gün şeridi başlıkları. */
-export function formatDayLong(day: Date): string {
-  return dayLongFormatter.format(day);
+/** Formats a date-only value with a long weekday and month name. */
+export function formatDayLong(day: Date, locale: Locale = DEFAULT_LOCALE): string {
+  return getFormatters(locale).dayLong.format(day);
 }
 
-/** Gün alanı → `21 Ağu`. Dar listeler. */
-export function formatDayShort(day: Date): string {
-  return dayShortFormatter.format(day);
+/** Formats a date-only value for compact lists. */
+export function formatDayShort(day: Date, locale: Locale = DEFAULT_LOCALE): string {
+  return getFormatters(locale).dayShort.format(day);
 }
 
-/** An alanı → `21.08.2026 14:32`. Oluşturma, düzeltme, denetim izi. */
-export function formatInstant(instant: Date): string {
-  return `${instantDateFormatter.format(instant)} ${timeFormatter.format(instant)}`;
+/** Formats a timestamp using the company's local time zone. */
+export function formatInstant(instant: Date, locale: Locale = DEFAULT_LOCALE): string {
+  const formatters = getFormatters(locale);
+  return `${formatters.instantDate.format(instant)} ${formatters.time.format(instant)}`;
 }
 
-/** An alanı → `14:32`. Aynı gün içindeki an. */
-export function formatTime(instant: Date): string {
-  return timeFormatter.format(instant);
+/** Formats the local time portion of a timestamp. */
+export function formatTime(instant: Date, locale: Locale = DEFAULT_LOCALE): string {
+  return getFormatters(locale).time.format(instant);
 }
 
-/**
- * Gün alanı → `Bugün` / `Dün` / `19.08.2026`.
- *
- * "Bugün" **şirket saatiyle** hesaplanır. Sunucunun UTC günüyle karşılaştırmak,
- * gece yarısından sonraki ilk üç saatte listeye "Dün" yazdırırdı.
- */
-export function formatRelativeDay(day: Date, now: Date): string {
-  const gun = day.toISOString().slice(0, 10);
-  const bugun = companyDay(now);
-
-  if (gun === bugun) return "Bugün";
-
-  const dun = companyDay(new Date(toDateValue(bugun).getTime() - 86_400_000));
-  if (gun === dun) return "Dün";
-
-  return formatDay(day);
+export interface RelativeDayLabels {
+  today: string;
+  yesterday: string;
 }
 
-/**
- * An alanı → `21 Ağu 14:32`. Dar yerlerde (taslak listesi, vekâlet kararları).
- *
- * `formatDayShort` ile karıştırılmamalı: o bir **gün alanı** içindir ve UTC
- * kullanır. Bu bir andır ve şirket saatiyle gösterilir.
- */
-export function formatInstantShort(instant: Date): string {
-  return `${instantShortDateFormatter.format(instant)} ${timeFormatter.format(instant)}`;
+function defaultRelativeDayLabels(locale: Locale): RelativeDayLabels {
+  const t = createTranslator(locale);
+  return {
+    today: t("common.today"),
+    yesterday: t("common.yesterday"),
+  };
 }
 
-/**
- * An alanı → `21.08.2026 14:32:07`. Yalnız denetim izi.
- *
- * Saniye başka hiçbir ekranda gösterilmez; orada gürültüdür. Denetim izinde
- * ise anlamlıdır: aynı dakika içinde birden çok işlem olabilir ve sıraları
- * sorulabilir.
- */
-export function formatInstantPrecise(instant: Date): string {
-  return `${instantDateFormatter.format(instant)} ${secondFormatter.format(instant)}`;
+/** Formats a date as today, yesterday, or a localized date. */
+export function formatRelativeDay(
+  dayValue: Date,
+  now: Date,
+  locale: Locale = DEFAULT_LOCALE,
+  labels?: RelativeDayLabels,
+): string {
+  const resolvedLabels = labels ?? defaultRelativeDayLabels(locale);
+  const day = dayValue.toISOString().slice(0, 10);
+  const today = companyDay(now);
+
+  if (day === today) return resolvedLabels.today;
+
+  const yesterday = companyDay(new Date(toDateValue(today).getTime() - 86_400_000));
+  if (day === yesterday) return resolvedLabels.yesterday;
+
+  return formatDay(toDateValue(day), locale);
 }
 
-/**
- * Şirket saatindeki saat (0–23).
- *
- * `Number()` ile çevriliyor, `parseInt` ile değil: "09" gibi başında sıfır
- * olan değerler `Number` için ondalıktır.
- */
+/** Formats a timestamp for compact lists. */
+export function formatInstantShort(
+  instant: Date,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  const formatters = getFormatters(locale);
+  return `${formatters.instantShortDate.format(instant)} ${formatters.time.format(instant)}`;
+}
+
+/** Formats a timestamp with seconds for audit records. */
+export function formatInstantPrecise(
+  instant: Date,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  const formatters = getFormatters(locale);
+  return `${formatters.instantDate.format(instant)} ${formatters.second.format(instant)}`;
+}
+
+/** Returns the company-local hour from 0 through 23. */
+const hourFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: COMPANY_TIME_ZONE,
+  hour: "2-digit",
+  hour12: false,
+});
+
 export function companyHour(instant: Date): number {
   return Number(hourFormatter.format(instant));
 }
 
-/** Gün alanı → `Cuma`. Grafik ipuçları, gün etiketleri. */
-export function formatWeekday(day: Date): string {
-  return weekdayFormatter.format(day);
+/** Formats the weekday for a date-only value. */
+export function formatWeekday(day: Date, locale: Locale = DEFAULT_LOCALE): string {
+  return getFormatters(locale).weekday.format(day);
 }
 
-/**
- * Şirket saatinde gün başından itibaren geçen dakika (0–1439).
- *
- * Mesai penceresi hesapları bu ölçüyü kullanır: `08:30` → `510`.
- */
+/** Returns the number of minutes elapsed since midnight in the company zone. */
 export function companyMinuteOfDay(instant: Date): number {
-  const [saat, dakika] = timeFormatter.format(instant).split(":");
-  return Number(saat) * 60 + Number(dakika);
+  const [hour, minute] = getFormatters("en").time.format(instant).split(":");
+  return Number(hour) * 60 + Number(minute);
 }

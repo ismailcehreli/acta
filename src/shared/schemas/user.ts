@@ -2,24 +2,23 @@ import { z } from "zod";
 
 import { emailSchema, passwordSchema } from "./auth";
 
-// Kullanıcı yönetimi girdileri (§4.6, §15.1).
+// User-management input (§4.6, §15.1).
 
 export const fullNameSchema = z
   .string()
   .trim()
-  .min(3, "Ad soyad en az 3 karakter olmalı")
-  .max(150, "Ad soyad en fazla 150 karakter olabilir");
+  .min(3, "Full name must be at least 3 characters")
+  .max(150, "Full name must be 150 characters or fewer");
 
 /**
- * Unvan. İsteğe bağlı ve **yetki değildir**: görünürlük ile onay ağaçtan
- * gelir. Boş bırakılan unvan `null` olarak saklanır — boş dize ile `null`
- * arasında ayrım tutmak, listelerde iki farklı "boş" hâli demek olurdu.
+ * Title is optional and does not grant permission: visibility and approval
+ * come from the organization tree. Blank titles are stored as `null`.
  */
 export const titleSchema = z
   .string()
   .trim()
-  .max(100, "Unvan en fazla 100 karakter olabilir")
-  .transform((deger) => (deger === "" ? null : deger))
+  .max(100, "Title must be 100 characters or fewer")
+  .transform((value) => (value === "" ? null : value))
   .nullable()
   .optional();
 
@@ -27,29 +26,28 @@ export const createUserSchema = z.object({
   fullName: fullNameSchema,
   title: titleSchema,
   email: emailSchema,
-  orgUnitId: z.string().uuid("Birim seçilmeli"),
+  orgUnitId: z.string().uuid("Select a unit"),
   /**
-   * Birim yöneticisi mi. Bir birimde **birden fazla** olabilir
-   * (20.08.2026 kararı): kayıt hepsinin kuyruğuna düşer, ilk karar veren
-   * kapatır.
+   * Whether the user is a unit manager. A unit may have multiple managers;
+   * the first decision closes the process.
    */
   isUnitManager: z.boolean().default(false),
-  /** İşlevsel yetki; içerik erişimi vermez (§15.1). */
+  /** Functional permission; does not grant content access (§15.1). */
   isSystemAdmin: z.boolean().default(false),
-  /** Organizasyon kapsamındaki toplu raporları görebilir mi? */
+  /** Can view consolidated reports within the organization scope. */
   canViewReports: z.boolean().default(false),
-  /** Skor ve takdir raporlarını görebilir mi? */
+  /** Can view score and appreciation reports. */
   canViewScoreReports: z.boolean().default(false),
   /**
-   * Bu kişiden günlük faaliyet beklenir mi? Yönetim Kurulu üyeleri gibi
-   * yazmayan roller için `false` (ürün sahibi kararı, 19.08.2026).
+   * Whether the person is expected to enter daily activities. Set to `false`
+   * for roles that do not write activities.
    */
-  /** Skoru hesaplanır mı (Görev 11.10). */
+  /** Whether scores are calculated (task 11.10). */
   isScored: z.boolean().default(true),
-  /** Faaliyetlere takdir verebilir mi (Görev 11.11). */
+  /** Whether the user can recognize activities (task 11.11). */
   canAppreciate: z.boolean().default(false),
   writesActivities: z.boolean().default(true),
-  /** Başlangıç parolası; kullanıcı ilk girişten sonra değiştirebilir. */
+  /** Initial password; the user can change it after the first sign-in. */
   initialPassword: passwordSchema,
 });
 
@@ -59,72 +57,67 @@ export const deactivateUserSchema = z.object({
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 
-/** Pasifleştirme öncesi açık konuşmaların gerekçeli kapatılması (§4.6, §9.3). */
+/** Close open conversations with a reason when deactivating a user (§4.6). */
 export const closeConversationsForUserSchema = z.object({
   id: z.string().uuid(),
   reason: z
     .string()
     .trim()
-    .min(1, "Kapatma gerekçesi zorunludur")
-    .max(500, "Gerekçe en fazla 500 karakter olabilir"),
+    .min(1, "Closing reason is required")
+    .max(500, "Reason must be 500 characters or fewer"),
 });
 
-/** Kullanıcı bilgisi düzenleme (§4.6). Parola ayrı bir akıştır. */
+/** User information editing (§4.6); password changes use a separate flow. */
 export const updateUserSchema = z.object({
   id: z.string().uuid(),
   fullName: fullNameSchema,
   title: titleSchema,
   email: emailSchema,
-  orgUnitId: z.string().uuid("Birim seçilmeli"),
+  orgUnitId: z.string().uuid("Select a unit"),
   isUnitManager: z.boolean().default(false),
   isSystemAdmin: z.boolean().default(false),
   canViewReports: z.boolean().default(false),
   canViewScoreReports: z.boolean().default(false),
-  /** Skoru hesaplanır mı (Görev 11.10). */
+  /** Whether scores are calculated. */
   isScored: z.boolean().default(true),
-  /** Faaliyetlere takdir verebilir mi (Görev 11.11). */
+  /** Whether the user can recognize activities. */
   canAppreciate: z.boolean().default(false),
   writesActivities: z.boolean().default(true),
 });
 
-/** Ana hesabın kendi ekranından değiştirebileceği dar alanlar. */
+/** Narrow set of fields the root account can change from its own screen. */
 export const rootSelfUpdateSchema = z.object({
   id: z.string().uuid(),
-  orgUnitId: z.string().uuid("Birim seçilmeli"),
-  /** Root'un günlük faaliyet beklentisi. */
+  orgUnitId: z.string().uuid("Select a unit"),
+  /** Root user's daily activity expectation. */
   writesActivities: z.boolean(),
-  /** Root'un skoru hesaplansın mı. */
+  /** Whether to calculate the root user's score. */
   isScored: z.boolean(),
-  /** Root takdir verebilsin mi. */
+  /** Whether the root user can recognize activities. */
   canAppreciate: z.boolean(),
-  /** Root yönetim raporlarını görebilsin mi. */
+  /** Whether the root user can view management reports. */
   canViewReports: z.boolean(),
-  /** Root skor ve takdir raporlarını görebilsin mi. */
+  /** Whether the root user can view score and recognition reports. */
   canViewScoreReports: z.boolean(),
 });
 
 /**
- * Bölüm müdürünün düzenleyebildiği alanlar.
+ * Fields a unit manager can edit.
  *
- * Tasarım müdüre kendi alt ağacında **ad ve unvan** düzenlemesi veriyor
- * (Paket F yetki tablosu). Başka hiçbir alan onun değil; bu yüzden müdür
- * yolu tam şemayı hiç görmüyor. Fazla alanı "temizlemek" yerine **hiç
- * kabul etmemek** tercih edildi: temizleyen kod, yeni bir alan eklendiğinde
- * güncellenmeyi bekler ve unutulur.
+ * The design permits name and title edits within the manager's subtree. No
+ * other fields belong to that path, so extra fields are rejected rather than
+ * silently cleaned.
  */
 /**
- * Bölüm müdürünün **ekleme** için verebildiği alanlar.
+ * Fields a unit manager may provide when creating a user.
  *
- * Bayraklar ve roller listede yok: onları sunucu belirler. Müdürün
- * formunda kutu olmaması yeterli değildi — ilk denemede kutuyu kaldırdım ama
- * eylem "işaretlenmemiş" diye `false` yazdı ve müdürün eklediği personelden
- * faaliyet beklenmez oldu (23.08.2026, ikinci denetim turu).
+ * Flags and roles are omitted from the input; the server determines them.
  */
 export const managerCreateUserSchema = z.object({
   fullName: fullNameSchema,
   title: titleSchema,
   email: emailSchema,
-  orgUnitId: z.string().uuid("Birim seçilmeli"),
+  orgUnitId: z.string().uuid("Select a unit"),
 });
 
 export type ManagerCreateUserInput = z.infer<typeof managerCreateUserSchema>;
@@ -137,7 +130,7 @@ export const managerUpdateUserSchema = z.object({
 
 export type ManagerUpdateUserInput = z.infer<typeof managerUpdateUserSchema>;
 
-/** Sistem yöneticisinin bir kullanıcıya parola belirlemesi (§15.1, §15.3). */
+/** System administrator setting a user's password (§15.1, §15.3). */
 export const setUserPasswordSchema = z.object({
   id: z.string().uuid(),
   newPassword: passwordSchema,

@@ -3,30 +3,31 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import { Menu, MenuHeader, MenuSeparator } from "@/components/ui/menu";
 
-// Zil ve anlık kutucuk (Görev 10.4).
+
 //
-// Veri **sunucudan geliyor**: kabuk her tazelemede bildirim listesini yeniden
-// üretiyor ve gerçek zamanlı akış (Görev 7.3) zaten tazeliyor. Bu yüzden burada
-// ayrı bir istek yok; ekranı süren tek bir yol var.
+// Data comes from the server: the shell reloads the notification list on each
+
+
 //
-// Gerçek zamanlı olaylar **içerik taşımıyor** (bilerek — akış görünürlük
-// modülünden geçmez). Kutucuktaki metin bu yüzden akıştan değil, sunucunun
-// ürettiği listeden geliyor; o liste normal denetimlerden geçmiş oluyor.
+
+
+
 
 export interface BellItem {
   id: string;
   summary: string;
-  /** İlgili faaliyetin sıra numarası; hangi kayıt olduğunu ayırt ettirir. */
+
   activityNo: number | null;
   path: string;
-  /** "3 dk önce" gibi hazır metin; sunucuda üretilir. */
+
   age: string;
   seen: boolean;
 }
 
-function ZilIkonu() {
+function BellIcon() {
   return (
     <svg
       aria-hidden
@@ -45,26 +46,21 @@ function ZilIkonu() {
   );
 }
 
-/**
- * Anlık kutucuk. Yeni bir bildirim geldiğinde birkaç saniye görünür.
- *
- * "Yeni" ölçütü listenin **en üstteki kimliğinin değişmesi**. Sayının artmasına
- * bakmak yanlış olurdu: kullanıcı bir bildirimi okuyup sayıyı düşürdükten sonra
- * gelen yeni bildirim sayıyı eski değerine geri getirir ve fark edilmezdi.
- */
+
 function Toast({ item, onClose }: { item: BellItem | null; onClose: () => void }) {
+  const t = useTranslations();
   if (!item) return null;
 
   return (
     <div
       role="status"
       aria-live="polite"
-      data-test="bildirim-kutucugu"
+      data-test="notification-toast"
       className="fixed bottom-4 left-1/2 z-50 w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 rounded-(--radius-md) border border-line-strong bg-surface p-3.5 shadow-(--shadow-dialog) sm:left-auto sm:right-4 sm:translate-x-0"
     >
       <div className="flex items-start gap-3">
         <span className="mt-0.5 text-primary">
-          <ZilIkonu />
+          <BellIcon />
         </span>
         <Link
           href={item.path}
@@ -76,7 +72,7 @@ function Toast({ item, onClose }: { item: BellItem | null; onClose: () => void }
         <button
           type="button"
           onClick={onClose}
-          aria-label="Bildirimi kapat"
+          aria-label={t("notifications.close")}
           className="shrink-0 rounded-(--radius-sm) px-1.5 text-muted hover:bg-surface-hover hover:text-ink"
         >
           ×
@@ -86,41 +82,33 @@ function Toast({ item, onClose }: { item: BellItem | null; onClose: () => void }
   );
 }
 
-const KUTUCUK_SURESI_MS = 8000;
+const TOAST_DURATION_MS = 8000;
 
-/**
- * Anlık kutucuk — sayfada **tek** monte edilir.
- *
- * Zil iki kırılım noktasında iki kez render ediliyor (masaüstü omurgası ve
- * bağlam çubuğu; biri her zaman gizli). Kutucuk zilin içinde kalsaydı iki kez
- * monte olur ve aynı bildirim iki kez belirirdi.
- */
+
 export function NotificationToast({ items }: { items: BellItem[] }) {
-  const enUsttekiId = items[0]?.id ?? null;
-  const [kutucuk, setKutucuk] = useState<BellItem | null>(null);
-  // İlk açılışta kutucuk gösterilmez: sayfaya yeni giren kişiye eski bir
-  // bildirimi "az önce geldi" gibi sunmak yanlış olurdu.
-  const gorulenEnUst = useRef<string | null | undefined>(undefined);
+  const topItemId = items[0]?.id ?? null;
+  const [toastItem, setToastItem] = useState<BellItem | null>(null);
+  const lastSeenTopItemId = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
-    if (gorulenEnUst.current === undefined) {
-      gorulenEnUst.current = enUsttekiId;
+    if (lastSeenTopItemId.current === undefined) {
+      lastSeenTopItemId.current = topItemId;
       return;
     }
 
-    if (enUsttekiId === null || enUsttekiId === gorulenEnUst.current) return;
+    if (topItemId === null || topItemId === lastSeenTopItemId.current) return;
 
-    gorulenEnUst.current = enUsttekiId;
-    const yeni = items[0];
-    if (!yeni || yeni.seen) return;
+    lastSeenTopItemId.current = topItemId;
+    const next = items[0];
+    if (!next || next.seen) return;
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setKutucuk(yeni);
-    const zamanlayici = setTimeout(() => setKutucuk(null), KUTUCUK_SURESI_MS);
-    return () => clearTimeout(zamanlayici);
-  }, [enUsttekiId, items]);
+    setToastItem(next);
+    const timer = setTimeout(() => setToastItem(null), TOAST_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [topItemId, items]);
 
-  return <Toast item={kutucuk} onClose={() => setKutucuk(null)} />;
+  return <Toast item={toastItem} onClose={() => setToastItem(null)} />;
 }
 
 export function NotificationBell({
@@ -131,33 +119,27 @@ export function NotificationBell({
 }: {
   items: BellItem[];
   unseen: number;
-  /** Kutu açılınca hepsini görüldü işaretleyen sunucu eylemi. */
+
   onOpen: () => Promise<void>;
-  /**
-   * Kutunun açılma yönü.
-   *
-   * Omurganın **altındaki** zil aşağı açılırsa kutu ekranın dışına taşar ve
-   * kullanıcı hiçbir şey göremez — 21.08.2026'da tam olarak bu yaşandı:
-   * bildirimler vardı, kutu açılıyordu ama ekranın altında kalıyordu. Hesap
-   * menüsünde aynı hata daha önce görülüp düzeltilmişti; zile uygulanmamıştı.
-   */
+
   placement?: "bottom" | "top";
 }) {
+  const t = useTranslations();
   return (
     <>
       <Menu
-        label="Bildirimler"
+        label={t("notifications.title")}
         placement={placement}
         onOpen={() => {
           if (unseen > 0) void onOpen();
         }}
         trigger={
-          // Rozet zilin **üstüne binmez**: sayı ikonu kapatınca ne rozet
-          // okunuyor ne ikon tanınıyor. Sarmalayıcıya sağ-üstte boşluk
-          // bırakılıyor, rozet o boşluğa oturuyor ve zemin renginde bir
-          // halkayla ikondan ayrılıyor.
+
+
+
+
           <span className="relative inline-flex pt-1.5 pr-2.5 text-muted">
-            <ZilIkonu />
+            <BellIcon />
             {unseen > 0 ? (
               <span
                 className="absolute top-0 right-0 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-waiting px-[3px] text-[9px] leading-none font-semibold text-white ring-2 ring-raised tabular"
@@ -169,18 +151,15 @@ export function NotificationBell({
           </span>
         }
       >
-        {/* Başlık **listede ne olduğunu** söyler.
-            Önce yalnız "yeni" sayısına bakıyordu ve dört bildirim
-            listelenirken "Yeni bildirim yok" yazıyordu — okuyan, kutunun boş
-            olduğunu sanıyordu. Üç ayrı durum var ve üçü ayrı yazılmalı. */}
+
         <MenuHeader>
-          <span className="block font-medium text-ink">Bildirimler</span>
+          <span className="block font-medium text-ink">{t("notifications.title")}</span>
           <span className="block">
             {items.length === 0
-              ? "Kutunuz boş"
+              ? t("notifications.inboxEmpty")
               : unseen > 0
-                ? `${unseen} yeni · toplam ${items.length}`
-                : `${items.length} bildirim · yenisi yok`}
+                ? t("notifications.unreadSummary", { unread: unseen, total: items.length })
+                : t("notifications.allReadSummary", { total: items.length })}
           </span>
         </MenuHeader>
 
@@ -189,17 +168,16 @@ export function NotificationBell({
         {items.length === 0 ? (
           <div className="px-3 py-5">
             <p className="text-[length:var(--text-sm)] font-medium text-ink">
-              Henüz bildiriminiz yok.
+              {t("notifications.emptyTitle")}
             </p>
             <p className="mt-1 text-[length:var(--text-xs)] leading-[var(--leading-normal)] text-muted">
-              Size soru sorulduğunda, onayınız beklendiğinde ya da bir kaydınız
-              karara bağlandığında burada görünür.
+              {t("notifications.emptyDescription")}
             </p>
           </div>
         ) : (
           <div
             className="max-h-96 overflow-y-auto"
-            data-test="bildirim-listesi"
+            data-test="notification-list"
           >
             {items.map((item) => (
               <Link
@@ -215,8 +193,7 @@ export function NotificationBell({
                   {item.summary}
                 </span>
                 <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] text-muted">
-                  {/* Numara olmadan aynı metin üst üste tekrarlanıyor ve
-                      hangi kayıt olduğu anlaşılmıyordu. */}
+                  {/* The number distinguishes otherwise identical summaries. */}
                   {item.activityNo !== null ? (
                     <>
                       <span className="mono text-faint">#{item.activityNo}</span>

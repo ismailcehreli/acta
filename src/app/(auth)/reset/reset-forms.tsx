@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useActionState } from "react";
 
+import { useTranslations } from "@/components/i18n";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/form";
@@ -12,6 +13,7 @@ import { requestResetAction, resetPasswordAction } from "./actions";
 import { emptyResetFormState } from "./form-state";
 
 export function RequestResetForm() {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     requestResetAction,
     emptyResetFormState,
@@ -19,11 +21,11 @@ export function RequestResetForm() {
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
-      <Field htmlFor="email" label="E-posta" required>
+      <Field htmlFor="email" label={t("common.email")} required>
         <Input id="email" name="email" type="email" required autoComplete="email" autoFocus />
       </Field>
 
-      {/* Hesabın var olup olmadığını ele vermeyen güvenli mesaj (§7). */}
+
       {state.info ? <Alert tone="success">{state.info}</Alert> : null}
 
       <Button
@@ -33,19 +35,20 @@ export function RequestResetForm() {
         disabled={pending}
         className="w-full"
       >
-        {pending ? "Gönderiliyor…" : "Sıfırlama bağlantısı gönder"}
+        {pending ? t("common.saving") : t("auth.sendResetLink")}
       </Button>
     </form>
   );
 }
 
 export function ResetPasswordForm({ token }: { token: string }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     resetPasswordAction,
     emptyResetFormState,
   );
 
-  // Parola değiştiyse form kalkar: aynı bağlantı ikinci kez çalışmaz.
+
   if (state.info) {
     return (
       <div className="flex flex-col gap-4">
@@ -54,7 +57,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
           href="/login"
           className="inline-flex min-h-(--spacing-control) items-center justify-center rounded-(--radius-sm) border border-line-strong px-4 text-[length:var(--text-sm)] font-medium text-ink hover:bg-surface-hover"
         >
-          Giriş ekranına git
+          {t("auth.backToSignIn")}
         </Link>
       </div>
     );
@@ -64,13 +67,12 @@ export function ResetPasswordForm({ token }: { token: string }) {
     <form action={formAction} className="flex flex-col gap-4">
       <input type="hidden" name="token" value={token} />
 
-      {/* Parola kuralı **girmeden önce** görünür ve yalnız renkle değil
-          metinle anlatılır (§7). */}
+
       <Field
         htmlFor="newPassword"
-        label="Yeni parola"
+        label={t("auth.newPassword")}
         required
-        hint="En az 10 karakter. Kolay tahmin edilen bir şey seçmeyin."
+        hint={t("auth.passwordMinimumHint")}
       >
         <PasswordInput
           id="newPassword"
@@ -81,7 +83,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         />
       </Field>
 
-      <Field htmlFor="newPasswordRepeat" label="Yeni parola (tekrar)" required>
+      <Field htmlFor="newPasswordRepeat" label={t("auth.confirmPassword")} required>
         <PasswordInput
           id="newPasswordRepeat"
           name="newPasswordRepeat"
@@ -91,7 +93,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
       </Field>
 
       {state.error ? (
-        <Alert tone="danger" title="Parola değiştirilemedi">
+          <Alert tone="danger" title={t("auth.changePasswordError")}>
           {state.error}
         </Alert>
       ) : null}
@@ -103,7 +105,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         disabled={pending}
         className="w-full"
       >
-        {pending ? "Değiştiriliyor…" : "Parolayı değiştir"}
+        {pending ? t("common.saving") : t("auth.changePassword")}
       </Button>
     </form>
   );

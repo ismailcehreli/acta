@@ -2,16 +2,9 @@
 
 import { useId, useState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import { Input } from "@/components/ui/form";
 
-// Parola girdisi + görünürlük anahtarı (brief §7).
-//
-// Anahtar **hover'a saklanmaz** (§3): her zaman görünür ve 44px dokunma
-// hedefine sahiptir. Durumu ekran okuyucuya `aria-pressed` ile bildirir;
-// ikon tek başına anlam taşımaz, `aria-label` metni de değişir.
-//
-// Parola yöneticileri ve autofill çalışmaya devam eder: alan tipi
-// `password`/`text` arasında değişse de `name` ve `autoComplete` sabittir.
 
 export function PasswordInput({
   id,
@@ -28,30 +21,31 @@ export function PasswordInput({
   autoFocus?: boolean;
   describedBy?: string;
 }) {
-  const [acik, setAcik] = useState(false);
-  const durumId = useId();
+  const t = useTranslations();
+  const [isVisible, setIsVisible] = useState(false);
+  const statusId = useId();
 
   return (
     <div className="relative">
       <Input
         id={id}
         name={name}
-        type={acik ? "text" : "password"}
+        type={isVisible ? "text" : "password"}
         autoComplete={autoComplete}
         required={required}
         autoFocus={autoFocus}
-        aria-describedby={[describedBy, durumId].filter(Boolean).join(" ")}
+        aria-describedby={[describedBy, statusId].filter(Boolean).join(" ")}
         className="pe-12"
       />
 
       <button
         type="button"
-        onClick={() => setAcik((onceki) => !onceki)}
-        aria-pressed={acik}
-        aria-label={acik ? "Parolayı gizle" : "Parolayı göster"}
+        onClick={() => setIsVisible((previous) => !previous)}
+        aria-pressed={isVisible}
+        aria-label={isVisible ? t("auth.hidePassword") : t("auth.showPassword")}
         className="absolute inset-y-0 end-0 grid w-11 place-items-center text-muted hover:text-ink"
       >
-        {acik ? (
+        {isVisible ? (
           <svg aria-hidden viewBox="0 0 20 20" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.6">
             <path d="M3 3l14 14" strokeLinecap="square" />
             <path d="M7.3 7.4A2.8 2.8 0 0 0 10 12.8c.7 0 1.4-.3 1.9-.7" />
@@ -65,9 +59,9 @@ export function PasswordInput({
         )}
       </button>
 
-      {/* Durum değişimi ekran okuyucuya duyurulur; ikon sessiz kalmaz. */}
-      <span id={durumId} className="sr-only" role="status">
-        {acik ? "Parola görünür durumda." : "Parola gizli."}
+
+      <span id={statusId} className="sr-only" role="status">
+        {isVisible ? t("auth.passwordVisible") : t("auth.passwordHidden")}
       </span>
     </div>
   );

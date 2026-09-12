@@ -50,9 +50,9 @@ import type {
 
 import { checkActivityDate, companyDay, toDateValue } from "./date-rules";
 
-// Faaliyet yazma ve düzeltme (§5). Girişin hızlı olması ürünün can damarıdır
-// (§18.6: 30 saniye ölçütü); bu yüzden burada tek bir işlem yapılır ve
-// gereksiz sorgu atılmaz.
+
+
+
 
 export type ActivityWriteDb = Pick<
   PrismaClient,
@@ -102,32 +102,32 @@ export type ActivityWriteResult =
   | { ok: false; error: ActivityWriteError; message: string };
 
 const MESSAGES: Record<ActivityWriteError, string> = {
-  future_date: "İleri tarihli faaliyet girilemez.",
+  future_date: "Activities cannot be entered for a future date.",
   date_too_old:
-    "Bu tarih geçmişe dönük giriş sınırının dışında. Yalnızca son günlerin faaliyeti girilebilir.",
-  unknown_department: "Seçilen departmanlardan biri bulunamadı.",
-  inactive_department: "Pasif bir departman muhatap olarak seçilemez.",
-  // Yetkisiz erişim ile var olmayan kayıt **aynı** cevabı alır: farklı mesaj,
-  // kaydın varlığını ve sahibini ele verirdi (denetim 18.08.2026,
-  // bulgu 1). Ayrım yalnızca sunucu tarafında anlamlıdır.
-  not_found: "Faaliyet bulunamadı.",
-  not_author: "Faaliyet bulunamadı.",
+    "This date is outside the retroactive entry window. Only the last permitted days can be entered.",
+  unknown_department: "One of the selected departments was not found.",
+  inactive_department: "An inactive department cannot be selected as a related department.",
+
+
+
+  not_found: "Activity not found.",
+  not_author: "Activity not found.",
   window_closed:
-    "Düzeltme süresi doldu. Faaliyet kayıttan sonraki kısa süre içinde düzeltilebilir.",
+    "The revision window has expired. An activity can only be revised for a short time after it is recorded.",
   already_read:
-    "Faaliyet okundu; artık değiştirilemez. Gerekiyorsa yeni bir faaliyet yazın.",
-  cancelled: "İptal edilmiş faaliyet düzenlenemez.",
+    "The activity has been read and can no longer be changed. Write a new activity if necessary.",
+  cancelled: "A cancelled activity cannot be revised.",
   rejected:
-    "Reddedilen faaliyet düzenlenemez. Gerekiyorsa yeni bir faaliyet yazın.",
+    "A rejected activity cannot be revised. Write a new activity if necessary.",
   pending_approval:
-    "Faaliyet onay bekliyor; düzeltme penceresi kapanmış veya kayıt okunmuş olabilir.",
+    "The activity is awaiting approval; the revision window may be closed or the record may have been read.",
   too_large: ATTACHMENT_MESSAGES.too_large,
   too_many: ATTACHMENT_MESSAGES.too_many,
   unsupported_type: ATTACHMENT_MESSAGES.unsupported_type,
   empty_file: ATTACHMENT_MESSAGES.empty_file,
-  draft_not_found: "Taslak bulunamadı.",
+  draft_not_found: "Draft not found.",
   conflict:
-    "Faaliyet bu sırada değişti. Sayfayı yenileyip tekrar deneyin.",
+    "The activity changed while you were working. Refresh the page and try again.",
 };
 
 function fail(error: ActivityWriteError): ActivityWriteResult {
@@ -152,13 +152,13 @@ async function validateDepartments(
 export interface ActivityAuthor {
   id: string;
   orgUnitId: string;
-  /** Yazarın biriminin onay bayrağı (§4.3). */
+
   requiresApproval: boolean;
 }
 
 export interface ActivityFileOptions {
   files?: IncomingFile[];
-  /** Gönderim bir sunucu taslağından yapılıyorsa taslak kimliği. */
+
   draftId?: string;
 }
 
@@ -235,24 +235,24 @@ export async function createActivity(
   );
   if (departmentProblem) return fail(departmentProblem);
 
-  // Kaydın hangi durumda doğacağı ve onaylayıcısının kim olduğu §5.4 ve §4.4
-  // ile burada çözülür. Onaylayıcı **yazım anında** kayda yazılır: her listede
-  // yeniden hesaplamak hem pahalı, hem de ağaç değişince akıştaki işi sessizce
-  // başkasına devretmek olurdu.
-  const baslangic = await resolveInitialApproval(db, author);
+  // Resolve the initial status and approvers under §§5.4 and 4.4. Approvers
+  // are stored at write time; recalculating them on every read would be
+  // expensive and could silently reassign an activity after a tree change.
+  const start = await resolveInitialApproval(db, author);
 
   const validated = await validateIncomingFiles(db, options.files ?? []);
   if (!validated.ok) return fail(validated.error);
 
-  // Transaction geri alınırsa satırsız kalan yeni dosyalar dışarıda temizlenir.
-  // Taslaktan taşınan dosyalar bu kümeye girmez; onların satırı ve dosyası
-  // transaction içinde faaliyet ekine dönüşür.
+  // If the transaction rolls back, newly stored files without rows are
+  // cleaned up outside it. Files moved from a draft are excluded because
+  // their rows and storage entries become activity attachments in the same transaction.
   let stored: StoredAttachmentFile[] = [];
 
   try {
     const activity = await db.$transaction(async (tx) => {
-      // Kapanış aynı anda başlarsa mutasyonun ilk sürüm ile düzeltme kuyruğu
-      // arasından düşmemesi için herhangi bir faaliyet satırı yazmadan önce.
+      // Acquire the score lock before writing any activity row so a concurrent
+      // period closure cannot observe a mutation between the first revision
+      // and its recalculation request.
       await acquireScoreMutationLock(tx);
 
       let draft: {
@@ -290,38 +290,44 @@ export async function createActivity(
         if (!draft) throw new DraftSourceNotFoundError();
       }
 
-      const mevcutEkler = draft?.attachments ?? [];
-      const mevcutParmakIzleri = new Set(mevcutEkler.map(attachmentFingerprint));
-      const yeniDosyalar = validated.value.filter((file, index, all) => {
+      const existingAttachments = draft?.attachments ?? [];
+      const existingFingerprints = new Set(
+        existingAttachments.map(attachmentFingerprint),
+      );
+      const nextFiles = validated.value.filter((file, index, all) => {
         const key = attachmentFingerprint(file);
-        if (mevcutParmakIzleri.has(key)) return false;
+        if (existingFingerprints.has(key)) return false;
         return all.findIndex((candidate) => attachmentFingerprint(candidate) === key) === index;
       });
 
       const limits = await readAttachmentLimits(tx);
-      const countProblem = checkAttachmentCount(mevcutEkler.length, yeniDosyalar.length, limits);
+      const countProblem = checkAttachmentCount(
+        existingAttachments.length,
+        nextFiles.length,
+        limits,
+      );
       if (countProblem) throw new ActivityAttachmentLimitError(countProblem);
 
       const created = await tx.activity.create({
         data: {
           authorId: author.id,
-          // Yazım anındaki birim dondurulur: kişi departman değiştirse de bu
-          // faaliyet yazıldığı birimle raporlanır (§4.6).
+          // Freeze the unit at write time: later department changes must not
+          // move the activity to a different reporting unit (§4.6).
           authorOrgUnitId: author.orgUnitId,
           activityDate: toDateValue(input.activityDate),
           title: input.title,
           description: input.description,
-          approvalStatus: baslangic.status,
-          approverId: baslangic.approverId,
+          approvalStatus: start.status,
+          approverId: start.approverId,
           approvalSubmittedAt:
-            baslangic.status === "PENDING_APPROVAL" ? now : null,
+            start.status === "PENDING_APPROVAL" ? now : null,
           createdAt: now,
           updatedAt: now,
         },
       });
 
-      // Onaya tabi kayıt gönderildiği anda tur açılır: karar verilirken
-      // gönderim anının kaybolmaması buna bağlı (P3-R2-1).
+      // Open an approval turn when an approval-required record is submitted;
+      // this preserves the submission instant used when the decision is made.
       if (created.approvalStatus === "PENDING_APPROVAL") {
         await openApprovalRound(tx, created.id, now);
       }
@@ -333,7 +339,7 @@ export async function createActivity(
         })),
       });
 
-      // Her kaydetme değişmez bir revizyon üretir (§5.5).
+      // Every save creates an immutable revision (§5.5).
       await tx.activityRevision.create({
         data: {
           activityId: created.id,
@@ -346,7 +352,7 @@ export async function createActivity(
         },
       });
 
-      stored = await storeValidatedFiles(yeniDosyalar);
+      stored = await storeValidatedFiles(nextFiles);
       for (const file of stored) {
         await tx.attachment.create({
           data: activityAttachmentData(created.id, author.id, file, now),
@@ -360,16 +366,16 @@ export async function createActivity(
           });
         }
 
-        // Taslak eki satırları yalnız başarılı gönderim transaction'ında
-        // tüketilir; depolama dosyaları aynı kaldığı için içerik kaybolmaz.
+        // Draft attachment rows are consumed only in a successful submission
+        // transaction; the storage files remain in place, so content is safe.
         await tx.$executeRawUnsafe("SET LOCAL app.activity_draft_promote = 'evet'");
         await tx.activityDraftAttachment.deleteMany({ where: { draftId: draft.id } });
         await tx.activityDraft.delete({ where: { id: draft.id } });
       }
 
-    // Donmuş aya kurala uygun biçimde sonradan kayıt girildiyse eski karne
-    // değiştirilmez; aynı transaction'da yeni sürüm isteği doğar. Kuyruk
-    // yazılamazsa faaliyet de yazılmış sayılmaz.
+    // A valid late entry into a frozen month does not change the old score;
+    // it creates a new recalculation request in the same transaction. If the
+    // queue row cannot be written, the activity write also fails.
     await enqueueScoreRecalculation(tx, {
       userId: author.id,
       activityDate: created.activityDate,
@@ -378,8 +384,8 @@ export async function createActivity(
       now,
     });
 
-    // Denetim izi aynı işlemde yazılır (§15.2): "faaliyet kaydedildi ama izi
-    // yok" durumu mümkün olmamalı.
+    // Write the audit trail in the same transaction (§15.2), so a recorded
+    // activity can never exist without its audit entry.
     await recordAudit(tx, {
       userId: author.id,
       objectType: AUDIT_OBJECTS.activity,
@@ -388,46 +394,47 @@ export async function createActivity(
       detail: {
         activityDate: input.activityDate,
         revisionNo: 1,
-        approvalStatus: baslangic.status,
+        approvalStatus: start.status,
       },
       now,
     });
 
-    // Kapsam akışı canlı olsun: kaydı görebilecek olan üst zincire haber
-    // gider. Haber içerik taşımaz — yalnız "tazele" der; ne yazıldığı
-    // tazelemede görünürlük modülünden geçerek gelir.
-    const ustZincir = await managementChain(tx, author.id);
-    if (ustZincir.length > 0) {
+    // Keep the scope feed live by notifying the higher chain that can see the
+    // record. The event carries no content; a refresh obtains data through
+    // the visibility module.
+    const parentChain = await managementChain(tx, author.id);
+    if (parentChain.length > 0) {
       await publishRealtimeEvent(tx, {
         kind: REALTIME_EVENTS.activityCreated,
-        userIds: ustZincir,
+        userIds: parentChain,
       });
     }
 
-    if (baslangic.status === "PENDING_APPROVAL") {
-      // Uygun onaylayıcılar **kayda yazılır** ve bir daha ağaçtan
-      // türetilmez: birim sonradan taşınsa da akıştaki iş sessizce
-      // başkasına devrolmaz.
+    if (start.status === "PENDING_APPROVAL") {
+      // Eligible approvers are **stored on the record** and never derived
+      // again, so moving a unit cannot silently reassign a pending activity.
       await tx.activityApprover.createMany({
-        data: baslangic.approverIds.map((userId) => ({
+        data: start.approverIds.map((userId) => ({
           activityId: created.id,
           userId,
         })),
         skipDuplicates: true,
       });
 
-      // Vekâlet süresince bildirim vekile de gider: aksi hâlde vekil, kendi
-      // önüne düşmüş bir işi ancak ekranı elle açarsa görürdü (§4.5).
-      const vekiller = await activeDeputiesOfMany(tx, baslangic.approverIds, now);
-      const haberVerilecekler = [...new Set([...baslangic.approverIds, ...vekiller])];
+      // Notify active deputies as well; otherwise they would see delegated
+      // work only after manually opening the screen (§4.5).
+      const deputyIds = await activeDeputiesOfMany(tx, start.approverIds, now);
+      const notificationRecipients = [
+        ...new Set([...start.approverIds, ...deputyIds]),
+      ];
 
-      for (const approverId of haberVerilecekler) {
+      for (const approverId of notificationRecipients) {
         await enqueueNotification(tx, {
           userId: approverId,
           eventType: NOTIFICATION_EVENTS.approvalPending,
           payload: { activityId: created.id, activityTitle: created.title },
-          // Anahtar kişiyi de taşır: iki müdürlü birimde tek satır yazılıp
-          // ikincisi sessizce elenirdi.
+          // Include the approver in the key so each approver receives its own
+          // notification in a dual-manager unit.
           idempotencyKey: `approval_pending:${created.id}:${approverId}`,
           now,
         });
@@ -435,19 +442,19 @@ export async function createActivity(
 
       await publishRealtimeEvent(tx, {
         kind: REALTIME_EVENTS.approvalPending,
-        userIds: haberVerilecekler,
+        userIds: notificationRecipients,
       });
     }
 
-    // Yöneticisiz kalan kayıt sessizce beklemez: sistem yöneticisine alarm
-    // gider (§4.4). Kayıt kaybolmaz, hata durumunda durur.
-    if (baslangic.status === "MANAGER_NOT_FOUND") {
-      const adminler = await tx.user.findMany({
+    // A record without a manager does not wait silently: alert a system
+    // administrator (§4.4). The record remains available in its error state.
+    if (start.status === "MANAGER_NOT_FOUND") {
+      const administrators = await tx.user.findMany({
         where: { isSystemAdmin: true, isActive: true },
         select: { id: true },
       });
 
-      for (const admin of adminler) {
+      for (const admin of administrators) {
         await enqueueNotification(tx, {
           userId: admin.id,
           eventType: NOTIFICATION_EVENTS.managerNotFound,
@@ -479,26 +486,26 @@ export async function updateActivity(
   now: Date,
   options: ActivityFileOptions = {},
 ): Promise<ActivityWriteResult> {
-  // Sorgu baştan yazarla daraltılır: başkasının kaydı hiç okunmaz, dolayısıyla
-  // "var ama senin değil" ile "hiç yok" dışarıdan ayırt edilemez.
+  // Scope the query by author from the start. A record belonging to someone
+  // else must be indistinguishable from a missing record.
   const activity = await activityMaintenanceReader(db).findFirst({
     where: { id: input.id, authorId },
   });
 
   if (!activity) return fail("not_found");
   if (activity.approvalStatus === "CANCELLED") return fail("cancelled");
-  // Reddetme bir **son** durumdur: düzeltilip yeniden gönderilebilseydi
-  // "düzeltme iste"den farkı kalmazdı.
+  // Rejection is a terminal state: allowing a revision would make it
+  // indistinguishable from a changes-requested record.
   if (activity.approvalStatus === "REJECTED") return fail("rejected");
 
-  // Düzeltme istenmiş kayıt pencereyi beklemez. Onay bekleyen ve onaylanmış
-  // kayıt ise oluşturulduğu andan itibaren sistem yöneticisinin ayarladığı
-  // pencere içinde, başka biri okumadıysa düzenlenebilir (§5.5, §8.2).
-  const duzeltmeIsteniyor = activity.approvalStatus === "CHANGES_REQUESTED";
-  const izin = await checkActivityEditPermission(db, authorId, activity, now);
-  if (!izin.allowed) {
-    if (izin.reason === "already_read") return fail("already_read");
-    if (izin.reason === "window_closed") return fail("window_closed");
+  // A changes-requested record does not wait for the revision window. Pending
+  // and approved records can be revised within the administrator-configured
+  // window, provided nobody has read them (§5.5, §8.2).
+  const changesRequested = activity.approvalStatus === "CHANGES_REQUESTED";
+  const leave = await checkActivityEditPermission(db, authorId, activity, now);
+  if (!leave.allowed) {
+    if (leave.reason === "already_read") return fail("already_read");
+    if (leave.reason === "window_closed") return fail("window_closed");
     return fail("conflict");
   }
 
@@ -508,9 +515,9 @@ export async function updateActivity(
   );
   const dateProblem = checkActivityDate(input.activityDate, now, retroactiveDays);
   if (dateProblem === "future") return fail("future_date");
-  // Düzenleme sırasında faaliyetin orijinal tarihi korunuyorsa geçmişe dönük
-  // sınır denetlenmez; kayıt zaten zamanında oluşturulmuştur. Tarih ancak
-  // yeni bir geçmiş tarihe değiştirilmek istenirse sınır aranır.
+  // When the original activity date is preserved during a revision, the
+  // retroactive limit is not rechecked. It applies only when a new past date
+  // is selected.
   const isDateChanged = companyDay(activity.activityDate) !== input.activityDate;
   if (isDateChanged && dateProblem === "too_old") return fail("date_too_old");
 
@@ -523,18 +530,17 @@ export async function updateActivity(
   const validated = await validateIncomingFiles(db, options.files ?? []);
   if (!validated.ok) return fail(validated.error);
 
-  // Transaction geri alınırsa yeni yüklenen ve henüz bir eki olmayan dosyalar
-  // dışarıda temizlenir. Mevcut faaliyet eklerine dokunulmaz.
+  // If the transaction rolls back, newly uploaded files without rows are
+  // cleaned up outside it. Existing activity attachments are untouched.
   let stored: StoredAttachmentFile[] = [];
 
   try {
     const updated = await db.$transaction(async (tx) => {
       await acquireScoreMutationLock(tx);
 
-      // Faaliyet satırı kilitlenir ve durum işlem içinde yeniden doğrulanır:
-      // düzeltme ile iptal yarışabiliyordu ve iptal önce tamamlansa bile
-      // düzeltme, iptal edilmiş kaydın içeriğini değiştirebiliyordu
-      // (denetim 18.08.2026, FAZ 4 bulgu 2).
+      // Lock and recheck the activity inside the transaction. A revision and
+      // cancellation used to race, allowing a revision to change a cancelled
+      // record after cancellation completed (audit finding 2, 18.08.2026).
       await lockActivityForMaintenance(tx, activity.id);
 
       const fresh = await activityMaintenanceReader(tx).findUnique({
@@ -555,33 +561,35 @@ export async function updateActivity(
         return null;
       }
 
-      // Okuma ve düzenleme aynı faaliyet kilidini kullanır. Böylece karar
-      // kilit altındaki son okuma görüntüsüne dayanır; sonradan gelen okuma
-      // bu düzeltmeyi geriye dönük olarak kapatamaz.
-      const tazeIzin = await checkActivityEditPermission(
+      // Reading and revision use the same activity lock. A decision therefore
+      // uses the last read state under the lock; a later read cannot close the
+      // revision window retroactively.
+      const freshPermission = await checkActivityEditPermission(
         tx,
         authorId,
         fresh,
         now,
       );
-      if (!tazeIzin.allowed) {
-        throw new ActivityEditRefusalError(tazeIzin.reason);
+      if (!freshPermission.allowed) {
+        throw new ActivityEditRefusalError(freshPermission.reason);
       }
 
-      const mevcutEkler = await attachmentMaintenanceReader(tx).findMany({
+      const existingAttachments = await attachmentMaintenanceReader(tx).findMany({
         where: { activityId: activity.id },
         select: { sha256: true, originalName: true },
       });
-      const mevcutParmakIzleri = new Set(mevcutEkler.map(attachmentFingerprint));
-      const yeniDosyalar = validated.value.filter((file, index, all) => {
+      const existingFingerprints = new Set(
+        existingAttachments.map(attachmentFingerprint),
+      );
+      const nextFiles = validated.value.filter((file, index, all) => {
         const key = attachmentFingerprint(file);
-        if (mevcutParmakIzleri.has(key)) return false;
+        if (existingFingerprints.has(key)) return false;
         return all.findIndex((candidate) => attachmentFingerprint(candidate) === key) === index;
       });
       const limits = await readAttachmentLimits(tx);
       const countProblem = checkAttachmentCount(
-        mevcutEkler.length,
-        yeniDosyalar.length,
+        existingAttachments.length,
+        nextFiles.length,
         limits,
       );
       if (countProblem) throw new ActivityAttachmentLimitError(countProblem);
@@ -594,39 +602,38 @@ export async function updateActivity(
           description: input.description,
           currentRevisionNo: activity.currentRevisionNo + 1,
           updatedAt: now,
-          // Düzeltme kaydedilince iş yeniden müdürün önüne düşer (§5.4):
-          // duzeltme_istendi → onay_bekliyor. Gerekçe temizlenir; kısıt da
-          // başka durumda durmasına izin vermez.
-          ...(duzeltmeIsteniyor
+          // Saving a revision returns the activity to the manager (§5.4):
+          // changes requested → pending approval. Clear the reason; the
+          // database constraint also prevents it in any other status.
+          ...(changesRequested
             ? {
                 approvalStatus: "PENDING_APPROVAL" as const,
                 approvalReasonId: null,
                 approvalReasonKind: null,
                 approvalReasonNote: null,
                 approvalDecidedAt: null,
-                // Sayaç baştan başlar: iş şimdi yeniden müdürün önünde.
+                // Restart the timer: the activity is now with the manager again.
                 approvalSubmittedAt: now,
               }
             : {}),
         },
       });
 
-      stored = await storeValidatedFiles(yeniDosyalar);
+      stored = await storeValidatedFiles(nextFiles);
       for (const file of stored) {
         await tx.attachment.create({
           data: activityAttachmentData(activity.id, authorId, file, now),
         });
       }
 
-      // Düzeltme yeniden gönderildi: **yeni bir tur** açılır. Tek sütun ikinci
-      // turu yazarken birincinin üstüne yazardı; tur başına satır her turun
-      // kendi süresini korur (P3-R2-1).
-      if (duzeltmeIsteniyor) {
+      // A resubmitted revision opens a **new turn**. A single-row design would
+      // overwrite the first turn; one row per turn preserves each duration.
+      if (changesRequested) {
         await openApprovalRound(tx, activity.id, now);
       }
 
-      // Muhatap listesi yeniden kurulur; hangi departmanların seçili olduğu
-      // revizyon kaydında dondurulduğu için geçmiş bilgi kaybolmaz.
+      // Rebuild the related-department list; the revision keeps the historical
+      // selection, so no past information is lost.
       await tx.activityTargetDept.deleteMany({ where: { activityId: activity.id } });
       await tx.activityTargetDept.createMany({
         data: input.targetDepartmentIds.map((orgUnitId) => ({
@@ -647,15 +654,15 @@ export async function updateActivity(
         },
       });
 
-      // Düzeltme yapıldığında (özellikle müdürün düzeltme talebi üzerine yeniden gönderildiğinde),
-      // kaydın diğer kullanıcılar (müdür vb.) için tekrar "okunmamış" görünmesi gerekir.
-      // Eski okundu kayıtları temizlenir.
+      // A revised record must appear unread again to other users, especially
+      // when it was resubmitted after a manager requested changes. Clear old
+      // read receipts.
       await tx.readReceipt.deleteMany({
         where: { activityId: activity.id },
       });
 
-      // Tarih başka aya taşınmış olabilir: eski ay kaydı kaybetti, yeni ay kayıt
-      // kazandı. İki dönem de kendi değişmez sürümünü üretir.
+      // The date may move to another month: the old month loses the record and
+      // the new month gains it. Recalculate an immutable version for both.
       await enqueueScoreRecalculation(tx, {
         userId: authorId,
         activityDate: activity.activityDate,
@@ -678,33 +685,33 @@ export async function updateActivity(
         action: AUDIT_ACTIONS.activityRevised,
         detail: {
           revisionNo: next.currentRevisionNo,
-          attachmentCount: yeniDosyalar.length,
+          attachmentCount: nextFiles.length,
         },
         now,
       });
 
-      const uygunlar = await tx.activityApprover.findMany({
+      const approvers = await tx.activityApprover.findMany({
         where: { activityId: activity.id },
         select: { userId: true },
       });
 
-      // Onay bekleyen kaydın içeriği değiştiğinde müdür kuyruğu ve açık ekran
-      // tazelensin. Aynı tur korunur; yalnızca düzeltme istenmiş kayıt yeni
-      // tur açar. Vekiller, ilk gönderimdeki bildirim kuralıyla aynıdır.
+      // Refresh the manager queue and open screens when a pending activity
+      // changes. The current turn is preserved; only a changes-requested
+      // record opens a new one. Deputies follow the initial notification rule.
       if (
-        uygunlar.length > 0 &&
-        (activity.approvalStatus === "PENDING_APPROVAL" || duzeltmeIsteniyor)
+        approvers.length > 0 &&
+        (activity.approvalStatus === "PENDING_APPROVAL" || changesRequested)
       ) {
-        const vekiller = await activeDeputiesOfMany(
+        const deputyIds = await activeDeputiesOfMany(
           tx,
-          uygunlar.map((satir) => satir.userId),
+          approvers.map((row) => row.userId),
           now,
         );
-        const haberVerilecekler = [
-          ...new Set([...uygunlar.map((satir) => satir.userId), ...vekiller]),
+        const notificationRecipients = [
+          ...new Set([...approvers.map((row) => row.userId), ...deputyIds]),
         ];
 
-        for (const approverId of haberVerilecekler) {
+        for (const approverId of notificationRecipients) {
           await enqueueNotification(tx, {
             userId: approverId,
             eventType: NOTIFICATION_EVENTS.approvalPending,
@@ -716,7 +723,7 @@ export async function updateActivity(
 
         await publishRealtimeEvent(tx, {
           kind: REALTIME_EVENTS.approvalPending,
-          userIds: haberVerilecekler,
+          userIds: notificationRecipients,
         });
       }
 

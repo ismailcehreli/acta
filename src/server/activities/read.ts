@@ -17,59 +17,47 @@ import {
 } from "@/server/activities/edit-permission";
 import { readNumericSetting, SETTING_KEYS } from "@/server/settings/system-settings";
 
-// Faaliyet okuma. **Her okuma yolu görünürlük modülünden geçer** (§8.4):
-// "Faaliyetlerim" ekranı yalnızca kişinin kendi kayıtlarını gösterse bile
-// sorgu, kapsam filtresiyle birleştirilir. Böylece buradaki bir düzenleme
-// hatası kapsam dışına taşamaz — filtre daraltır, genişletemez.
+
+
+
+
 
 export type ActivityReadDb = ActivityRepositoryDb &
   Pick<PrismaClient, "systemSetting" | "readReceipt">;
 
 export interface ActivityListItem {
   id: string;
-  /** İnsan okur sıra numarası (§3.1). */
+
   activityNo: number;
   activityDate: Date;
   title: string;
   approvalStatus: string;
   currentRevisionNo: number;
-  /** Kaydın yazıldığı an; faaliyetin gününden ayrıdır (Görev 11.1). */
+
   createdAt: Date;
-  /** Son değişiklik anı; düzeltme satırı buradan yazılır. */
+
   updatedAt: Date;
+  authorOrgUnitName: string;
   targetDepartmentNames: string[];
-  /** İptal edilmişse gerekçesi; kayıt silinmediği için görünür kalır (§5.5). */
+
   cancellationReason: string | null;
-  /** Liste düğmesinin sunucu tarafındaki güncel düzenleme kararı. */
+
   canEdit: boolean;
 }
 
-/**
- * "Faaliyetlerim" ekranının daraltmaları (Görev 11.3).
- *
- * Kapsam akışındakilerle **aynı adları** taşırlar: kullanıcı iki ekranda iki
- * ayrı süzgeç dili öğrenmek zorunda kalmasın. Yazan kişi süzgeci burada yok —
- * liste zaten tek kişinin.
- */
+
 export interface OwnActivityFilters {
   period?: FeedFilters["period"];
-  /** Dönem hesabı için şimdiki an; testlerde sahte saat verilir. */
+
   now: Date;
   status?: FeedFilters["status"];
-  /** Kullanıcının kendi sormadığı açık sorusu olan kendi kayıtları. */
+
   openQuestions?: boolean;
-  /** Muhatap gösterilen departman. Erişim vermez, yalnız süzer (§8.3). */
+
   targetOrgUnitId?: string;
 }
 
-/**
- * Süzgeçlerden doğan daraltma koşulları.
- *
- * Liste ve sayaç aynı listeyi kullanır; ayrı yazılsalardı biri değiştiğinde
- * diğeri sessizce geride kalır ve sayaç listeyle çelişirdi. Görünürlük ve
- * "yalnız kendi kayıtları" koşulu buraya **girmez** — onlar her zaman ayrıca
- * ve önce eklenir.
- */
+
 function ownFilterConditions(
   filters: OwnActivityFilters,
   viewerId: string,
@@ -91,15 +79,7 @@ function ownFilterConditions(
   return conditions;
 }
 
-/**
- * Kişinin kendi kayıtları, sayfalı.
- *
- * Sayfalama **offset ile**: kendi arşivi canlı bir akış değil, kişinin
- * geçmişi. Araya yeni kayıt yalnız kişinin kendisi yazdığında girer ve o an
- * zaten bu ekranda değildir; numaralı sayfa burada güvenli ve kullanıcı
- * "3. sayfa"ya doğrudan gidebilir. Kapsam akışında ise durum tersi — orada
- * imleç kullanılıyor, sebebi `/feed` sayfasında yazılı.
- */
+
 export async function listOwnActivities(
   db: ActivityReadDb,
   viewer: Viewer,
@@ -129,6 +109,7 @@ export async function listOwnActivities(
       currentRevisionNo: true,
       createdAt: true,
       updatedAt: true,
+      authorOrgUnit: { select: { name: true } },
       targetDepts: { select: { orgUnit: { select: { name: true } } } },
       cancellation: { select: { reason: true } },
       readReceipts: {
@@ -144,7 +125,7 @@ export async function listOwnActivities(
     SETTING_KEYS.editWindowMinutes,
   );
 
-  return rows.map(({ targetDepts, cancellation, readReceipts, ...activity }) => {
+  return rows.map(({ authorOrgUnit, targetDepts, cancellation, readReceipts, ...activity }) => {
     const permission = evaluateActivityEditPermission(
       activity,
       filters.now,
@@ -154,6 +135,7 @@ export async function listOwnActivities(
 
     return {
       ...activity,
+      authorOrgUnitName: authorOrgUnit.name,
       targetDepartmentNames: targetDepts.map((target) => target.orgUnit.name),
       cancellationReason: cancellation?.reason ?? null,
       canEdit: permission.allowed,
@@ -161,7 +143,7 @@ export async function listOwnActivities(
   });
 }
 
-/** Kişinin toplam kayıt sayısı; sayfalama başlığı ve sayfa sayısı için. */
+
 export async function countOwnActivities(
   db: ActivityReadDb,
   viewer: Viewer,
@@ -172,7 +154,7 @@ export async function countOwnActivities(
   });
 }
 
-/** Düzenleme ekranı için kendi faaliyetini getirir; başkasınınkini getirmez. */
+
 export async function findOwnActivity(
   db: ActivityReadDb,
   viewer: Viewer,

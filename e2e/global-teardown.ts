@@ -16,9 +16,9 @@ import {
   e2eDatabaseUrl,
 } from "./global-setup";
 
-// Koşu bitince test hesabı kapatılır: oturumlar iptal edilir, parola
-// kullanılamaz hâle getirilir, kullanıcı pasifleştirilir. Kayıt silinmez —
-// fiziksel silme yoktur (§16.6).
+
+
+// Physical deletion is never used (§16.6).
 
 export default async function globalTeardown(): Promise<void> {
   const prisma = new PrismaClient({ datasources: { db: { url: e2eDatabaseUrl() } } });
@@ -42,8 +42,8 @@ export default async function globalTeardown(): Promise<void> {
         data: { revokedAt: new Date() },
       });
 
-      // Açık konuşması olan kullanıcı pasifleştirilemez (§4.6, veritabanı
-      // kısıtı). Koşu sırasında açılan konuşmalar önce idari olarak kapatılır.
+
+
       await prisma.conversation.updateMany({
         where: {
           status: "OPEN",
@@ -54,24 +54,24 @@ export default async function globalTeardown(): Promise<void> {
           closedAt: new Date(),
           closedById: user.id,
           closeType: "ADMINISTRATIVE",
-          // Gerekçe zorunludur (§9.3, veritabanı kısıtı). Koşu sonu temizliği
-          // de gerçek bir idari kapatmadır; nedeni kayda geçer.
-          closeReason: "Uçtan uca koşu sonu temizliği.",
+
+
+          closeReason: "End-to-end run cleanup.",
         },
       });
 
       await prisma.userCredential.update({
         where: { userId: user.id },
-        // Kimsenin bilmediği bir parola: hesap koşu dışında kullanılamaz.
+
         data: {
           passwordHash: await hashPassword(randomBytes(24).toString("hex")),
         },
       });
 
-      // Sistem yöneticisi **pasifleştirilmez**: en az bir aktif sistem
-      // yöneticisi kalmalı (veritabanı değişmezi, denetim 21.08.2026,
-      // bulgu 6). Hesabı kullanılamaz kılan şey zaten yukarıdaki parola
-      // karıştırmasıdır; pasifleştirme ikinci bir kemerdi.
+
+
+
+
       if (!user.isSystemAdmin) {
         await prisma.user.update({
           where: { id: user.id },

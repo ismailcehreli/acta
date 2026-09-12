@@ -1,22 +1,23 @@
 import type { ReactNode } from "react";
 
 import { Field, Input } from "@/components/ui/form";
+import { getTranslations } from "@/server/i18n/server";
 
-import { DONEM_SECENEKLERI, FilterBar } from "./filter-bar";
+import { FilterBar } from "./filter-bar";
 
-// Faaliyet süzgeci: kapsam akışı ve aramanın paylaştığı dört alan (Görev 10.9).
+
 //
-// Şeridin kendisi `FilterBar`dan gelir (Görev 11.3); burada yalnız **hangi
-// alanlar** olduğu tanımlanır. Diğer listeler kendi alanlarını aynı şeride
-// veriyor — böylece her ekran aynı düzeni ve aynı adres sözleşmesini
-// kullanıyor.
+
+
+
+
 //
-// Aynı süzgeç hem kapsam akışında hem aramada kullanılıyor. Aramaya ikinci bir
-// süzgeç seti yazmak, iki ayrı mantık demekti: biri bozulduğunda diğeri fark
-// edilmezdi ve kullanıcı iki farklı davranış öğrenmek zorunda kalırdı.
+
+
+
 //
-// **Süzgeç yetki vermez.** Daraltma her zaman görünürlük süzgecinin *üstüne*
-// uygulanır; hiçbir alan kapsamı genişletemez.
+
+
 
 export interface FilterOptions {
   people: { id: string; fullName: string }[];
@@ -37,7 +38,7 @@ export const EMPTY_FILTERS: FilterValues = {
   targetOrgUnitId: "",
 };
 
-/** Varsayılandan sapan bir seçim var mı; "temizle" düğmesi buna bağlı. */
+
 export function isFiltered(
   selected: FilterValues,
   defaultPeriod = "week",
@@ -52,15 +53,8 @@ export function isFiltered(
   );
 }
 
-/**
- * Süzgeç satırı.
- *
- * Kutuların `key`i seçili değerdir. Sebep: `defaultValue` yalnız **bağlanma
- * anında** DOM'a yazılır; yumuşak gezinmede React aynı `<select>` düğümünü
- * yeniden kullanıyor ve kutu eski değerde kalıyordu — liste daralmış, süzgeç
- * "Hepsi" görünüyordu.
- */
-export function ActivityFilters({
+
+export async function ActivityFilters({
   action,
   options,
   selected,
@@ -70,27 +64,28 @@ export function ActivityFilters({
   hidden,
   extra,
   pageSize,
-  submitLabel = "Uygula",
+  submitLabel,
 }: {
-  /** Formun gideceği yol; boşsa aynı sayfa. */
+
   action?: string;
   options: FilterOptions;
   selected: FilterValues;
   clearHref: string;
   defaultPeriod?: string;
-  /** Formla birlikte taşınması gereken alanlar (arama kelimesi gibi). */
+
   hidden?: { name: string; value: string }[];
-  /** Sayfaya özel ek alan. */
+
   extra?: ReactNode;
-  /** Yalnız okunmamış kayıtlar gösteriliyorsa temizleme durumuna katılır. */
+
   unreadOnly?: boolean;
-  /** Sayfada kaç kayıt gösterileceği; verilirse seçici çizilir. */
+
   pageSize?: number;
-  /** Gönder düğmesinin metni; arama sayfasında "Ara" olur. */
+
   submitLabel?: string;
 }) {
-  const departmanSecenekleri = [
-    { value: "", label: "Hepsi" },
+  const t = await getTranslations();
+  const departmentOptions = [
+    { value: "", label: t("common.everyone") },
     ...options.departments.map((unit) => ({ value: unit.id, label: unit.name })),
   ];
 
@@ -106,17 +101,21 @@ export function ActivityFilters({
       fields={[
         {
           name: "period",
-          label: "Dönem",
+          label: t("common.period"),
           value: selected.period,
           width: "w-32",
-          options: DONEM_SECENEKLERI,
+          options: [
+            { value: "today", label: t("dashboard.periodToday") },
+            { value: "week", label: t("dashboard.periodWeek") },
+            { value: "all", label: t("dashboard.periodAll") },
+          ],
         },
         {
           name: "authorId",
-          label: "Kişi",
+          label: t("common.person"),
           value: selected.authorId,
           options: [
-            { value: "", label: "Herkes" },
+            { value: "", label: t("common.everyone") },
             ...options.people.map((person) => ({
               value: person.id,
               label: person.fullName,
@@ -125,43 +124,44 @@ export function ActivityFilters({
         },
         {
           name: "authorOrgUnitId",
-          label: "Yazan departman",
+          label: t("common.authorDepartment"),
           value: selected.authorOrgUnitId,
           width: "w-52",
-          options: departmanSecenekleri,
+          options: departmentOptions,
         },
         {
           name: "targetOrgUnitId",
-          label: "İlgili departman",
+          label: t("common.relatedDepartment"),
           value: selected.targetOrgUnitId,
           width: "w-52",
-          options: departmanSecenekleri,
+          options: departmentOptions,
         },
       ]}
     />
   );
 }
 
-/** Arama kutusu; süzgeç satırının başına eklenir. */
-export function SearchField({
+
+export async function SearchField({
   value,
-  label = "Ara",
-  placeholder = "Kelime ya da faaliyet no",
+  label,
+  placeholder,
 }: {
   value: string;
-  /** Arama kutusunun etiketi; sayfaya göre ne aradığını söyler. */
+
   label?: string;
   placeholder?: string;
 }) {
+  const t = await getTranslations();
   return (
-    <Field htmlFor="q" label={label} className="w-64">
+    <Field htmlFor="q" label={label ?? t("common.search")} className="w-64">
       <Input
         key={value}
         id="q"
         name="q"
         type="search"
         defaultValue={value}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t("screens.search.activityPlaceholder")}
       />
     </Field>
   );

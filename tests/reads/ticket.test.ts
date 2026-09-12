@@ -10,11 +10,11 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Denetim (18.08.2026, FAZ 4 bulgu 8): süreyi istemci beyan ediyordu.
-// Detay ekranı hiç açılmadan "iki saniye geçti" denebiliyor, başkasının sahte
-// okuması yazarın düzeltme hakkını kapatabiliyordu.
 
-const SECRET = "test-icin-en-az-otuz-iki-karakterlik-anahtar";
+
+
+
+const SECRET = "test-secret-with-at-least-thirty-two-characters";
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
 beforeEach(async () => {
@@ -26,18 +26,18 @@ afterAll(async () => {
 });
 
 async function scenario() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-  const unit = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
-  const reader = await createUser(root.id, { fullName: "Direktör", isUnitManager: true });
-  const author = await createUser(unit.id, { fullName: "Müdür", isUnitManager: true });
+  const root = await createOrgUnit({ name: "General Management", type: "Root" });
+  const unit = await createOrgUnit({ name: "Mold Shop", parentId: root.id });
+  const reader = await createUser(root.id, { fullName: "Director", isUnitManager: true });
+  const author = await createUser(unit.id, { fullName: "Manager", isUnitManager: true });
 
   const activity = await testDb.activity.create({
     data: {
       authorId: author.id,
       authorOrgUnitId: unit.id,
       activityDate: new Date("2026-08-17T00:00:00.000Z"),
-      title: "Başlık",
-      description: "Açıklama",
+      title: "Title",
+      description: "Description",
       approvalStatus: "APPROVED",
       createdAt: NOW,
       updatedAt: NOW,
@@ -47,171 +47,171 @@ async function scenario() {
   return { reader, author, activity };
 }
 
-describe("bilet doğrulaması", () => {
+describe("read ticket verification", () => {
   const ACTIVITY = "11111111-1111-4111-8111-111111111111";
   const USER = "22222222-2222-4222-8222-222222222222";
 
-  it("süreyi sunucu ölçer", () => {
-    const bilet = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
-    const sonuc = verifyReadTicket(
-      bilet,
+  it("the server measures the dwell time", () => {
+    const ticket = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
+    const result = verifyReadTicket(
+      ticket,
       ACTIVITY,
       USER,
       new Date(NOW.getTime() + 2_500),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: true, dwellMs: 2_500 });
+    expect(result).toEqual({ ok: true, dwellMs: 2_500 });
   });
 
-  it("başka faaliyet için üretilmiş bilet kabul edilmez", () => {
-    const bilet = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
-    const sonuc = verifyReadTicket(
-      bilet,
+  it("a ticket issued for another activity is rejected", () => {
+    const ticket = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
+    const result = verifyReadTicket(
+      ticket,
       "33333333-3333-4333-8333-333333333333",
       USER,
       new Date(NOW.getTime() + 3_000),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: false, reason: "invalid" });
+    expect(result).toEqual({ ok: false, reason: "invalid" });
   });
 
-  it("başkasının bileti kabul edilmez", () => {
-    const bilet = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
-    const sonuc = verifyReadTicket(
-      bilet,
+  it("another user's ticket is rejected", () => {
+    const ticket = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
+    const result = verifyReadTicket(
+      ticket,
       ACTIVITY,
       "44444444-4444-4444-8444-444444444444",
       new Date(NOW.getTime() + 3_000),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: false, reason: "invalid" });
+    expect(result).toEqual({ ok: false, reason: "invalid" });
   });
 
-  it("uydurma bilet ve bozuk biçim reddedilir", () => {
+  it("a forged or malformed ticket is rejected", () => {
     const now = new Date(NOW.getTime() + 3_000);
-    for (const sahte of [
+    for (const forgedTicket of [
       `${NOW.getTime()}.abc`,
-      "imzasiz",
+      "unsigned",
       ".",
       `${NOW.getTime()}.${"0".repeat(64)}`,
     ]) {
-      expect(verifyReadTicket(sahte, ACTIVITY, USER, now, SECRET).ok).toBe(false);
+      expect(verifyReadTicket(forgedTicket, ACTIVITY, USER, now, SECRET).ok).toBe(false);
     }
   });
 
-  it("başka anahtarla imzalanmış bilet kabul edilmez", () => {
-    const bilet = issueReadTicket(ACTIVITY, USER, NOW, "baska-bir-anahtar-en-az-otuz-iki-karakter");
-    const sonuc = verifyReadTicket(
-      bilet,
+  it("a ticket signed with another key is rejected", () => {
+    const ticket = issueReadTicket(ACTIVITY, USER, NOW, "another-key-with-at-least-thirty-two-characters");
+    const result = verifyReadTicket(
+      ticket,
       ACTIVITY,
       USER,
       new Date(NOW.getTime() + 3_000),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: false, reason: "invalid" });
+    expect(result).toEqual({ ok: false, reason: "invalid" });
   });
 
-  it("sekmede unutulan sayfa okuma üretmez", () => {
-    const bilet = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
-    const sonuc = verifyReadTicket(
-      bilet,
+  it("an abandoned tab does not create a read", () => {
+    const ticket = issueReadTicket(ACTIVITY, USER, NOW, SECRET);
+    const result = verifyReadTicket(
+      ticket,
       ACTIVITY,
       USER,
       new Date(NOW.getTime() + READ_TICKET_MAX_AGE_MS + 1),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: false, reason: "expired" });
+    expect(result).toEqual({ ok: false, reason: "expired" });
   });
 
-  it("gelecekten gelen bilet reddedilir", () => {
-    const bilet = issueReadTicket(ACTIVITY, USER, new Date(NOW.getTime() + 60_000), SECRET);
+  it("a ticket from the future is rejected", () => {
+    const ticket = issueReadTicket(ACTIVITY, USER, new Date(NOW.getTime() + 60_000), SECRET);
 
-    expect(verifyReadTicket(bilet, ACTIVITY, USER, NOW, SECRET)).toEqual({
+    expect(verifyReadTicket(ticket, ACTIVITY, USER, NOW, SECRET)).toEqual({
       ok: false,
       reason: "invalid",
     });
   });
 });
 
-describe("okuma kaydı bilet üzerinden düşer", () => {
-  it("iki saniye dolunca kaydedilir", async () => {
+describe("read receipts are created through tickets", () => {
+  it("is recorded after two seconds", async () => {
     const { reader, activity } = await scenario();
-    const bilet = issueReadTicket(activity.id, reader.id, NOW, SECRET);
+    const ticket = issueReadTicket(activity.id, reader.id, NOW, SECRET);
 
-    const sonuc = await recordReadFromTicket(
+    const result = await recordReadFromTicket(
       testDb,
       { id: reader.id, isSystemAdmin: false },
       activity.id,
-      bilet,
+      ticket,
       new Date(NOW.getTime() + 2_000),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: true, recorded: true });
+    expect(result).toEqual({ ok: true, recorded: true });
     expect(await testDb.readReceipt.count()).toBe(1);
   });
 
-  it("iki saniye dolmadan gönderilen bilet kayıt bırakmaz", async () => {
+  it("a ticket sent before two seconds leaves no receipt", async () => {
     const { reader, activity } = await scenario();
-    const bilet = issueReadTicket(activity.id, reader.id, NOW, SECRET);
+    const ticket = issueReadTicket(activity.id, reader.id, NOW, SECRET);
 
-    const sonuc = await recordReadFromTicket(
+    const result = await recordReadFromTicket(
       testDb,
       { id: reader.id, isSystemAdmin: false },
       activity.id,
-      bilet,
+      ticket,
       new Date(NOW.getTime() + 1_999),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: false, reason: "too_short" });
+    expect(result).toEqual({ ok: false, reason: "too_short" });
     expect(await testDb.readReceipt.count()).toBe(0);
   });
 
-  // Bulgunun özü: detay ekranını hiç açmadan okuma kaydı üretilemez.
-  it("biletsiz çağrı okuma kaydı üretemez", async () => {
+  // Core finding: a read receipt cannot be created without opening the detail page.
+  it("a call without a ticket cannot create a read receipt", async () => {
     const { reader, activity } = await scenario();
 
-    for (const sahte of ["", "9999999999999.deadbeef", `${NOW.getTime()}.`]) {
-      const sonuc = await recordReadFromTicket(
+    for (const forgedTicket of ["", "9999999999999.deadbeef", `${NOW.getTime()}.`]) {
+      const result = await recordReadFromTicket(
         testDb,
         { id: reader.id, isSystemAdmin: false },
         activity.id,
-        sahte,
+        forgedTicket,
         new Date(NOW.getTime() + 10_000),
         SECRET,
       );
 
-      expect(sonuc).toEqual({ ok: false, reason: "invalid_ticket" });
+      expect(result).toEqual({ ok: false, reason: "invalid_ticket" });
     }
 
     expect(await testDb.readReceipt.count()).toBe(0);
   });
 
-  it("bileti olsa da göremeyen kişi okuma kaydı üretemez", async () => {
+  it("a person who cannot view the activity cannot create a read receipt", async () => {
     const { author, activity } = await scenario();
-    const yabanci = await createUser(
-      (await testDb.orgUnit.findFirstOrThrow({ where: { name: "Kalıphane" } })).id,
-      { fullName: "Akran" },
+    const outsider = await createUser(
+      (await testDb.orgUnit.findFirstOrThrow({ where: { name: "Mold Shop" } })).id,
+      { fullName: "Peer" },
     );
-    // Bilet doğru imzalı: yetki kararı yine görünürlük modülünden gelir.
-    const bilet = issueReadTicket(activity.id, yabanci.id, NOW, SECRET);
+    // The ticket is correctly signed; authorization still comes from visibility.
+    const ticket = issueReadTicket(activity.id, outsider.id, NOW, SECRET);
 
-    const sonuc = await recordReadFromTicket(
+    const result = await recordReadFromTicket(
       testDb,
-      { id: yabanci.id, isSystemAdmin: false },
+      { id: outsider.id, isSystemAdmin: false },
       activity.id,
-      bilet,
+      ticket,
       new Date(NOW.getTime() + 3_000),
       SECRET,
     );
 
-    expect(sonuc).toEqual({ ok: false, reason: "not_visible" });
+    expect(result).toEqual({ ok: false, reason: "not_visible" });
     expect(await testDb.readReceipt.count()).toBe(0);
     expect(author.id).toBeTruthy();
   });

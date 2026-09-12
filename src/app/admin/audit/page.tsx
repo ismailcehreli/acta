@@ -10,7 +10,7 @@ import { canManageOrganization } from "@/server/authz/admin";
 import { prisma } from "@/server/db";
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, EmptyState } from "@/components/ui/card";
 import { AdminNav } from "@/components/shell/admin-nav";
@@ -21,50 +21,59 @@ import { FilterBar } from "@/components/filters/filter-bar";
 import { resolvePageSize } from "@/server/preferences/page-size";
 import { buildQueryAddress } from "@/shared/filters/query-address";
 import { formatInstantPrecise } from "@/shared/format/date-time";
+import { getLocale } from "@/server/i18n/locale";
+import { getTranslations } from "@/server/i18n/server";
+import type { TranslateFunction } from "@/shared/i18n";
 
-// Denetim izi (§15.2). Kayıtlar **içerik taşımaz**: başlık, açıklama, gerekçe
-// ve mesaj metni burada görünmez, çünkü bu ekranı sistem yöneticisi kullanır
-// ve onun içeriğe erişimi yoktur (§15.1).
-
-export const metadata = { title: "İşlem kayıtları" };
 export const dynamic = "force-dynamic";
 
-const OBJECT_LABELS: Record<string, string> = {
-  activity: "Faaliyet",
-  conversation: "Konuşma",
-  user: "Kullanıcı",
-  org_unit: "Birim",
-  setting: "Ayar",
-  session: "Oturum",
+export async function generateMetadata() {
+  const t = await getTranslations();
+  return { title: t("screens.audit.pageTitle") };
+}
+
+const OBJECT_LABEL_KEYS: Record<string, string> = {
+  activity: "screens.audit.objectActivity",
+  conversation: "screens.audit.objectConversation",
+  user: "screens.audit.objectUser",
+  org_unit: "screens.audit.objectUnit",
+  setting: "screens.audit.objectSetting",
+  approval_reason: "screens.audit.objectApprovalReason",
+  follow_up: "screens.audit.objectFollowUp",
+  session: "screens.audit.objectSession",
+  backup_request: "screens.audit.objectBackupRequest",
+  system_reset: "screens.audit.objectSystemReset",
+  help_article: "screens.audit.objectHelpArticle",
+  feedback: "screens.audit.objectFeedback",
 };
 
-const ACTION_LABELS: Record<string, string> = {
-  activity_created: "faaliyet yazıldı",
-  activity_revised: "faaliyet düzeltildi",
-  activity_cancelled: "faaliyet iptal edildi",
-  conversation_opened: "soru soruldu",
-  conversation_replied: "konuşmaya yazıldı",
-  conversation_closed: "konuşma kapatıldı",
-  user_created: "kullanıcı eklendi",
-  user_updated: "kullanıcı düzenlendi",
-  user_deactivated: "kullanıcı pasifleştirildi",
-  user_reactivated: "kullanıcı aktifleştirildi",
-  user_password_set: "yönetici parola belirledi",
-  user_password_changed: "kullanıcı parolasını değiştirdi",
-  user_password_reset: "parola sıfırlandı",
-  org_unit_created: "birim açıldı",
-  org_unit_updated: "birim düzenlendi",
-  org_unit_moved: "birim taşındı",
-  org_unit_deactivated: "birim pasifleştirildi",
-  org_unit_reactivated: "birim aktifleştirildi",
-  settings_changed: "sistem ayarı değişti",
-  work_calendar_changed: "çalışma takvimi değişti",
-  holiday_added: "tatil eklendi",
-  holiday_removed: "tatil çıkarıldı",
-  smtp_changed: "SMTP ayarı değişti",
-  login_succeeded: "giriş yapıldı",
-  login_failed: "giriş denemesi başarısız",
-  login_locked: "hesap kilitlendi",
+const ACTION_LABEL_KEYS: Record<string, string> = {
+  activity_created: "screens.audit.actionActivityCreated",
+  activity_revised: "screens.audit.actionActivityRevised",
+  activity_cancelled: "screens.audit.actionActivityCancelled",
+  conversation_opened: "screens.audit.actionConversationOpened",
+  conversation_replied: "screens.audit.actionConversationReplied",
+  conversation_closed: "screens.audit.actionConversationClosed",
+  user_created: "screens.audit.actionUserCreated",
+  user_updated: "screens.audit.actionUserUpdated",
+  user_deactivated: "screens.audit.actionUserDeactivated",
+  user_reactivated: "screens.audit.actionUserReactivated",
+  user_password_set: "screens.audit.actionPasswordSet",
+  user_password_changed: "screens.audit.actionPasswordChanged",
+  user_password_reset: "screens.audit.actionPasswordReset",
+  org_unit_created: "screens.audit.actionUnitCreated",
+  org_unit_updated: "screens.audit.actionUnitUpdated",
+  org_unit_moved: "screens.audit.actionUnitMoved",
+  org_unit_deactivated: "screens.audit.actionUnitDeactivated",
+  org_unit_reactivated: "screens.audit.actionUnitReactivated",
+  settings_changed: "screens.audit.actionSettingsChanged",
+  work_calendar_changed: "screens.audit.actionCalendarChanged",
+  holiday_added: "screens.audit.actionHolidayAdded",
+  holiday_removed: "screens.audit.actionHolidayRemoved",
+  smtp_changed: "screens.audit.actionSmtpChanged",
+  login_succeeded: "screens.audit.actionLoginSucceeded",
+  login_failed: "screens.audit.actionLoginFailed",
+  login_locked: "screens.audit.actionLoginLocked",
 };
 
 export default async function AuditAdminPage({
@@ -74,94 +83,97 @@ export default async function AuditAdminPage({
     objectType?: string;
     action?: string;
     page?: string;
-    /** Sayfada kaç kayıt; seçim çerezde de hatırlanır. */
-    boyut?: string;
+
+    pageSize?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
 
   if (!canManageOrganization(user)) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="İşlem kayıtlarını yalnızca sistem yöneticisi görebilir."
+        message={t("screens.audit.permission")}
       />
     );
   }
 
   const params = await searchParams;
-  const sayfaBoyu = await resolvePageSize(params.boyut);
+  const pageSize = await resolvePageSize(params.pageSize);
   const page = Number(params.page ?? 1);
 
-  const sonuc = await listAuditEntries(
+  const result = await listAuditEntries(
     prisma,
     {
       objectType: params.objectType || undefined,
       action: params.action || undefined,
     },
     Number.isFinite(page) ? page : 1,
-    sayfaBoyu,
+    pageSize,
   );
 
-  const sayfaAdresi = (hedef: number) =>
+  const pageAddress = (pageNumber: number) =>
     buildQueryAddress(
       "/admin/audit",
       {
         objectType: params.objectType,
         action: params.action,
-        boyut: String(sayfaBoyu),
+        pageSize: String(pageSize),
       },
-      { page: String(hedef) },
+      { page: String(pageNumber) },
     );
 
   return (
     <AppShell
       user={await toShellUser(user)}
     >
-      <Page isaret="islem-kayitlari">
+      <Page marker="audit-log">
         <PageHeader
-          title="İşlem kayıtları"
-          description="Kim, ne zaman, neyi değiştirdi. Kayıtlar değiştirilemez ve silinemez. Faaliyet içeriği burada görünmez — kayıt ne yapıldığını söyler, ne yazıldığını değil."
-          breadcrumbs={[{ label: "Yönetim" }, { label: "İşlem kayıtları" }]}
+          title={t("screens.audit.pageTitle")}
+          description={t("screens.audit.pageDescription")}
+          breadcrumbs={[
+            { label: t("screens.audit.administration") },
+            { label: t("screens.audit.pageTitle") },
+          ]}
         />
 
         <AdminNav isRoot={user.isRoot} />
 
-        {/* Süzgeç şeridi diğer listelerle **aynı bileşen** (Görev 11.4):
-            burada elle yazılmış ayrı bir form vardı ve sayfa boyu seçimi
-            yoktu. Ayrı form, ayrı davranış demekti. */}
+
         <Card>
           <FilterBar
             action="/admin/audit"
             clearHref="/admin/audit"
             filtered={Boolean(params.objectType) || Boolean(params.action)}
-            pageSize={sayfaBoyu}
-            submitLabel="Süz"
+            pageSize={pageSize}
+            submitLabel={t("screens.audit.filter")}
             fields={[
               {
                 name: "objectType",
-                label: "Nesne",
+                label: t("screens.audit.objectType"),
                 value: params.objectType ?? "",
                 width: "w-52",
                 options: [
-                  { value: "", label: "Tümü" },
+                  { value: "", label: t("common.all") },
                   ...Object.values(AUDIT_OBJECTS).map((value) => ({
                     value,
-                    label: OBJECT_LABELS[value] ?? value,
+                    label: t(OBJECT_LABEL_KEYS[value] ?? value),
                   })),
                 ],
               },
               {
                 name: "action",
-                label: "İşlem",
+                label: t("screens.audit.operation"),
                 value: params.action ?? "",
                 width: "w-64",
                 options: [
-                  { value: "", label: "Tümü" },
+                  { value: "", label: t("common.all") },
                   ...Object.values(AUDIT_ACTIONS).map((value) => ({
                     value,
-                    label: ACTION_LABELS[value] ?? value,
+                    label: t(ACTION_LABEL_KEYS[value] ?? value),
                   })),
                 ],
               },
@@ -171,52 +183,55 @@ export default async function AuditAdminPage({
 
         <Card>
           <CardHeader
-            title="Kayıtlar"
-            description={`${sonuc.total} kayıt${
-              sonuc.pageCount > 1 ? ` · sayfa ${sonuc.page}/${sonuc.pageCount}` : ""
-            }`}
+            title={t("screens.audit.recordsTitle")}
+            description={
+              result.pageCount > 1
+                ? t("screens.audit.recordsPageDescription", {
+                    count: result.total,
+                    page: result.page,
+                    pageCount: result.pageCount,
+                  })
+                : t("screens.audit.recordsDescription", { count: result.total })
+            }
           />
 
-          {sonuc.entries.length === 0 ? (
+          {result.entries.length === 0 ? (
             <EmptyState
-              title="Kayıt yok"
-              description="Seçtiğiniz süzgeçle eşleşen bir işlem bulunamadı."
+              title={t("screens.audit.noRecords")}
+              description={t("screens.audit.noRecordsDescription")}
             />
           ) : (
-            // Tablo değil kayıt defteri (21.08.2026, ürün sahibi bildirdi).
+
             //
-            // Altı sütunun sonuncusu ham JSON taşıyordu; satır her ekranda
-            // taşıyor ve okumak için sağa sola kaydırmak gerekiyordu. Denetim
-            // kaydı zaten "kim, ne zaman, neyi, ne yaptı" cümlesidir —
-            // sütunlara bölmek onu okunur yapmıyordu.
+
+
+
+
             <RecordList>
-              {sonuc.entries.map((entry) => (
-                <RecordItem key={entry.id} data-test="denetim-kaydi" className="sm:px-5">
+              {result.entries.map((entry) => (
+                <RecordItem key={entry.id} data-test="audit-record" className="sm:px-5">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                     <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                       <Badge>
-                        {OBJECT_LABELS[entry.objectType] ?? entry.objectType}
+                        {t(OBJECT_LABEL_KEYS[entry.objectType] ?? entry.objectType)}
                       </Badge>
                       <span className="font-medium text-ink">
-                        {ACTION_LABELS[entry.action] ?? entry.action}
+                        {t(ACTION_LABEL_KEYS[entry.action] ?? entry.action)}
                       </span>
                     </p>
                     <time className="mono shrink-0 text-[length:var(--text-xs)] text-faint">
-                      {formatInstantPrecise(entry.createdAt)}
+                      {formatInstantPrecise(entry.createdAt, locale)}
                     </time>
                   </div>
 
                   <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[length:var(--text-sm)] text-muted">
                     <span className="font-medium text-ink">
-                      {entry.userName ?? "bilinmeyen kullanıcı"}
+                      {entry.userName ?? t("screens.audit.unknownUser")}
                     </span>
-                    {/* Vekâletle yapılan işlem "X adına Y" olarak okunur
-                        (§4.5). Sorgu bu alanı zaten döndürüyordu ama ekran
-                        çizmiyordu; vekilin kararı, kendi kararı gibi
-                        görünüyordu (denetim 21.08.2026, bulgu 15). */}
+
                     {entry.actualUserName ? (
                       <span className="text-[length:var(--text-sm)] text-muted">
-                        · {entry.actualUserName} adına
+                        · {t("screens.audit.onBehalfOf")} {entry.actualUserName}
                       </span>
                     ) : null}
                     {entry.ipAddress ? (
@@ -229,17 +244,17 @@ export default async function AuditAdminPage({
                     ) : null}
                   </p>
 
-                  <AyrintiSatiri detail={entry.detail} />
+                  <DetailRow detail={entry.detail} t={t} />
                 </RecordItem>
               ))}
             </RecordList>
           )}
 
           <Pagination
-            page={sonuc.page}
-            pageCount={sonuc.pageCount}
-            hrefFor={sayfaAdresi}
-            totalLabel={`Toplam ${sonuc.total} kayıt`}
+            page={result.page}
+            pageCount={result.pageCount}
+            hrefFor={pageAddress}
+            totalLabel={t("screens.audit.totalRecords", { count: result.total })}
           />
         </Card>
       </Page>
@@ -248,53 +263,50 @@ export default async function AuditAdminPage({
 }
 
 /**
- * Denetim kaydının ayrıntısı.
- *
- * Ham JSON yerine okunur alan-değer çiftleri. Bilinen alanlar Türkçe adıyla
- * yazılır; bilinmeyen alan **gizlenmez**, anahtarıyla gösterilir — denetim
- * kaydının değeri eksiksizliğinde, sunum kolaylığı için bilgi kırpılmaz.
+ * Renders audit details as readable field-value pairs instead of raw JSON.
+ * Unknown fields remain visible by their key so no audit information is lost.
  */
-const AYRINTI_ADLARI: Record<string, string> = {
-  revisionNo: "revizyon",
-  approvalStatus: "onay durumu",
-  activityDate: "faaliyet günü",
-  email: "e-posta",
-  orgUnitId: "birim",
-  isUnitManager: "birim yöneticisi",
-  isSystemAdmin: "sistem yöneticisi",
-  writesActivities: "faaliyet yazar",
-  reason: "gerekçe",
-  before: "önce",
-  after: "sonra",
+const DETAIL_LABEL_KEYS: Record<string, string> = {
+  revisionNo: "screens.audit.detailRevision",
+  approvalStatus: "screens.audit.detailApprovalStatus",
+  activityDate: "screens.audit.detailActivityDate",
+  email: "screens.audit.detailEmail",
+  orgUnitId: "screens.audit.detailUnit",
+  isUnitManager: "screens.audit.detailUnitManager",
+  isSystemAdmin: "screens.audit.detailSystemAdministrator",
+  writesActivities: "screens.audit.detailWritesActivities",
+  reason: "screens.audit.detailReason",
+  before: "screens.audit.detailBefore",
+  after: "screens.audit.detailAfter",
 };
 
-function okunur(deger: unknown): string {
-  if (deger === null || deger === undefined) return "—";
-  if (typeof deger === "boolean") return deger ? "evet" : "hayır";
-  if (typeof deger === "object") return JSON.stringify(deger);
-  return String(deger);
+function readable(value: unknown, t: TranslateFunction): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? t("common.yes") : t("common.no");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
-function AyrintiSatiri({ detail }: { detail: unknown }) {
+function DetailRow({ detail, t }: { detail: unknown; t: TranslateFunction }) {
   if (detail === null || detail === undefined) return null;
 
   if (typeof detail !== "object") {
     return (
       <p className="mt-1.5 text-[length:var(--text-xs)] text-faint">
-        {okunur(detail)}
+        {readable(detail, t)}
       </p>
     );
   }
 
-  const girdiler = Object.entries(detail as Record<string, unknown>);
-  if (girdiler.length === 0) return null;
+  const inputs = Object.entries(detail as Record<string, unknown>);
+  if (inputs.length === 0) return null;
 
   return (
     <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[length:var(--text-xs)]">
-      {girdiler.map(([anahtar, deger]) => (
-        <div key={anahtar} className="flex items-baseline gap-1.5">
-          <dt className="text-faint">{AYRINTI_ADLARI[anahtar] ?? anahtar}:</dt>
-          <dd className="mono break-all text-muted">{okunur(deger)}</dd>
+      {inputs.map(([key, value]) => (
+        <div key={key} className="flex items-baseline gap-1.5">
+          <dt className="text-faint">{t(DETAIL_LABEL_KEYS[key] ?? key)}:</dt>
+          <dd className="mono break-all text-muted">{readable(value, t)}</dd>
         </div>
       ))}
     </dl>

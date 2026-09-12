@@ -1,18 +1,18 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-// Okuma bileti (§10.2). Süreyi kim ölçüyor sorusunun cevabıdır.
-//
-// Ölçüm bütünüyle istemcinin beyanına dayanıyordu: sunucu eylemi `dwellMs`
-// parametresi alıyor, istemci detay ekranını hiç açmadan "iki saniye geçti"
-// diyebiliyordu (denetim 18.08.2026, FAZ 4 bulgu 8). Bu veri yalnız
-// gösterge değildir — başkasının okuması yazarın düzeltme hakkını kapatır.
-//
-// Bilet detay sayfası **sunucuda** üretilirken imzalanır ve zamanı sunucu
-// koyar. Kayıt çağrısında süre yeniden sunucuda hesaplanır; istemciden gelen
-// tek şey biletin kendisidir. Bilet üretilmiş olması, kişinin faaliyeti
-// görebildiğinin de kanıtıdır: sayfa görünürlükten geçmeden render edilmez.
 
-/** Bilet bu süreden eskiyse kabul edilmez; sekmede unutulan sayfa okuma üretmez. */
+//
+
+
+
+
+//
+
+
+
+
+
+
 export const READ_TICKET_MAX_AGE_MS = 60 * 60_000;
 
 export type TicketVerification =
@@ -38,8 +38,8 @@ export function issueReadTicket(
 }
 
 /**
- * Bileti doğrular ve **sunucunun ölçtüğü** süreyi döndürür. Bilet başka bir
- * faaliyet ya da başka bir kullanıcı için üretilmişse imza tutmaz.
+ * Verify the ticket and return the **server-measured** dwell time. A ticket
+ * issued for another activity or user has an invalid signature.
  */
 export function verifyReadTicket(
   ticket: string,
@@ -56,14 +56,14 @@ export function verifyReadTicket(
   if (!Number.isSafeInteger(issuedAtMs)) return { ok: false, reason: "invalid" };
 
   const expected = signature(payloadOf(activityId, userId, issuedAtMs), secret);
-  // Karşılaştırma sabit zamanlıdır; uzunluk farkı da imza uyuşmazlığıdır.
+  // Compare in constant time; a length mismatch is also a signature mismatch.
   if (provided.length !== expected.length) return { ok: false, reason: "invalid" };
   if (!timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
     return { ok: false, reason: "invalid" };
   }
 
   const dwellMs = now.getTime() - issuedAtMs;
-  // Gelecekten gelen bilet: sunucu saati geriye alınmış ya da bilet uydurulmuş.
+  // A future ticket means the server clock moved backwards or the ticket was forged.
   if (dwellMs < 0) return { ok: false, reason: "invalid" };
   if (dwellMs > READ_TICKET_MAX_AGE_MS) return { ok: false, reason: "expired" };
 

@@ -1,9 +1,9 @@
-// Dosya eki kuralları (§15.4, §5.2).
+
 //
-// İzin verilen türler tasarımda sayılıdır ve **istemciyle ortak** bir yerde
-// durur (`@/shared/attachments`): yükleme formu da aynı listeyi gösteriyor.
-// Tür **uzantıya değil içerik imzasına** göre doğrulanır — uzantısı .pdf olan
-// bir çalıştırılabilir dosya buradan geçemez.
+
+
+
+
 
 import { ALLOWED_MIME_TYPES, ALLOWED_TYPES_LABEL } from "@/shared/attachments";
 
@@ -22,10 +22,10 @@ export type AttachmentRefusal =
   | "empty_file";
 
 export const ATTACHMENT_MESSAGES: Record<AttachmentRefusal, string> = {
-  too_large: "Dosya boyutu sınırı aşıldı.",
-  too_many: "Bir faaliyete eklenebilecek dosya sayısı sınırı aşıldı.",
-  unsupported_type: `Bu dosya türü kabul edilmiyor. ${ALLOWED_TYPES_LABEL} dosyaları yüklenebilir.`,
-  empty_file: "Boş dosya yüklenemez.",
+  too_large: "The file size limit was exceeded.",
+  too_many: "The maximum number of attachments for an activity was exceeded.",
+  unsupported_type: `This file type is not supported. Uploadable types: ${ALLOWED_TYPES_LABEL}.`,
+  empty_file: "An empty file cannot be uploaded.",
 };
 
 export interface AttachmentLimits {
@@ -50,22 +50,22 @@ export function checkAttachmentCount(
   return existingCount + incomingCount > limits.maxCount ? "too_many" : null;
 }
 
-/** İçerik imzasından bulunan tür kabul ediliyor mu (§15.4). */
+/** Is the type detected from the content signature allowed (§15.4)? */
 export function isAllowedContentType(detectedMime: string | undefined): boolean {
   return detectedMime !== undefined && ALLOWED_MIME_TYPES.has(detectedMime);
 }
 
 /**
- * Sunucuda üretilen saklama adı. Kullanıcının verdiği ad **hiçbir zaman**
- * dosya sisteminde kullanılmaz; orijinal ad yalnızca veritabanında durur.
- * Böylece yol enjeksiyonu imkânsızlaşır (§15.4).
+ * Builds the server-generated storage name. The user-provided name is **never**
+ * used in the file system; the original name is stored only in the database.
+ * This prevents path injection (§15.4).
  */
 export function buildStoredName(randomId: string): string {
-  // Yalnızca onaltılık karakterler; uzantı yok, ayırıcı yok.
+  // Hexadecimal characters only; no extension and no path separator.
   const safe = randomId.replace(/[^a-f0-9]/gi, "").toLowerCase();
 
   if (safe.length < 16) {
-    throw new Error("Saklama adı için yeterli rastgelelik yok.");
+    throw new Error("The storage name does not contain enough randomness.");
   }
 
   return safe;

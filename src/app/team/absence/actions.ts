@@ -9,6 +9,11 @@ import {
 } from "@/server/absence/service";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   absenceDecisionSchema,
   cancelAbsenceSchema,
@@ -17,10 +22,10 @@ import {
 
 import type { AbsenceFormState } from "./form-state";
 
-// Yetki kontrolü servisin içindedir (ast listesi görünürlük modülünden gelir);
-// burada yalnız oturum aranır. Ekranın gizlenmesi güvenlik değildir.
 
-function hata(message: string): AbsenceFormState {
+
+
+function error(message: string): AbsenceFormState {
   return { error: message, success: null };
 }
 
@@ -29,7 +34,8 @@ export async function markAbsenceAction(
   formData: FormData,
 ): Promise<AbsenceFormState> {
   const me = await getCurrentUser();
-  if (!me) return hata("Oturum bulunamadı.");
+  const t = await getTranslations();
+  if (!me) return error(t("auth.sessionNotFound"));
 
   const rawDeputy = formData.get("deputyId");
   const rawNote = formData.get("note");
@@ -44,17 +50,16 @@ export async function markAbsenceAction(
   });
 
   if (!parsed.success) {
-    return hata(parsed.error.issues[0]?.message ?? "Girdi geçersiz");
+    return error(localizeValidationIssue(t, parsed.error.issues[0]));
   }
 
-  const sonuc = await markNoActivityPeriod(prisma, me.id, parsed.data, new Date());
-  if (!sonuc.ok) return hata(sonuc.message);
+  const result = await markNoActivityPeriod(prisma, me.id, parsed.data, new Date());
+  if (!result.ok) return error(localizeServiceMessage(t, "absence", result));
 
   revalidatePath("/team/absence");
   return {
     error: null,
-    success:
-      "Kaydedildi. Bu tarihlerde kişiye hatırlatma gitmez ve kişi katılım hesabında beklenen gün sayılmaz.",
+    success: t("screens.teamAbsence.savedNoActivity"),
   };
 }
 
@@ -63,7 +68,8 @@ export async function decideAbsenceAction(
   formData: FormData,
 ): Promise<AbsenceFormState> {
   const me = await getCurrentUser();
-  if (!me) return hata("Oturum bulunamadı.");
+  const t = await getTranslations();
+  if (!me) return error(t("auth.sessionNotFound"));
 
   const rawReason = formData.get("reason");
   const parsed = absenceDecisionSchema.safeParse({
@@ -75,10 +81,16 @@ export async function decideAbsenceAction(
         : undefined,
   });
   if (!parsed.success) {
-    return hata(parsed.error.issues[0]?.message ?? "Karar bilgisi geçersiz.");
+    return error(
+      localizeValidationIssue(
+        t,
+        parsed.error.issues[0],
+        "screens.teamAbsence.invalidDecision",
+      ),
+    );
   }
 
-  const sonuc = await decideNoActivityPeriod(
+  const result = await decideNoActivityPeriod(
     prisma,
     me.id,
     parsed.data.id,
@@ -86,7 +98,7 @@ export async function decideAbsenceAction(
     parsed.data.reason,
     new Date(),
   );
-  if (!sonuc.ok) return hata(sonuc.message);
+  if (!result.ok) return error(localizeServiceMessage(t, "absence", result));
 
   revalidatePath("/team/absence");
   revalidatePath("/absence");
@@ -96,8 +108,8 @@ export async function decideAbsenceAction(
     error: null,
     success:
       parsed.data.decision === "APPROVED"
-        ? "Talep onaylandı. Bu günler artık hatırlatma ve katılım hesabında dikkate alınmayacak."
-        : "Talep reddedildi.",
+        ? t("screens.teamAbsence.requestApproved")
+        : t("screens.teamAbsence.requestRejected"),
   };
 }
 
@@ -106,25 +118,32 @@ export async function cancelAbsenceAction(
   formData: FormData,
 ): Promise<AbsenceFormState> {
   const me = await getCurrentUser();
-  if (!me) return hata("Oturum bulunamadı.");
+  const t = await getTranslations();
+  if (!me) return error(t("auth.sessionNotFound"));
 
   const parsed = cancelAbsenceSchema.safeParse({
     id: formData.get("id"),
     reason: formData.get("reason"),
   });
   if (!parsed.success) {
-    return hata(parsed.error.issues[0]?.message ?? "İşaret bilgisi geçersiz.");
+    return error(
+      localizeValidationIssue(
+        t,
+        parsed.error.issues[0],
+        "screens.teamAbsence.invalidCancellation",
+      ),
+    );
   }
 
-  const sonuc = await cancelNoActivityPeriod(
+  const result = await cancelNoActivityPeriod(
     prisma,
     me.id,
     parsed.data.id,
     parsed.data.reason,
   );
-  if (!sonuc.ok) return hata(sonuc.message);
+  if (!result.ok) return error(localizeServiceMessage(t, "absence", result));
 
   revalidatePath("/team/absence");
   revalidatePath("/deputy");
-  return { error: null, success: "Kayıt iptal edildi." };
+  return { error: null, success: t("screens.absence.recordCancelled") };
 }

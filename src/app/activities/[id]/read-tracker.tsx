@@ -4,24 +4,7 @@ import { useEffect, useRef } from "react";
 
 import { markReadAction } from "./read-actions";
 
-/**
- * "Okundu" ölçümü (§10.2): detay görünümü açıldıktan sonra sistem ayarındaki
- * süre boyunca **görünür durumda** kalırsa kayıt düşer. Sayfa daha önce kapanırsa ya da
- * sekme arka plana alınırsa sayaç sıfırlanır — arka plandaki sekme okuma
- * sayılmaz (denetim 18.08.2026, FAZ 4 bulgu 8).
- *
- * Sunucuya süre gönderilmez; imzalı bilet gönderilir ve süreyi sunucu ölçer.
- * Buradaki sayaç yalnızca "ne zaman haber vereyim" sorusunu cevaplar.
- *
- * Manuel "okudum" butonu yoktur (İlke 4): ölçüm otomatiktir.
- *
- * **İlk bilet saklanır ve sonraki biletler yok sayılır.** Süreyi sunucu
- * biletin düzenlenme anından ölçüyor; sayfa her tazelendiğinde yeni bir bilet
- * üretiliyor ve ölçüm baştan başlıyor. Gerçek zamanlı tazeleme (Görev 7.3)
- * devreye girince okuma hiç kaydedilmez oldu — uçtan uca okundu testi bunu
- * yakaladı. Doğru olan da bu: ölçülmek istenen "kullanıcı bu ekranı ne zaman
- * açtı", "en son ne zaman tazelendi" değil.
- */
+
 export function ReadTracker({
   activityId,
   ticket,
@@ -31,45 +14,43 @@ export function ReadTracker({
   ticket: string;
   dwellMs: number;
 }) {
-  // Bilerek güncellenmiyor: ilk biletin damgası okumanın başlangıcıdır.
-  const ilkBilet = useRef(ticket);
+  const initialTicket = useRef(ticket);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let bildirildi = false;
+    let reported = false;
 
-    function durdur() {
+    function stop() {
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
     }
 
-    function basla() {
-      if (bildirildi || timer !== undefined) return;
+    function start() {
+      if (reported || timer !== undefined) return;
       timer = setTimeout(() => {
-        bildirildi = true;
-        void markReadAction(activityId, ilkBilet.current).catch((error: unknown) => {
-          console.error("Faaliyet okuma kaydı gönderilemedi.", error);
+        reported = true;
+        void markReadAction(activityId, initialTicket.current).catch((error: unknown) => {
+          console.error("Could not submit the activity read event.", error);
         });
       }, dwellMs);
     }
 
-    function gorunurlukDegisti() {
-      if (document.visibilityState === "visible") basla();
-      else durdur();
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") start();
+      else stop();
     }
 
-    gorunurlukDegisti();
-    document.addEventListener("visibilitychange", gorunurlukDegisti);
-    window.addEventListener("blur", durdur);
-    window.addEventListener("focus", basla);
+    handleVisibilityChange();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", stop);
+    window.addEventListener("focus", start);
 
     return () => {
-      durdur();
-      document.removeEventListener("visibilitychange", gorunurlukDegisti);
-      window.removeEventListener("blur", durdur);
-      window.removeEventListener("focus", basla);
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", stop);
+      window.removeEventListener("focus", start);
     };
-    // Bilet bilerek dışarıda; bkz. yukarıdaki açıklama.
   }, [activityId, dwellMs]);
 
   return null;

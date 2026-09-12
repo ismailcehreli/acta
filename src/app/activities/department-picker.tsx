@@ -2,35 +2,38 @@
 
 import { useMemo, useState } from "react";
 
+import { useLocale, useTranslations } from "@/components/i18n/provider";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/form";
 import type { TargetOption } from "@/server/activities/target-options";
 
-// İlgili departman seçici (Görev 10.3).
-//
-// Eskiden bütün departmanlar alt alta kutucuktu. Yirmi beş departmanlı bir
-// şirkette bu, telefonda ekranı dolduran ve kaydırılması gereken bir duvar —
-// 30 saniyelik giriş hedefini (§18.4) tam da burada kırıyordu.
-//
-// Sıralama **değişmedi**: kişinin kendi birimi ve alt birimleri üstte, diğerleri
-// altta (§5.3). Kişiye özel "sık kullandıklarınız" bilerek yok; ürün sahibi
-// mevcut mantıkla devam edilmesini istedi.
 
-/** Türkçe'ye duyarlı karşılaştırma: "I/ı" ve "İ/i" ayrımı doğru çalışsın. */
-function kucult(metin: string): string {
-  return metin.toLocaleLowerCase("tr-TR");
+//
+
+
+
+//
+
+
+
+
+
+function normalize(text: string, locale: string): string {
+  return text.toLocaleLowerCase(locale);
 }
 
-function Kutucuk({
+function DepartmentOption({
   option,
   checked,
   disabled,
   onToggle,
+  ownLabel,
 }: {
   option: TargetOption;
   checked: boolean;
   disabled: boolean;
   onToggle: (id: string) => void;
+  ownLabel: string;
 }) {
   return (
     <label
@@ -49,7 +52,7 @@ function Kutucuk({
       <span className="text-ink">{option.name}</span>
       {option.own ? (
         <span className="text-[length:var(--text-xs)] text-muted">
-          (kendi biriminiz)
+          {ownLabel}
         </span>
       ) : null}
     </label>
@@ -67,11 +70,13 @@ export function DepartmentPicker({
   onChange: (ids: string[]) => void;
   max: number;
 }) {
-  const [arama, setArama] = useState("");
+  const t = useTranslations();
+  const locale = useLocale();
+  const [search, setSearch] = useState("");
 
-  const secilenKume = useMemo(() => new Set(selected), [selected]);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
 
-  const secilenler = useMemo(
+  const selectedItems = useMemo(
     () =>
       selected
         .map((id) => options.find((option) => option.id === id))
@@ -79,37 +84,37 @@ export function DepartmentPicker({
     [selected, options],
   );
 
-  const suzulmus = useMemo(() => {
-    const anahtar = kucult(arama.trim());
-    if (anahtar === "") return options;
-    return options.filter((option) => kucult(option.name).includes(anahtar));
-  }, [arama, options]);
+  const filtered = useMemo(() => {
+    const key = normalize(search.trim(), locale);
+    if (key === "") return options;
+    return options.filter((option) => normalize(option.name, locale).includes(key));
+  }, [search, options, locale]);
 
-  const dolu = selected.length >= max;
+  const full = selected.length >= max;
 
-  function degistir(id: string) {
-    if (secilenKume.has(id)) {
-      onChange(selected.filter((secili) => secili !== id));
+  function toggle(id: string) {
+    if (selectedSet.has(id)) {
+      onChange(selected.filter((selected) => selected !== id));
       return;
     }
-    // Sınıra gelindiğinde sessizce yutmak yerine kutucuk zaten kapalı olur;
-    // buraya yine de bakılıyor çünkü klavyeyle tetiklenebilir.
-    if (dolu) return;
+
+
+    if (full) return;
     onChange([...selected, id]);
   }
 
-  const kendi = suzulmus.filter((option) => option.own);
-  const digerleri = suzulmus.filter((option) => !option.own);
+  const ownOptions = filtered.filter((option) => option.own);
+  const otherOptions = filtered.filter((option) => !option.own);
 
   return (
-    <div className="flex flex-col gap-2.5" data-test="departman-secici">
+    <div className="flex flex-col gap-2.5" data-test="department-picker">
       <div className="flex flex-wrap items-center gap-2">
         <Input
           type="search"
-          value={arama}
-          onChange={(olay) => setArama(olay.target.value)}
-          placeholder="Departman ara…"
-          aria-label="Departman ara"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={t("departmentPicker.searchPlaceholder")}
+          aria-label={t("departmentPicker.searchLabel")}
           className="w-full sm:w-64"
         />
         <span className="text-[length:var(--text-xs)] text-muted tabular">
@@ -117,17 +122,18 @@ export function DepartmentPicker({
         </span>
       </div>
 
-      {/* Seçilenler üstte: kaç tane seçtiğini görmek için listeyi baştan sona
-          taramak gerekmiyor. */}
-      {secilenler.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5" data-test="secilen-departmanlar">
-          {secilenler.map((option) => (
+
+      {selectedItems.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5" data-test="selected-departments">
+          {selectedItems.map((option) => (
             <Badge key={option.id} tone="primary">
               {option.name}
               <button
                 type="button"
-                onClick={() => degistir(option.id)}
-                aria-label={`${option.name} seçimini kaldır`}
+                onClick={() => toggle(option.id)}
+                aria-label={t("departmentPicker.removeSelection", {
+                  name: option.name,
+                })}
                 className="-mr-0.5 ml-0.5 rounded-full px-1 leading-none hover:bg-primary-line"
               >
                 ×
@@ -137,39 +143,41 @@ export function DepartmentPicker({
         </div>
       ) : null}
 
-      {suzulmus.length === 0 ? (
+      {filtered.length === 0 ? (
         <p className="px-2 py-3 text-[length:var(--text-sm)] text-muted">
-          &quot;{arama}&quot; ile eşleşen departman yok.
+          {t("departmentPicker.noMatch", { query: search })}
         </p>
       ) : (
         <div className="flex flex-col gap-2">
-          {kendi.length > 0 ? (
+          {ownOptions.length > 0 ? (
             <div className="grid gap-1 sm:grid-cols-2">
-              {kendi.map((option) => (
-                <Kutucuk
+              {ownOptions.map((option) => (
+                <DepartmentOption
                   key={option.id}
                   option={option}
-                  checked={secilenKume.has(option.id)}
-                  disabled={dolu && !secilenKume.has(option.id)}
-                  onToggle={degistir}
+                  checked={selectedSet.has(option.id)}
+                  disabled={full && !selectedSet.has(option.id)}
+                  onToggle={toggle}
+                  ownLabel={t("departmentPicker.ownUnit")}
                 />
               ))}
             </div>
           ) : null}
 
-          {kendi.length > 0 && digerleri.length > 0 ? (
+          {ownOptions.length > 0 && otherOptions.length > 0 ? (
             <hr className="border-line" />
           ) : null}
 
-          {digerleri.length > 0 ? (
+          {otherOptions.length > 0 ? (
             <div className="grid gap-1 sm:grid-cols-2">
-              {digerleri.map((option) => (
-                <Kutucuk
+              {otherOptions.map((option) => (
+                <DepartmentOption
                   key={option.id}
                   option={option}
-                  checked={secilenKume.has(option.id)}
-                  disabled={dolu && !secilenKume.has(option.id)}
-                  onToggle={degistir}
+                  checked={selectedSet.has(option.id)}
+                  disabled={full && !selectedSet.has(option.id)}
+                  onToggle={toggle}
+                  ownLabel={t("departmentPicker.ownUnit")}
                 />
               ))}
             </div>
@@ -177,15 +185,13 @@ export function DepartmentPicker({
         </div>
       )}
 
-      {dolu ? (
+      {full ? (
         <p className="text-[length:var(--text-xs)] text-muted">
-          En fazla {max} departman seçilebilir. Yenisini eklemek için birini
-          kaldırın.
+          {t("departmentPicker.maxReached", { count: max })}
         </p>
       ) : null}
 
-      {/* Forma giden değer. Kutucuklar denetimli olduğu için asıl gönderim
-          buradan yapılır; sunucu tarafı hiç değişmedi. */}
+      {/* Controlled checkboxes mirror their values into the submitted form. */}
       {selected.map((id) => (
         <input key={id} type="hidden" name="targetDepartmentIds" value={id} />
       ))}

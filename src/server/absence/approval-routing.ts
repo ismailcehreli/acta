@@ -5,7 +5,7 @@ import type {
 
 import { companyDay, toDateValue } from "@/server/activities/date-rules";
 
-import { GECERLI_DONEM } from "./period-filter";
+import { CURRENT_PERIOD } from "./period-filter";
 
 const MAX_LEVELS = 20;
 
@@ -48,7 +48,7 @@ async function activeManagerIds(
   const rows = await db.noActivityPeriod.findMany({
     where: {
       userId: { in: managerIds },
-      ...GECERLI_DONEM,
+      ...CURRENT_PERIOD,
       startDate: { lte: day },
       endDate: { gte: day },
     },
@@ -68,7 +68,7 @@ async function currentManagerAbsences(
   return db.noActivityPeriod.findMany({
     where: {
       userId: { in: managerIds },
-      ...GECERLI_DONEM,
+      ...CURRENT_PERIOD,
       startDate: { lte: day },
       endDate: { gte: day },
     },
@@ -114,7 +114,7 @@ async function parentUnitId(
   return unit?.parentId ?? null;
 }
 
-/** Kendi izninde seçilebilecek aktif birim yöneticileri. */
+
 export async function listAbsenceDeputies(
   db: Pick<PrismaClient, "user">,
   excludedId: string,
@@ -130,18 +130,7 @@ export async function listAbsenceDeputies(
   });
 }
 
-/**
- * Bir departmanın çalışan izin taleplerinin o anda ulaşabileceği kişiler.
- *
- * Öncelik sırası:
- * 1. Departmandaki görevde olan yöneticiler.
- * 2. İzinli yöneticilerin aktif vekilleri.
- * 3. Aynı departmanda karar verecek kimse kalmadıysa ilk aktif üst kademe.
- *
- * Sonuç bir kümedir; aynı kademedeki birden fazla yöneticiye talep gider ve
- * ilk geçerli karar kaydı kapatır. Üst yöneticiye geçiş, yalnız doğrudan
- * departman yöneticilerinin tamamı görev dışındaysa yapılır.
- */
+
 export async function resolveAbsenceApprovers(
   db: AbsenceRoutingDb,
   departmentId: string,
@@ -194,7 +183,7 @@ export async function resolveAbsenceApprovers(
   return [];
 }
 
-/** Çalışanın talebini hangi yöneticilerin karara bağlayabileceğini çözer. */
+
 export async function resolveAbsenceApproversForUser(
   db: AbsenceRoutingDb,
   userId: string,
@@ -209,7 +198,7 @@ export async function resolveAbsenceApproversForUser(
   return resolveAbsenceApprovers(db, user.orgUnitId, now);
 }
 
-/** Aktörün bu çalışan talebinde geçerli karar yolu var mı? */
+
 export async function absenceDecisionRoute(
   db: AbsenceRoutingDb,
   actorId: string,
@@ -220,13 +209,7 @@ export async function absenceDecisionRoute(
   return approvers.find((approver) => approver.id === actorId)?.route ?? null;
 }
 
-/**
- * Yöneticinin izin ekranında yönetebileceği çalışanlar.
- *
- * Kendi departmanı her zaman kendi kapsamıdır. Buna ek olarak, aktif
- * vekâletle veya vekilsiz üst yöneticiye geçici yönlendirmeyle açılan
- * departmanlar yalnızca o karar yolu geçerliyken eklenir.
- */
+
 export async function managedAbsenceEmployeeIds(
   db: AbsenceRoutingDb,
   managerId: string,
@@ -249,7 +232,7 @@ export async function managedAbsenceEmployeeIds(
 
   const currentManagerPeriods = await db.noActivityPeriod.findMany({
     where: {
-      ...GECERLI_DONEM,
+      ...CURRENT_PERIOD,
       startDate: { lte: toDateValue(companyDay(now)) },
       endDate: { gte: toDateValue(companyDay(now)) },
       user: { isUnitManager: true, isActive: true },
@@ -277,15 +260,7 @@ export async function managedAbsenceEmployeeIds(
   return [...new Set([...ownEmployees.map((employee) => employee.id), ...delegatedEmployees])];
 }
 
-/**
- * Yöneticinin izin ekranında okuyabileceği kayıt sahipleri.
- *
- * Yönetim ekranı karar yetkisinden daha geniştir: yönetici kendi alt
- * organizasyonundaki izinleri izleyebilir, fakat onay/red işlemi her zaman
- * `resolveAbsenceApprovers` sonucuyla ayrıca sınırlandırılır. Aktif vekâlet,
- * yöneticinin kendi ağacının dışındaki ilgili departmanı da geçici olarak
- * görünür kılar.
- */
+
 export async function visibleAbsenceUserIds(
   db: AbsenceRoutingDb,
   managerId: string,
@@ -314,7 +289,7 @@ export async function visibleAbsenceUserIds(
   const day = toDateValue(companyDay(now));
   const delegatedPeriods = await db.noActivityPeriod.findMany({
     where: {
-      ...GECERLI_DONEM,
+      ...CURRENT_PERIOD,
       startDate: { lte: day },
       endDate: { gte: day },
       deputyId: managerId,
@@ -340,7 +315,7 @@ export async function visibleAbsenceUserIds(
   ];
 }
 
-/** Aynı çalışan birden fazla yönetici yolundan gelirse tek kez döndürülür. */
+/** Returns a worker only once when multiple manager routes reach them. */
 export function dedupeAbsenceApprovers(
   approvers: AbsenceApprover[],
 ): AbsenceApprover[] {

@@ -13,8 +13,8 @@ import { conversationMessageSchema } from "@/shared/schemas/conversation";
 
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §9: faaliyet başına bağımsız konuşmalar, tek sorumlu, cevapla el değiştiren
-// sorumluluk, ara kademelerin görmesi, tur sınırının olmaması.
+// §9: independent conversations per activity, single responsible party,
+// responsibility shifting with replies, visible to intermediate levels, no round limits.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
@@ -27,29 +27,29 @@ afterAll(async () => {
 });
 
 async function buildScenario() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-  const directorate = await createOrgUnit({ name: "Direktörlük", parentId: root.id });
-  const moldShop = await createOrgUnit({ name: "Kalıphane", parentId: directorate.id });
-  const planning = await createOrgUnit({ name: "Planlama", parentId: directorate.id });
+  const root = await createOrgUnit({ name: "Headquarters", type: "Root" });
+  const directorate = await createOrgUnit({ name: "Directorate", parentId: root.id });
+  const moldShop = await createOrgUnit({ name: "Tooling Shop", parentId: directorate.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: directorate.id });
 
   const generalManager = await createUser(root.id, {
-    fullName: "Genel Müdür",
+    fullName: "General Manager",
     isUnitManager: true,
   });
   const director = await createUser(directorate.id, {
-    fullName: "Direktör",
+    fullName: "Director",
     isUnitManager: true,
   });
   const author = await createUser(moldShop.id, {
-    fullName: "Kalıphane Müdürü",
+    fullName: "Shop Manager",
     isUnitManager: true,
   });
   const peer = await createUser(planning.id, {
-    fullName: "Planlama Müdürü",
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
   const sysAdmin = await createUser(root.id, {
-    fullName: "Sistem Yöneticisi",
+    fullName: "System Admin",
     isSystemAdmin: true,
   });
 
@@ -58,8 +58,8 @@ async function buildScenario() {
       authorId: author.id,
       authorOrgUnitId: moldShop.id,
       activityDate: new Date("2026-08-17T00:00:00.000Z"),
-      title: "Kalıp bakımı",
-      description: "Çatlak onarıldı.",
+      title: "Mold maintenance",
+      description: "Crack repaired.",
       approvalStatus: "APPROVED",
     },
   });
@@ -80,8 +80,8 @@ const actor = (user: { id: string; isSystemAdmin: boolean }) => ({
   isSystemAdmin: user.isSystemAdmin,
 });
 
-describe("soru sorma yetkisi (§9.2)", () => {
-  it("üst zincirdeki yönetici soru sorabilir", async () => {
+describe("permission to ask questions (§9.2)", () => {
+  it("manager in upstream chain can ask question", async () => {
     const { director, activity } = await buildScenario();
 
     expect(
@@ -89,442 +89,430 @@ describe("soru sorma yetkisi (§9.2)", () => {
     ).toBe(true);
   });
 
-  it("yazan kendi faaliyetine soru açamaz", async () => {
+  it("author cannot ask question on own activity", async () => {
     const { author, activity } = await buildScenario();
 
     expect(await canAskQuestion(testDb, actor(author), activity)).toBe(false);
   });
 
-  it("akran soru soramaz; faaliyeti göremiyor bile", async () => {
+  it("peer cannot ask question; cannot even see activity", async () => {
     const { peer, activity } = await buildScenario();
 
     expect(await canAskQuestion(testDb, actor(peer), activity)).toBe(false);
 
-    const sonuc = await askQuestion(
+    const result = await askQuestion(
       testDb,
       actor(peer),
-      { activityId: activity.id, text: "Bu ne demek?" },
+      { activityId: activity.id, text: "What does this mean?" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    // Göremediği faaliyetin varlığı da bildirilmez.
-    expect(sonuc.message).toBe("Faaliyet bulunamadı.");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Existence of unseen activity is not disclosed.
+    expect(result.message).toBe("Activity not found.");
   });
 
-  it("sistem yöneticisi ağaçta üstte değilse soru soramaz", async () => {
+  it("system admin cannot ask question if not upstream in hierarchy", async () => {
     const { sysAdmin, activity } = await buildScenario();
 
-    const sonuc = await askQuestion(
+    const result = await askQuestion(
       testDb,
       { id: sysAdmin.id, isSystemAdmin: true },
-      { activityId: activity.id, text: "Bu ne demek?" },
+      { activityId: activity.id, text: "What does this mean?" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 });
 
-describe("akış (§9.2)", () => {
-  it("soru açılınca sorumlu faaliyeti yazan kişidir", async () => {
+describe("conversation flow (§9.2)", () => {
+  it("responsible party is activity author when question is opened", async () => {
     const { director, author, activity } = await buildScenario();
 
-    const sonuc = await askQuestion(
+    const result = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Bu kalıp sorunu neden sürüyor?" },
+      { activityId: activity.id, text: "Why is this mold issue continuing?" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value.askerId).toBe(director.id);
-    expect(sonuc.value.responsibleId).toBe(author.id);
-    expect(sonuc.value.status).toBe("OPEN");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.askerId).toBe(director.id);
+    expect(result.value.responsibleId).toBe(author.id);
+    expect(result.value.status).toBe("OPEN");
   });
 
-  it("soru sorulunca yazana bildirim kuyruğa yazılır (§12.2)", async () => {
+  it("notification queued to author when question is asked (§12.2)", async () => {
     const { director, author, activity } = await buildScenario();
 
     await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru metni" },
+      { activityId: activity.id, text: "Question text" },
       NOW,
     );
 
-    const bildirimler = await testDb.notificationQueue.findMany();
-    expect(bildirimler).toHaveLength(1);
-    expect(bildirimler[0].userId).toBe(author.id);
-    expect(bildirimler[0].eventType).toBe("question_asked");
+    const notifications = await testDb.notificationQueue.findMany();
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].userId).toBe(author.id);
+    expect(notifications[0].eventType).toBe("question_asked");
   });
 
-  it("cevap verilince sorumluluk soruyu sorana geçer", async () => {
+  it("responsibility shifts to asker when reply is given", async () => {
     const { director, author, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru" },
+      { activityId: activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
-    const cevap = await replyToConversation(
+    const replyResult = await replyToConversation(
       testDb,
       actor(author),
-      { conversationId: acilis.value.id, text: "Yedek parça bekleniyor." },
+      { conversationId: created.value.id, text: "Spare part is awaited." },
       new Date(NOW.getTime() + 60_000),
     );
 
-    expect(cevap.ok).toBe(true);
-    if (!cevap.ok) return;
-    expect(cevap.value.responsibleId).toBe(director.id);
+    expect(replyResult.ok).toBe(true);
+    if (!replyResult.ok) return;
+    expect(replyResult.value.responsibleId).toBe(director.id);
   });
 
-  it("cevap gelince sorana bildirim yazılır", async () => {
+  it("notification queued to asker when reply arrives", async () => {
     const { director, author, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru" },
+      { activityId: activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
     await replyToConversation(
       testDb,
       actor(author),
-      { conversationId: acilis.value.id, text: "Cevap" },
+      { conversationId: created.value.id, text: "Reply" },
       new Date(NOW.getTime() + 60_000),
     );
 
-    const bildirimler = await testDb.notificationQueue.findMany({
+    const notifications = await testDb.notificationQueue.findMany({
       where: { eventType: "answer_received" },
     });
-    expect(bildirimler).toHaveLength(1);
-    expect(bildirimler[0].userId).toBe(director.id);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].userId).toBe(director.id);
   });
 
-  it("tur sınırı yoktur; sorumluluk her mesajda el değiştirir (§9.4)", async () => {
+  it("no round limit; responsibility shifts on every message (§9.4)", async () => {
     const { director, author, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru 1" },
+      { activityId: activity.id, text: "Question 1" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
-    let zaman = NOW.getTime();
-    for (let tur = 0; tur < 5; tur += 1) {
-      zaman += 60_000;
-      const cevap = await replyToConversation(
+    let timestamp = NOW.getTime();
+    for (let round = 0; round < 5; round += 1) {
+      timestamp += 60_000;
+      const reply = await replyToConversation(
         testDb,
         actor(author),
-        { conversationId: acilis.value.id, text: `Cevap ${tur}` },
-        new Date(zaman),
+        { conversationId: created.value.id, text: `Reply ${round}` },
+        new Date(timestamp),
       );
-      expect(cevap.ok).toBe(true);
-      if (cevap.ok) expect(cevap.value.responsibleId).toBe(director.id);
+      expect(reply.ok).toBe(true);
+      if (reply.ok) expect(reply.value.responsibleId).toBe(director.id);
 
-      zaman += 60_000;
-      const yeniSoru = await replyToConversation(
+      timestamp += 60_000;
+      const followUp = await replyToConversation(
         testDb,
         actor(director),
-        { conversationId: acilis.value.id, text: `Ek soru ${tur}` },
-        new Date(zaman),
+        { conversationId: created.value.id, text: `Additional question ${round}` },
+        new Date(timestamp),
       );
-      expect(yeniSoru.ok).toBe(true);
-      if (yeniSoru.ok) expect(yeniSoru.value.responsibleId).toBe(author.id);
+      expect(followUp.ok).toBe(true);
+      if (followUp.ok) expect(followUp.value.responsibleId).toBe(author.id);
     }
 
-    const mesajlar = await testDb.conversationMessage.count({
-      where: { conversationId: acilis.value.id },
+    const messageCount = await testDb.conversationMessage.count({
+      where: { conversationId: created.value.id },
     });
-    expect(mesajlar).toBe(11);
+    expect(messageCount).toBe(11);
   });
 
-  it("faaliyet başına birden fazla bağımsız konuşma olabilir (§9.1)", async () => {
+  it("multiple independent conversations can exist per activity (§9.1)", async () => {
     const { director, generalManager, author, activity } = await buildScenario();
 
-    const ilk = await askQuestion(
+    const first = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Direktörün sorusu" },
+      { activityId: activity.id, text: "Director question" },
       NOW,
     );
-    const ikinci = await askQuestion(
+    const second = await askQuestion(
       testDb,
       actor(generalManager),
-      { activityId: activity.id, text: "Genel Müdürün sorusu" },
+      { activityId: activity.id, text: "General Manager question" },
       NOW,
     );
 
-    expect(ilk.ok && ikinci.ok).toBe(true);
-    if (!ilk.ok || !ikinci.ok) return;
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
 
-    // Birine verilen cevap diğerini ilerletmez.
+    // Replying to one does not advance the other.
     await replyToConversation(
       testDb,
       actor(author),
-      { conversationId: ilk.value.id, text: "Cevap" },
+      { conversationId: first.value.id, text: "Reply" },
       new Date(NOW.getTime() + 60_000),
     );
 
-    const ikinciGuncel = await testDb.conversation.findUniqueOrThrow({
-      where: { id: ikinci.value.id },
+    const secondUpdated = await testDb.conversation.findUniqueOrThrow({
+      where: { id: second.value.id },
     });
-    expect(ikinciGuncel.responsibleId).toBe(author.id);
+    expect(secondUpdated.responsibleId).toBe(author.id);
   });
 
-  it("konuşmanın tarafı olmayan kişi mesaj yazamaz", async () => {
+  it("non-party cannot write messages to conversation", async () => {
     const { director, peer, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru" },
+      { activityId: activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
-    const sonuc = await replyToConversation(
+    const result = await replyToConversation(
       testDb,
       actor(peer),
-      { conversationId: acilis.value.id, text: "Araya girdim" },
+      { conversationId: created.value.id, text: "Intervening" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    // Taraf olmayan kişi, var olmayan konuşmayla aynı cevabı alır.
-    expect(sonuc.error).toBe("conversation_not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Non-party receives same error as non-existent conversation.
+    expect(result.error).toBe("conversation_not_found");
   });
 });
 
-describe("kapatma (§9.3) — veritabanına karşı", () => {
-  async function acilmisKonusma() {
+describe("closing (§9.3) — against database", () => {
+  async function setupWithOpenConversation() {
     const scenario = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(scenario.director),
-      { activityId: scenario.activity.id, text: "Soru" },
+      { activityId: scenario.activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
-    return { ...scenario, conversation: acilis.value };
+    if (!created.ok) throw new Error("setup failed");
+    return { ...scenario, conversation: created.value };
   }
 
-  it("soran kapatabilir", async () => {
-    const { director, conversation } = await acilmisKonusma();
+  it("asker can close", async () => {
+    const { director, conversation } = await setupWithOpenConversation();
 
-    const sonuc = await closeConversation(
+    const result = await closeConversation(
       testDb,
       actor(director),
       conversation.id,
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value.closeType).toBe("NORMAL");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.closeType).toBe("NORMAL");
   });
 
-  it("sorumlu kapatamaz — cevap verdikten sonra bile", async () => {
-    const { author, conversation } = await acilmisKonusma();
+  it("responsible party cannot close — even after replying", async () => {
+    const { author, conversation } = await setupWithOpenConversation();
     await replyToConversation(
       testDb,
       actor(author),
-      { conversationId: conversation.id, text: "Cevap" },
+      { conversationId: conversation.id, text: "Reply" },
       new Date(NOW.getTime() + 60_000),
     );
 
-    const sonuc = await closeConversation(
+    const result = await closeConversation(
       testDb,
       actor(author),
       conversation.id,
       new Date(NOW.getTime() + 120_000),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("responsible_cannot_close");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("responsible_cannot_close");
   });
 
-  it("soranın üstü 10 iş günü dolmadan kapatamaz", async () => {
-    const { generalManager, conversation } = await acilmisKonusma();
+  it("asker supervisor cannot close before 10 business days", async () => {
+    const { generalManager, conversation } = await setupWithOpenConversation();
 
-    const sonuc = await closeConversation(
+    const result = await closeConversation(
       testDb,
       actor(generalManager),
       conversation.id,
       new Date("2026-08-20T09:00:00.000Z"),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("supervisor_too_early");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("supervisor_too_early");
   });
 
-  it("soranın üstü 10 iş günü sonra kapatabilir", async () => {
-    const { generalManager, conversation } = await acilmisKonusma();
+  it("asker supervisor can close after 10 business days", async () => {
+    const { generalManager, conversation } = await setupWithOpenConversation();
 
-    const sonuc = await closeConversation(
+    const result = await closeConversation(
       testDb,
       actor(generalManager),
       conversation.id,
       new Date("2026-09-01T09:00:00.000Z"),
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
-  // Denetim (18.08.2026, bulgu 6): iş günü sayacı saf fonksiyonda
-  // tatil listesi kabul ediyordu ama üretim yolu listeyi hiç doldurmuyordu.
-  // Birim testi elle tatil vererek yeşil oluyordu; kanıt gerçek servisten
-  // gelmeli.
-  //
-  // 17 Ağustos 2026 Pazartesi açılan konuşmada 10. iş günü 31 Ağustos'tur.
-  it("resmî tatil sayacı geciktirir — gerçek servis üzerinden", async () => {
-    const { generalManager, conversation } = await acilmisKonusma();
-    const onuncuIsGunu = new Date("2026-08-31T09:00:00.000Z");
+  it("public holiday delays counter — verified through real service", async () => {
+    const { generalManager, conversation } = await setupWithOpenConversation();
+    const tenthWorkDay = new Date("2026-08-31T09:00:00.000Z");
 
-    // Tatil yokken 10 iş günü dolmuştur.
-    const tatilsiz = await closeConversation(
+    // Without holiday 10 business days elapsed.
+    const withoutHoliday = await closeConversation(
       testDb,
       actor(generalManager),
       conversation.id,
-      onuncuIsGunu,
+      tenthWorkDay,
     );
-    expect(tatilsiz.ok).toBe(true);
+    expect(withoutHoliday.ok).toBe(true);
   });
 
-  it("tatil ilan edilince üst aynı gün kapatamaz", async () => {
-    const { generalManager, conversation } = await acilmisKonusma();
+  it("supervisor cannot close on same day if holiday declared", async () => {
+    const { generalManager, conversation } = await setupWithOpenConversation();
     await testDb.holiday.create({
-      data: { date: new Date("2026-08-31T00:00:00.000Z"), description: "Deneme tatili" },
+      data: { date: new Date("2026-08-31T00:00:00.000Z"), description: "Trial holiday" },
     });
 
-    const sonuc = await closeConversation(
+    const result = await closeConversation(
       testDb,
       actor(generalManager),
       conversation.id,
       new Date("2026-08-31T09:00:00.000Z"),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("supervisor_too_early");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("supervisor_too_early");
   });
 
-  // Aynı bulgunun ikinci yarısı: sayaç, soranın **son** hareketinden işler.
-  // Servis son 50 mesajı çekip içinde soranınkini arıyordu; uzun konuşmada
-  // soranın mesajı pencerenin dışında kalınca sayaç açılış tarihine dönüyor ve
-  // üst hak ettiğinden erken kapatabiliyordu.
-  it("uzun konuşmada soranın son hareketi kaybolmaz", async () => {
-    const { director, author, generalManager, conversation } = await acilmisKonusma();
+  it("asker last action is not lost in long conversations", async () => {
+    const { director, author, generalManager, conversation } = await setupWithOpenConversation();
 
-    // Soran, açılıştan bir hafta sonra yeniden yazıyor.
-    const soraninSonHareketi = new Date("2026-08-24T09:00:00.000Z");
+    // Asker writes again one week after opening.
+    const askerLastAction = new Date("2026-08-24T09:00:00.000Z");
     await testDb.conversationMessage.create({
       data: {
         conversationId: conversation.id,
         authorId: director.id,
-        text: "Hatırlatma",
-        createdAt: soraninSonHareketi,
+        text: "Reminder",
+        createdAt: askerLastAction,
       },
     });
 
-    // Ardından 60 cevap: soranın mesajı son 50'nin dışında kalıyor.
+    // Followed by 60 replies.
     await testDb.conversationMessage.createMany({
       data: Array.from({ length: 60 }, (_, i) => ({
         conversationId: conversation.id,
         authorId: author.id,
-        text: `Ara cevap ${i + 1}`,
-        createdAt: new Date(soraninSonHareketi.getTime() + (i + 1) * 60_000),
+        text: `Intermediate reply ${i + 1}`,
+        createdAt: new Date(askerLastAction.getTime() + (i + 1) * 60_000),
       })),
     });
 
-    // Soranın son hareketinden (24 Ağustos) 31 Ağustos'a 5 iş günü var.
-    const sonuc = await closeConversation(
+    // 5 business days between Aug 24 and Aug 31.
+    const result = await closeConversation(
       testDb,
       actor(generalManager),
       conversation.id,
       new Date("2026-08-31T09:00:00.000Z"),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("supervisor_too_early");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("supervisor_too_early");
   });
 
-  it("sistem yöneticisi idari olarak kapatır; gerekçe kayda geçer", async () => {
-    const { sysAdmin, conversation } = await acilmisKonusma();
+  it("system admin closes administratively; reason is recorded", async () => {
+    const { sysAdmin, conversation } = await setupWithOpenConversation();
 
-    const sonuc = await closeConversation(
+    const result = await closeConversation(
       testDb,
       { id: sysAdmin.id, isSystemAdmin: true },
       conversation.id,
       NOW,
-      "Soran kişi işten ayrıldı, hesabı kapatılacak.",
+      "Asker left company, account will be closed.",
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value.closeType).toBe("ADMINISTRATIVE");
-    expect(sonuc.value.closeReason).toBe(
-      "Soran kişi işten ayrıldı, hesabı kapatılacak.",
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.closeType).toBe("ADMINISTRATIVE");
+    expect(result.value.closeReason).toBe(
+      "Asker left company, account will be closed.",
     );
   });
 
-  it("gerekçesiz idari kapatma reddedilir", async () => {
-    const { sysAdmin, conversation } = await acilmisKonusma();
+  it("administrative closure without reason is rejected", async () => {
+    const { sysAdmin, conversation } = await setupWithOpenConversation();
 
-    for (const gerekce of [undefined, "", "   "]) {
-      const sonuc = await closeConversation(
+    for (const reason of [undefined, "", "   "]) {
+      const result = await closeConversation(
         testDb,
         { id: sysAdmin.id, isSystemAdmin: true },
         conversation.id,
         NOW,
-        gerekce,
+        reason,
       );
 
-      expect(sonuc.ok).toBe(false);
-      if (sonuc.ok) return;
-      expect(sonuc.error).toBe("reason_required");
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe("reason_required");
     }
 
-    // Konuşma açık kalmalı: reddedilen kapatma yan etki bırakmaz.
-    const guncel = await testDb.conversation.findUniqueOrThrow({
+    // Conversation remains open: rejected close leaves no side effect.
+    const updated = await testDb.conversation.findUniqueOrThrow({
       where: { id: conversation.id },
     });
-    expect(guncel.status).toBe("OPEN");
-    expect(guncel.closeReason).toBeNull();
+    expect(updated.status).toBe("OPEN");
+    expect(updated.closeReason).toBeNull();
   });
 
-  it("soranın kendi kapatmasında gerekçe alanı boş kalır", async () => {
-    const { director, conversation } = await acilmisKonusma();
+  it("reason field remains null when asker closes directly", async () => {
+    const { director, conversation } = await setupWithOpenConversation();
 
-    const sonuc = await closeConversation(
+    const result = await closeConversation(
       testDb,
       actor(director),
       conversation.id,
       NOW,
-      "yok sayılmalı",
+      "should be ignored",
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    // Gerekçe yalnız idari kapatmaya aittir; normal kapanışta saklanmaz.
-    expect(sonuc.value.closeType).toBe("NORMAL");
-    expect(sonuc.value.closeReason).toBeNull();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.closeType).toBe("NORMAL");
+    expect(result.value.closeReason).toBeNull();
   });
 
-  it("idari kapatma, pasifleştirmenin önünü açar (§4.6 kilidi)", async () => {
-    const { sysAdmin, director, conversation } = await acilmisKonusma();
+  it("administrative closure enables user deactivation (§4.6 lock)", async () => {
+    const { sysAdmin, director, conversation } = await setupWithOpenConversation();
 
-    // Açık konuşma varken pasifleştirme veritabanınca engelleniyor.
     await expect(
       testDb.user.update({
         where: { id: director.id },
@@ -537,137 +525,127 @@ describe("kapatma (§9.3) — veritabanına karşı", () => {
       { id: sysAdmin.id, isSystemAdmin: true },
       conversation.id,
       NOW,
-      "Kullanıcı işten ayrıldı.",
+      "User left company.",
     );
 
-    // Konuşma kapandıktan sonra pasifleştirme mümkün.
-    const guncel = await testDb.user.update({
+    const updated = await testDb.user.update({
       where: { id: director.id },
       data: { isActive: false, isUnitManager: false },
     });
-    expect(guncel.isActive).toBe(false);
+    expect(updated.isActive).toBe(false);
   });
 
-  // Denetim (18.08.2026, bulgu 13): mesajlara tasarımda olmayan üç
-  // karakterlik alt sınır konmuştu; "Evet" değil ama "OK" bile reddediliyordu.
-  it("tek karakterlik cevap geçerlidir, boş mesaj değildir", async () => {
-    expect(conversationMessageSchema.safeParse("E").success).toBe(true);
+  it("single character reply is valid, empty message is not", async () => {
+    expect(conversationMessageSchema.safeParse("Y").success).toBe(true);
     expect(conversationMessageSchema.safeParse("").success).toBe(false);
     expect(conversationMessageSchema.safeParse("   ").success).toBe(false);
   });
 
-  it("kapalı konuşmaya mesaj yazılamaz", async () => {
-    const { director, author, conversation } = await acilmisKonusma();
+  it("cannot write message to closed conversation", async () => {
+    const { director, author, conversation } = await setupWithOpenConversation();
     await closeConversation(testDb, actor(director), conversation.id, NOW);
 
-    const sonuc = await replyToConversation(
+    const result = await replyToConversation(
       testDb,
       actor(author),
-      { conversationId: conversation.id, text: "Geç cevap" },
+      { conversationId: conversation.id, text: "Late reply" },
       new Date(NOW.getTime() + 60_000),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("closed");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("closed");
   });
 });
 
-// Denetim (18.08.2026, FAZ 4 bulgu 1): konuşma eylemleri faaliyetin
-// güncel görünürlüğünü doğrulamıyordu. Konuşma kimliğini bilmek yetki değildir;
-// kimlik zaten taraflara veriliyor.
-describe("konuşma yolları görünürlükten geçer", () => {
-  async function konusmaKur() {
+describe("conversation paths pass through visibility", () => {
+  async function setupConversation() {
     const context = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(context.director),
-      { activityId: context.activity.id, text: "Soru" },
+      { activityId: context.activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
-    return { ...context, conversation: acilis.value };
+    if (!created.ok) throw new Error("setup failed");
+    return { ...context, conversation: created.value };
   }
 
-  it("akran, kimliğini bilse de konuşmaya yazamaz", async () => {
-    const { peer, conversation } = await konusmaKur();
+  it("peer cannot write to conversation even if ID is known", async () => {
+    const { peer, conversation } = await setupConversation();
 
-    const sonuc = await replyToConversation(
+    const result = await replyToConversation(
       testDb,
       actor(peer),
-      { conversationId: conversation.id, text: "Araya girdim" },
+      { conversationId: conversation.id, text: "Intervening" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    // Var olmayan konuşmayla aynı cevap: varlık ele verilmez.
-    expect(sonuc.error).toBe("conversation_not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("conversation_not_found");
   });
 
-  it("yetkisiz ile var olmayan konuşma aynı cevabı alır", async () => {
-    const { peer, conversation } = await konusmaKur();
+  it("unauthorized receives same response as non-existent conversation", async () => {
+    const { peer, conversation } = await setupConversation();
 
-    const yetkisiz = await replyToConversation(
+    const unauthorized = await replyToConversation(
       testDb,
       actor(peer),
-      { conversationId: conversation.id, text: "Metin" },
+      { conversationId: conversation.id, text: "Text" },
       NOW,
     );
-    const olmayan = await replyToConversation(
+    const nonExistent = await replyToConversation(
       testDb,
       actor(peer),
       {
         conversationId: "00000000-0000-0000-0000-000000000000",
-        text: "Metin",
+        text: "Text",
       },
       NOW,
     );
 
-    expect(yetkisiz).toEqual(olmayan);
+    expect(unauthorized).toEqual(nonExistent);
   });
 
-  it("kapalı konuşmanın durumu yetkisiz kişiye açıklanmaz", async () => {
-    const { director, peer, conversation } = await konusmaKur();
+  it("closed status is not disclosed to unauthorized party", async () => {
+    const { director, peer, conversation } = await setupConversation();
     await closeConversation(testDb, actor(director), conversation.id, NOW);
 
-    const sonuc = await replyToConversation(
+    const result = await replyToConversation(
       testDb,
       actor(peer),
-      { conversationId: conversation.id, text: "Metin" },
+      { conversationId: conversation.id, text: "Text" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    // "Zaten kapatılmış" demek kaydın varlığını ve durumunu ele verirdi.
-    expect(sonuc.error).toBe("conversation_not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("conversation_not_found");
   });
 
-  it("başka dala taşınan soran, artık göremediği konuşmaya yazamaz", async () => {
-    const { director, conversation, units } = await konusmaKur();
+  it("asker transferred to another branch cannot write to conversation they can no longer see", async () => {
+    const { director, conversation, units } = await setupConversation();
 
-    // Direktör, faaliyetin üst zincirinden çıkarılıyor: görünürlük güncel
-    // ağaçtan hesaplanır (§4.6).
     await testDb.user.update({
       where: { id: director.id },
       data: { orgUnitId: units.planning.id, isUnitManager: false },
     });
 
-    const sonuc = await replyToConversation(
+    const result = await replyToConversation(
       testDb,
       actor(director),
-      { conversationId: conversation.id, text: "Hâlâ yazabiliyor muyum?" },
+      { conversationId: conversation.id, text: "Can I still write?" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("conversation_not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("conversation_not_found");
   });
 
-  it("konuşma listesi de görünürlükten geçer", async () => {
-    const { peer, director, activity } = await konusmaKur();
+  it("conversation list passes through visibility", async () => {
+    const { peer, director, activity } = await setupConversation();
 
     expect(
       await listActivityConversations(testDb, actor(peer), activity.id),
@@ -679,41 +657,40 @@ describe("konuşma yolları görünürlükten geçer", () => {
   });
 });
 
-// §9.4: soru cevaplanana kadar hem soranın hem sorumlunun listesinde durur.
-describe("açık iş listesi", () => {
-  it("soran ve sorumlu aynı konuşmayı farklı rolde görür", async () => {
+describe("open work items list", () => {
+  it("asker and responsible see same conversation with different roles", async () => {
     const { director, author, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru" },
+      { activityId: activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
-    const soraninListesi = await listOpenWorkItems(testDb, actor(director));
-    const yazaninListesi = await listOpenWorkItems(testDb, actor(author));
+    const askerList = await listOpenWorkItems(testDb, actor(director));
+    const authorList = await listOpenWorkItems(testDb, actor(author));
 
-    expect(soraninListesi).toHaveLength(1);
-    expect(soraninListesi[0].waitingOnMe).toBe(false);
-    expect(yazaninListesi).toHaveLength(1);
-    expect(yazaninListesi[0].waitingOnMe).toBe(true);
+    expect(askerList).toHaveLength(1);
+    expect(askerList[0].waitingOnMe).toBe(false);
+    expect(authorList).toHaveLength(1);
+    expect(authorList[0].waitingOnMe).toBe(true);
   });
 
-  it("cevaptan sonra roller yer değiştirir", async () => {
+  it("roles swap after reply", async () => {
     const { director, author, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru" },
+      { activityId: activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
     await replyToConversation(
       testDb,
       actor(author),
-      { conversationId: acilis.value.id, text: "Cevap" },
+      { conversationId: created.value.id, text: "Reply" },
       new Date(NOW.getTime() + 60_000),
     );
 
@@ -725,40 +702,38 @@ describe("açık iş listesi", () => {
     );
   });
 
-  it("kapanan konuşma listeden düşer", async () => {
+  it("closed conversation drops from work items list", async () => {
     const { director, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru" },
+      { activityId: activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
-    await closeConversation(testDb, actor(director), acilis.value.id, NOW);
+    await closeConversation(testDb, actor(director), created.value.id, NOW);
 
     expect(await listOpenWorkItems(testDb, actor(director))).toEqual([]);
   });
 });
 
-// Denetim (bulgu 5): sorumluluk sorana geçtiğinde faaliyetin yazarı
-// hiçbir alanda görünmüyordu ve açık konuşması varken pasifleştirilebiliyordu.
-describe("açık konuşma pasifleştirmeyi engeller", () => {
-  it("sorumluluk sorana geçse de yazar pasifleştirilemez", async () => {
+describe("open conversation prevents deactivation", () => {
+  it("author cannot be deactivated even after responsibility shifts to asker", async () => {
     const { director, author, activity } = await buildScenario();
-    const acilis = await askQuestion(
+    const created = await askQuestion(
       testDb,
       actor(director),
-      { activityId: activity.id, text: "Soru" },
+      { activityId: activity.id, text: "Question" },
       NOW,
     );
-    if (!acilis.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("setup failed");
 
-    // Yazar cevaplıyor; sorumluluk sorana geçiyor.
+    // Author replies; responsibility shifts to asker.
     await replyToConversation(
       testDb,
       actor(author),
-      { conversationId: acilis.value.id, text: "Cevap" },
+      { conversationId: created.value.id, text: "Reply" },
       new Date(NOW.getTime() + 60_000),
     );
 

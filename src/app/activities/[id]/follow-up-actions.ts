@@ -3,7 +3,12 @@
 import { revalidatePath } from "next/cache";
 
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getTranslations } from "@/server/i18n/server";
 import { prisma } from "@/server/db";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   closeFollowUp,
   openFollowUp,
@@ -19,10 +24,10 @@ import {
 
 import { emptyActivityFormState, type ActivityFormState } from "../form-state";
 
-// Takip maddesi eylemleri (§11). Yetki servis katmanında doğrulanıyor:
-// içeriği göremeyen açamaz, sahibi ve üstü olmayan kapatamaz.
 
-function tazele(activityId: string) {
+
+
+function refresh(activityId: string) {
   revalidatePath(`/activities/${activityId}`);
   revalidatePath("/follow-ups");
   revalidatePath("/");
@@ -33,7 +38,8 @@ export async function openFollowUpAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const parsed = openFollowUpSchema.safeParse({
     activityId: formData.get("activityId"),
@@ -42,10 +48,10 @@ export async function openFollowUpAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz." };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
-  const sonuc = await openFollowUp(
+  const result = await openFollowUp(
     prisma,
     { id: user.id, isSystemAdmin: user.isSystemAdmin },
     {
@@ -57,9 +63,9 @@ export async function openFollowUpAction(
     },
   );
 
-  if (!sonuc.ok) return { error: sonuc.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "followUp", result) };
 
-  tazele(parsed.data.activityId);
+  refresh(parsed.data.activityId);
   return emptyActivityFormState;
 }
 
@@ -68,7 +74,8 @@ export async function closeFollowUpAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const parsed = closeFollowUpSchema.safeParse({
     id: formData.get("id"),
@@ -76,19 +83,19 @@ export async function closeFollowUpAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz." };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
-  const sonuc = await closeFollowUp(
+  const result = await closeFollowUp(
     prisma,
     { id: user.id, isSystemAdmin: user.isSystemAdmin },
     parsed.data.id,
     parsed.data.note,
   );
 
-  if (!sonuc.ok) return { error: sonuc.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "followUp", result) };
 
-  tazele(sonuc.item.activityId);
+  refresh(result.item.activityId);
   return emptyActivityFormState;
 }
 
@@ -97,7 +104,8 @@ export async function reopenFollowUpAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const parsed = reopenFollowUpSchema.safeParse({
     id: formData.get("id"),
@@ -105,19 +113,19 @@ export async function reopenFollowUpAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz." };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
-  const sonuc = await reopenFollowUp(
+  const result = await reopenFollowUp(
     prisma,
     { id: user.id, isSystemAdmin: user.isSystemAdmin },
     parsed.data.id,
     parsed.data.note,
   );
 
-  if (!sonuc.ok) return { error: sonuc.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "followUp", result) };
 
-  tazele(sonuc.item.activityId);
+  refresh(result.item.activityId);
   return emptyActivityFormState;
 }
 
@@ -126,7 +134,8 @@ export async function transferFollowUpAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const parsed = transferFollowUpSchema.safeParse({
     id: formData.get("id"),
@@ -134,18 +143,18 @@ export async function transferFollowUpAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz." };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
-  const sonuc = await transferFollowUp(
+  const result = await transferFollowUp(
     prisma,
     { id: user.id, isSystemAdmin: user.isSystemAdmin },
     parsed.data.id,
     parsed.data.ownerId,
   );
 
-  if (!sonuc.ok) return { error: sonuc.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "followUp", result) };
 
-  tazele(sonuc.item.activityId);
+  refresh(result.item.activityId);
   return emptyActivityFormState;
 }

@@ -11,22 +11,18 @@ import {
   SETTING_KEYS,
 } from "@/server/settings/system-settings";
 
-// "3 iş günüdür cevap yok" hatırlatması (§12.2): sorumluya **ve yöneticisine**
-// gider. Amaç, sorulan sorunun sessizce unutulmaması.
-//
-// Sayaç **sorumluluğun son el değiştirdiği andan** işler (ürün sahibi kararı,
-// 18.08.2026 — açık soru 13). Konuşmanın açılışından ölçmek, canlı bir
-// tartışmanın ortasında da hatırlatma göndermek demekti: soru → cevap → karşı
-// soru zincirinde her mesaj sırayı devrediyor ve bekleyen taraf değişiyor.
-//
-// Bu kural §9.3'teki 10 iş günüyle karıştırılmamalı: o, **soranın üstüne
-// kapatma yetkisi** verir; bu, cevap vermeyene hatırlatma gönderir.
 
-/**
- * Kaç iş günü cevapsız kalınca hatırlatma gider (§12.2). Varsayılan; güncel
- * değer sistem ayarlarından gelir (§16.5) — "bugün üç, yarın bir" kararı
- * ekrandan verilebilmeli.
- */
+
+//
+
+
+
+
+//
+
+
+
+
 export const OVERDUE_ANSWER_BUSINESS_DAYS = 3;
 
 export type OverdueAnswerDb = Pick<
@@ -42,11 +38,11 @@ export type OverdueAnswerDb = Pick<
 >;
 
 export interface OverdueOutcome {
-  /** Kuyruğa yazılan hatırlatma sayısı (sorumlu + yönetici ayrı sayılır). */
+
   queued: number;
-  /** Süresi dolmuş konuşma sayısı. */
+
   overdueConversations: number;
-  /** Yöneticisi bulunamadığı için yalnız sorumluya gidenler. */
+
   managerNotFound: number;
 }
 
@@ -67,9 +63,9 @@ export async function sendOverdueAnswerReminders(
 
   if (open.length === 0) return outcome;
 
-  const [calendarSettings, companyCalendar, esik] = await Promise.all([
+  const [calendarSettings, companyCalendar, threshold] = await Promise.all([
     readWorkCalendar(db),
-    // Aralık en eski konuşmanın açılışından bugüne; tatiller o aralıktan okunur.
+
     loadWorkCalendar(
       db,
       open.reduce((min, c) => (c.openedAt < min ? c.openedAt : min), open[0].openedAt),
@@ -78,56 +74,56 @@ export async function sendOverdueAnswerReminders(
     readNumericSetting(db, SETTING_KEYS.overdueAnswerBusinessDays),
   ]);
 
-  const takvim = {
+  const calendar = {
     workingDays: calendarSettings.workingDays,
     holidays: companyCalendar.holidays,
   };
 
   for (const conversation of open) {
-    // Sorumluluğun son el değiştirdiği an = son mesajın yazıldığı an. Hiç mesaj
-    // yoksa (kuramsal) açılış anı kullanılır.
-    const sonMesaj = await db.conversationMessage.findFirst({
+
+
+    const lastMessage = await db.conversationMessage.findFirst({
       where: { conversationId: conversation.id },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     });
 
-    const bekleyenAndan = sonMesaj?.createdAt ?? conversation.openedAt;
-    const isGunu = businessDaysBetween(bekleyenAndan, now, takvim);
+    const pendingSince = lastMessage?.createdAt ?? conversation.openedAt;
+    const isDay = businessDaysBetween(pendingSince, now, calendar);
 
-    if (isGunu < esik) continue;
+    if (isDay < threshold) continue;
 
     outcome.overdueConversations += 1;
 
-    // Anahtar bekleme anını taşır: cevap gelip sayaç yeniden dolarsa yeni bir
-    // hatırlatma gidebilir, ama aynı bekleyiş için ikinci kez gitmez.
-    const anahtar = `${conversation.id}:${bekleyenAndan.toISOString()}`;
 
-    const yazildi = await enqueueNotification(db, {
+
+    const key = `${conversation.id}:${pendingSince.toISOString()}`;
+
+    const enqueued = await enqueueNotification(db, {
       userId: conversation.responsibleId,
       eventType: NOTIFICATION_EVENTS.answerOverdue,
       payload: { activityId: conversation.activityId, conversationId: conversation.id },
-      idempotencyKey: `answer_overdue:${anahtar}:${conversation.responsibleId}`,
+      idempotencyKey: `answer_overdue:${key}:${conversation.responsibleId}`,
       now,
     });
-    if (yazildi) outcome.queued += 1;
+    if (enqueued) outcome.queued += 1;
 
     const manager = await resolveManager(db, conversation.responsibleId);
 
-    // Yöneticisi bulunamayan durum sessizce geçilmez; sayılır ve çağırana döner.
+    // A missing manager is not silently ignored; count it and return the outcome.
     if (!manager.found) {
       outcome.managerNotFound += 1;
       continue;
     }
 
-    const yoneticiyeYazildi = await enqueueNotification(db, {
+    const managerNotificationEnqueued = await enqueueNotification(db, {
       userId: manager.managerId,
       eventType: NOTIFICATION_EVENTS.answerOverdue,
       payload: { activityId: conversation.activityId, conversationId: conversation.id },
-      idempotencyKey: `answer_overdue:${anahtar}:${manager.managerId}`,
+      idempotencyKey: `answer_overdue:${key}:${manager.managerId}`,
       now,
     });
-    if (yoneticiyeYazildi) outcome.queued += 1;
+    if (managerNotificationEnqueued) outcome.queued += 1;
   }
 
   return outcome;

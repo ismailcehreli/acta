@@ -3,7 +3,7 @@ import type {
   ReportScopeUnit,
 } from "@/server/authz/visibility";
 
-/** Seçilen birim rapor kapsamını kendi alt ağacına daraltır. */
+
 export function narrowReportScope(
   scope: ReportScope,
   selectedUnitId?: string,

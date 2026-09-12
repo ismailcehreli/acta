@@ -7,13 +7,16 @@ import { loadOrgTree, type OrgUnitNode } from "@/server/org/tree";
 import { AppShell } from "@/components/shell/app-shell";
 import { AdminNav } from "@/components/shell/admin-nav";
 import { toShellUser } from "@/components/shell/shell-user";
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { ButtonLink } from "@/components/ui/button";
 import { Page, PageHeader } from "@/components/ui/page";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import { OrgUnitForm, type UnitOption } from "../org-form";
 
-export const metadata = { title: "Yeni birim — Yönetim" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.organization.newUnit");
+}
 
 function toOptions(nodes: OrgUnitNode[], depth = 0): UnitOption[] {
   return nodes.flatMap((node) => [
@@ -26,13 +29,14 @@ function toOptions(nodes: OrgUnitNode[], depth = 0): UnitOption[] {
 
 export default async function NewOrgUnitAdminPage() {
   const user = await getCurrentUser();
+  const t = await getTranslations();
   if (!user) redirect("/login");
 
   if (!canManageOrganization(user)) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Yeni birim eklemek için sistem yöneticisi yetkisi gerekir."
+        message={t("screens.organization.permission")}
       />
     );
   }
@@ -41,16 +45,20 @@ export default async function NewOrgUnitAdminPage() {
 
   return (
     <AppShell user={await toShellUser(user)}>
-      <Page isaret="birim-ekle">
+      <Page marker="new-organization-unit">
         <PageHeader
-          title="Yeni birim"
-          description="Birim adını, kademesini ve varsa üst birimini seçin. Birimin yeri daha sonra organizasyon ağacından değiştirilebilir."
+          title={t("screens.organization.newUnit")}
+          description={t("screens.organization.newUnitDescription")}
           breadcrumbs={[
-            { label: "Yönetim" },
-            { label: "Organizasyon", href: "/admin/org" },
-            { label: "Yeni birim" },
+            { label: t("screens.organization.administration") },
+            { label: t("screens.organization.pageTitle"), href: "/admin/org" },
+            { label: t("screens.organization.newUnit") },
           ]}
-          action={<ButtonLink href="/admin/org">Ağaca dön</ButtonLink>}
+          action={
+            <ButtonLink href="/admin/org">
+              {t("common.back")}
+            </ButtonLink>
+          }
         />
 
         <AdminNav isRoot={user.isRoot} />

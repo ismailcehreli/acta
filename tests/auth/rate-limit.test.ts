@@ -13,19 +13,19 @@ import {
   trackedKeyCount,
 } from "@/server/auth/rate-limit";
 
-// Sayılan şey **başarısız denemelerdir**, istek sayısı değil: şirket tek bir
-// dış adresin arkasındadır (§15.5) ve her isteği saymak, aynı anda giriş yapan
-// meslektaşların birbirini kilitlemesi demekti.
+// What is counted is **failed attempts**, not request count: the company is behind a single
+// external IP address (§15.5) and counting every request would mean colleagues logging in
+// at the same time locking each other out.
 
 const START = 1_000_000;
-const KEY = "hesap:mudur@ornek.test";
+const KEY = "account:manager@example.test";
 
 beforeEach(() => {
   resetRateLimits();
 });
 
-describe("başarısız deneme sayacı", () => {
-  it("hiç deneme yokken engel yoktur", () => {
+describe("failed attempt counter", () => {
+  it("no block when there are no attempts", () => {
     expect(peekFailures(KEY, START)).toEqual({
       blocked: false,
       count: 0,
@@ -33,7 +33,7 @@ describe("başarısız deneme sayacı", () => {
     });
   });
 
-  it("okuma sayacı artırmaz", () => {
+  it("reading does not increment counter", () => {
     recordFailure(KEY, START);
 
     peekFailures(KEY, START);
@@ -42,7 +42,7 @@ describe("başarısız deneme sayacı", () => {
     expect(peekFailures(KEY, START).count).toBe(1);
   });
 
-  it("sınıra kadar izin verir, sınırda engeller", () => {
+  it("allows up to limit, blocks at limit", () => {
     for (let i = 0; i < RATE_LIMIT_MAX_REQUESTS - 1; i += 1) {
       recordFailure(KEY, START);
     }
@@ -53,7 +53,7 @@ describe("başarısız deneme sayacı", () => {
     expect(peekFailures(KEY, START).retryAfterMs).toBe(RATE_LIMIT_WINDOW_MS);
   });
 
-  it("pencere dolunca sayaç sıfırlanır", () => {
+  it("counter resets when window expires", () => {
     for (let i = 0; i < RATE_LIMIT_MAX_REQUESTS; i += 1) {
       recordFailure(KEY, START);
     }
@@ -62,7 +62,7 @@ describe("başarısız deneme sayacı", () => {
     expect(peekFailures(KEY, afterWindow).blocked).toBe(false);
   });
 
-  it("başarılı giriş sayacı temizler", () => {
+  it("successful login clears counter", () => {
     for (let i = 0; i < RATE_LIMIT_MAX_REQUESTS; i += 1) {
       recordFailure(KEY, START);
     }
@@ -73,36 +73,36 @@ describe("başarısız deneme sayacı", () => {
     expect(peekFailures(KEY, START).blocked).toBe(false);
   });
 
-  it("bir anahtarın sayacı diğerini etkilemez", () => {
+  it("counter of one key does not affect another", () => {
     for (let i = 0; i < RATE_LIMIT_MAX_REQUESTS; i += 1) {
       recordFailure(KEY, START);
     }
 
-    expect(peekFailures("hesap:baska@ornek.test", START).blocked).toBe(false);
+    expect(peekFailures("account:other@example.test", START).blocked).toBe(false);
   });
 });
 
-describe("bellek yönetimi", () => {
-  it("süresi dolmuş kayıtlar yeni pencere açılırken temizlenir", () => {
+describe("memory management", () => {
+  it("expired records are cleaned up when opening new window", () => {
     for (let i = 0; i < 50; i += 1) {
-      recordFailure(`istemci-${i}`, START);
+      recordFailure(`client-${i}`, START);
     }
     expect(trackedKeyCount()).toBe(50);
 
-    recordFailure("yeni-istemci", START + RATE_LIMIT_WINDOW_MS + 1);
+    recordFailure("new-client", START + RATE_LIMIT_WINDOW_MS + 1);
 
     expect(trackedKeyCount()).toBe(1);
   });
 
-  it("anahtar sayısı üst sınırı aşamaz", () => {
+  it("key count cannot exceed upper bound", () => {
     for (let i = 0; i < 10_200; i += 1) {
-      recordFailure(`istemci-${i}`, START);
+      recordFailure(`client-${i}`, START);
     }
 
     expect(trackedKeyCount()).toBeLessThanOrEqual(10_000);
   });
 
-  it("süresi dolmuş kayıtlar elle de temizlenebilir", () => {
+  it("expired records can also be pruned manually", () => {
     recordFailure(KEY, START);
     pruneRateLimits(START + RATE_LIMIT_WINDOW_MS + 1);
 

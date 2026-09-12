@@ -9,6 +9,11 @@ import {
 } from "@/server/approval-reasons/service";
 import { requireSystemAdmin } from "@/server/authz/admin";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   createApprovalReasonSchema,
   setApprovalReasonActiveSchema,
@@ -17,13 +22,14 @@ import {
 
 import type { ReasonFormState } from "./form-state";
 
-// Gerekçe kataloğu yönetimi (§15.1: yalnız sistem yöneticisi).
+
 
 export async function createReasonAction(
   _previous: ReasonFormState,
   formData: FormData,
 ): Promise<ReasonFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = createApprovalReasonSchema.safeParse({
     kind: formData.get("kind"),
@@ -32,14 +38,25 @@ export async function createReasonAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz.", success: null };
+    return {
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
+      success: null,
+    };
   }
 
-  const sonuc = await createReason(prisma, parsed.data, me.id);
-  if (!sonuc.ok) return { error: sonuc.message, success: null };
+  const result = await createReason(prisma, parsed.data, me.id);
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "approvalReason", result),
+      success: null,
+    };
+  }
 
   revalidatePath("/admin/approval-reasons");
-  return { error: null, success: `"${sonuc.reason.label}" eklendi.` };
+  return {
+    error: null,
+    success: t("screens.approvalReasons.added", { reason: result.reason.label }),
+  };
 }
 
 export async function updateReasonAction(
@@ -47,6 +64,7 @@ export async function updateReasonAction(
   formData: FormData,
 ): Promise<ReasonFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = updateApprovalReasonSchema.safeParse({
     id: formData.get("id"),
@@ -55,14 +73,25 @@ export async function updateReasonAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz.", success: null };
+    return {
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
+      success: null,
+    };
   }
 
-  const sonuc = await updateReason(prisma, parsed.data, me.id);
-  if (!sonuc.ok) return { error: sonuc.message, success: null };
+  const result = await updateReason(prisma, parsed.data, me.id);
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "approvalReason", result),
+      success: null,
+    };
+  }
 
   revalidatePath("/admin/approval-reasons");
-  return { error: null, success: `"${sonuc.reason.label}" güncellendi.` };
+  return {
+    error: null,
+    success: t("screens.approvalReasons.updated", { reason: result.reason.label }),
+  };
 }
 
 export async function setReasonActiveAction(
@@ -70,27 +99,42 @@ export async function setReasonActiveAction(
   formData: FormData,
 ): Promise<ReasonFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = setApprovalReasonActiveSchema.safeParse({
     id: formData.get("id"),
     isActive: formData.get("isActive") === "true",
   });
 
-  if (!parsed.success) return { error: "Girdi geçersiz.", success: null };
+  if (!parsed.success) {
+    return {
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
+      success: null,
+    };
+  }
 
-  const sonuc = await setReasonActive(
+  const result = await setReasonActive(
     prisma,
     parsed.data.id,
     parsed.data.isActive,
     me.id,
   );
-  if (!sonuc.ok) return { error: sonuc.message, success: null };
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "approvalReason", result),
+      success: null,
+    };
+  }
 
   revalidatePath("/admin/approval-reasons");
   return {
     error: null,
     success: parsed.data.isActive
-      ? `"${sonuc.reason.label}" yeniden kullanıma açıldı.`
-      : `"${sonuc.reason.label}" pasifleştirildi.`,
+      ? t("screens.approvalReasons.reactivated", {
+          reason: result.reason.label,
+        })
+      : t("screens.approvalReasons.deactivated", {
+          reason: result.reason.label,
+        }),
   };
 }

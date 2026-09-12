@@ -2,6 +2,7 @@
 
 import { useActionState, useRef, useState } from "react";
 
+import { useLocale, useTranslations } from "@/components/i18n/provider";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
@@ -9,35 +10,35 @@ import { Avatar } from "@/components/ui/avatar";
 import { removeAvatarAction, uploadAvatarAction } from "./avatar-actions";
 import { emptyAvatarState } from "./form-state";
 
-// Profil resmi yükleme (Görev 11.5).
-//
-// **Küçültme tarayıcıda yapılıyor.** Sunucuda küçültmek yeni bir yerel
-// bağımlılık (sharp) gerektirirdi ve bu ayrı bir karardır. Telefondan gelen
-// 4 MB'lık bir fotoğraf burada 256×256 WebP'ye iniyor — tipik 20–40 KB.
-//
-// Bu bir **kolaylık**, güvenlik değil: sunucu türü içerik imzasından
-// doğruluyor ve 512 KB sınırını kendisi uyguluyor. Küçültmeyi atlatan bir
-// istek sınıra takılır.
 
-const HEDEF = 256;
+//
 
-/** Resmi kareye kırpıp `HEDEF` boyuta indirir; başarısızsa özgün dosyayı verir. */
-async function kucult(file: File): Promise<File> {
+
+
+//
+
+
+
+
+const AVATAR_SIZE = 256;
+
+
+async function resizeAvatar(file: File): Promise<File> {
   try {
     const bitmap = await createImageBitmap(file);
-    // Kısa kenardan kare kırpma: yüz genelde ortadadır, kenarlardan kırpmak
-    // baştaki ya da sondaki bilgiyi atar.
-    const kenar = Math.min(bitmap.width, bitmap.height);
-    const sx = (bitmap.width - kenar) / 2;
-    const sy = (bitmap.height - kenar) / 2;
+
+
+    const side = Math.min(bitmap.width, bitmap.height);
+    const sx = (bitmap.width - side) / 2;
+    const sy = (bitmap.height - side) / 2;
 
     const canvas = document.createElement("canvas");
-    canvas.width = HEDEF;
-    canvas.height = HEDEF;
+    canvas.width = AVATAR_SIZE;
+    canvas.height = AVATAR_SIZE;
     const ctx = canvas.getContext("2d");
     if (!ctx) return file;
 
-    ctx.drawImage(bitmap, sx, sy, kenar, kenar, 0, 0, HEDEF, HEDEF);
+    ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
     bitmap.close();
 
     const blob = await new Promise<Blob | null>((resolve) =>
@@ -47,8 +48,8 @@ async function kucult(file: File): Promise<File> {
 
     return new File([blob], "avatar.webp", { type: "image/webp" });
   } catch {
-    // Tarayıcı desteklemiyorsa ya da dosya bozuksa özgün hâli gönderilir;
-    // kararı sunucu verir.
+
+
     return file;
   }
 }
@@ -58,56 +59,56 @@ export function AvatarForm({
   canEdit,
 }: {
   user: { id: string; fullName: string; avatarExtension: string | null };
-  /** Kişinin kendisi ya da sistem yöneticisi. */
+
   canEdit: boolean;
 }) {
-  const [yukleme, yukle, yukleniyor] = useActionState(
+  const locale = useLocale();
+  const t = useTranslations();
+  const [uploadState, upload, uploading] = useActionState(
     uploadAvatarAction,
     emptyAvatarState,
   );
-  const [kaldirma, kaldir, kaldiriliyor] = useActionState(
+  const [removal, remove, removing] = useActionState(
     removeAvatarAction,
     emptyAvatarState,
   );
-  const [onizleme, setOnizleme] = useState<string | null>(null);
-  const dosyaRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  // İki ayrı eylem durumu var ve ikisi de kendi sonucunu tutuyor. "Hangisi
-  // önce yazılırsa o kazanır" diye birleştirmek yanlıştı: yükledikten sonra
-  // resmi kaldıran kullanıcı hâlâ "profil resmi güncellendi" yazısını
-  // okuyordu. Damgası büyük olan, yani **son yapılan işlem** geçerli.
-  const sonIslem =
-    (kaldirma.stamp ?? 0) > (yukleme.stamp ?? 0) ? kaldirma : yukleme;
 
-  // Ekranda gösterilecek uzantı **son işlemin sonucundan** geliyor; sunucudan
-  // gelen prop yalnız ilk hâli veriyor.
+
+
+
+  const lastOperation =
+    (removal.stamp ?? 0) > (uploadState.stamp ?? 0) ? removal : uploadState;
+
+
+
   //
-  // Sebep: `revalidatePath` "stale-while-revalidate" çalışıyor (Next belgesi,
-  // 09-revalidating). Kullanıcı kendi yazdığını hemen görmüyordu — "profil
-  // resmi güncellendi" yazısını okuyup eski resme bakıyordu.
-  const uzanti =
-    sonIslem.extension !== undefined ? sonIslem.extension : user.avatarExtension;
 
-  const damga = sonIslem.stamp;
-  const gosterilen = { ...user, avatarExtension: uzanti };
 
-  const durum = yukleme.error ?? kaldirma.error ?? null;
-  const basari = sonIslem.success;
+
+  const extension =
+    lastOperation.extension !== undefined ? lastOperation.extension : user.avatarExtension;
+
+  const stamp = lastOperation.stamp;
+  const displayed = { ...user, avatarExtension: extension };
+
+  const status = uploadState.error ?? removal.error ?? null;
+  const success = lastOperation.success;
 
   if (!canEdit) {
-    return <Avatar user={user} size={96} />;
+    return <Avatar user={user} size={96} locale={locale} />;
   }
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-4">
-        {/* İşlem bitince önizleme bırakılır: artık sunucudaki **gerçek**
-            resim gösterilmeli. Önizleme kalsaydı kullanıcı yüklediğinin
-            değil, seçtiğinin görüntüsüne bakardı. */}
-        {onizleme && !damga ? (
+
+        {preview && !stamp ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={onizleme}
+            src={preview}
             alt=""
             aria-hidden
             width={96}
@@ -116,62 +117,62 @@ export function AvatarForm({
           />
         ) : (
           <Avatar
-            user={gosterilen}
+            user={displayed}
             size={96}
-            cacheKey={damga ? String(damga) : undefined}
+            locale={locale}
+            cacheKey={stamp ? String(stamp) : undefined}
           />
         )}
 
         <div className="flex flex-col gap-2">
           <form
             action={async (formData) => {
-              const secilen = dosyaRef.current?.files?.[0];
-              if (secilen) formData.set("avatar", await kucult(secilen));
-              yukle(formData);
+              const selected = fileRef.current?.files?.[0];
+              if (selected) formData.set("avatar", await resizeAvatar(selected));
+              upload(formData);
             }}
             className="flex flex-wrap items-center gap-2"
           >
             <input type="hidden" name="userId" value={user.id} />
             <input
-              ref={dosyaRef}
+              ref={fileRef}
               type="file"
               name="avatar"
               accept="image/png,image/jpeg,image/webp"
-              aria-label="Profil resmi dosyası"
+              aria-label={t("screens.profile.pictureFile")}
               className="text-[length:var(--text-sm)] text-muted file:me-3 file:rounded-(--radius-sm) file:border file:border-line-strong file:bg-surface file:px-3 file:py-1.5 file:text-[length:var(--text-sm)] file:text-ink"
               onChange={(event) => {
-                const secilen = event.target.files?.[0];
-                setOnizleme(secilen ? URL.createObjectURL(secilen) : null);
+                const selected = event.target.files?.[0];
+                setPreview(selected ? URL.createObjectURL(selected) : null);
               }}
             />
-            <Button type="submit" size="sm" disabled={yukleniyor}>
-              {yukleniyor ? "Yükleniyor…" : "Yükle"}
+            <Button type="submit" size="sm" disabled={uploading}>
+              {uploading ? t("screens.profile.uploading") : t("screens.profile.uploadPicture")}
             </Button>
           </form>
 
-          {uzanti ? (
-            <form action={kaldir}>
+          {extension ? (
+            <form action={remove}>
               <input type="hidden" name="userId" value={user.id} />
               <Button
                 type="submit"
                 variant="ghost"
                 size="sm"
-                disabled={kaldiriliyor}
+                disabled={removing}
               >
-                {kaldiriliyor ? "Kaldırılıyor…" : "Resmi kaldır"}
+                {removing ? t("screens.profile.removing") : t("screens.profile.removePicture")}
               </Button>
             </form>
           ) : null}
 
           <p className="text-[length:var(--text-2xs)] text-faint">
-            PNG, JPEG ya da WebP · en fazla 512 KB. Resim tarayıcınızda
-            256×256 boyutuna küçültülerek gönderilir.
+            {t("screens.profile.pictureHint")}
           </p>
         </div>
       </div>
 
-      {durum ? <Alert tone="danger">{durum}</Alert> : null}
-      {basari ? <Alert tone="success">{basari}</Alert> : null}
+      {status ? <Alert tone="danger">{status}</Alert> : null}
+      {success ? <Alert tone="success">{success}</Alert> : null}
     </div>
   );
 }

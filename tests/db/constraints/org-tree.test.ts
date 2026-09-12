@@ -3,9 +3,9 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createOrgUnit, createUser } from "../../helpers/fixtures";
 import { resetDatabase, testDb } from "../../helpers/test-db";
 
-// §4.2: bu kurallar hem uygulamada hem veritabanında zorunludur. Aşağıdaki
-// testler veritabanı katmanını doğrular — uygulama kodu devre dışı bırakılsa
-// bile ağaç bozulamaz.
+// §4.2: These rules are enforced in both the application and the database.
+// The tests below verify the database layer - even if application code is bypassed,
+// the tree cannot be corrupted.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -15,7 +15,7 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-/** Verilen derinlikte zincir kurar ve en alttaki birimi döndürür. */
+/** Builds a chain at the specified depth and returns the bottom-most unit. */
 async function createChain(depth: number): Promise<string> {
   let parentId: string | null = null;
 
@@ -29,14 +29,14 @@ async function createChain(depth: number): Promise<string> {
   return parentId as string;
 }
 
-describe("tek kök kısıtı", () => {
-  it("ikinci bir kök birim eklenemez", async () => {
+describe("single root constraint", () => {
+  it("cannot add a second root unit", async () => {
     await createOrgUnit();
 
     await expect(createOrgUnit()).rejects.toThrow(/Unique constraint/i);
   });
 
-  it("var olan birim köke çıkarılarak ikinci kök yapılamaz", async () => {
+  it("existing unit cannot be made a second root by promoting to root", async () => {
     const root = await createOrgUnit();
     const child = await createOrgUnit({ parentId: root.id });
 
@@ -49,23 +49,22 @@ describe("tek kök kısıtı", () => {
   });
 });
 
-// Kısıtların değeri, uygulama katmanı devrede olmadığında da geçerli
-// olmalarındadır: elle çalıştırılan SQL, toplu aktarım veya ileride yazılacak
-// bir betik de aynı duvara çarpar.
-describe("kısıtlar ham SQL ile de atlanamaz", () => {
-  it("doğrudan INSERT ile ikinci kök eklenemez", async () => {
+// The value of constraints lies in their validity even when the application layer is bypassed:
+// raw SQL, bulk imports, or future scripts hit the same wall.
+describe("constraints cannot be bypassed with raw SQL", () => {
+  it("cannot add second root via direct INSERT", async () => {
     await createOrgUnit();
 
     await expect(
       testDb.$executeRawUnsafe(`
         INSERT INTO "OrgUnit" ("id", "name", "type", "updatedAt")
-        VALUES ('ikinci-kok', 'İkinci Kök', 'Departman', NOW())
+        VALUES ('second-root', 'Second Root', 'Department', NOW())
       `),
-      // 23505 = unique_violation; kısmi tekil indeks ikinci kökü reddediyor.
+      // 23505 = unique_violation; partial unique index rejects second root.
     ).rejects.toThrow(/23505/);
   });
 
-  it("doğrudan UPDATE ile döngü kurulamaz", async () => {
+  it("cannot create cycle via direct UPDATE", async () => {
     const root = await createOrgUnit();
     const child = await createOrgUnit({ parentId: root.id });
 
@@ -77,8 +76,8 @@ describe("kısıtlar ham SQL ile de atlanamaz", () => {
   });
 });
 
-describe("döngü kısıtı", () => {
-  it("birim kendi üstü yapılamaz", async () => {
+describe("cycle constraint", () => {
+  it("unit cannot be set as its own parent", async () => {
     const root = await createOrgUnit();
 
     await expect(
@@ -89,7 +88,7 @@ describe("döngü kısıtı", () => {
     ).rejects.toThrow(/ORG_TREE_CYCLE/);
   });
 
-  it("üst birim, kendi altındaki bir birimin altına taşınamaz", async () => {
+  it("parent unit cannot be moved under its own descendant", async () => {
     const root = await createOrgUnit();
     const middle = await createOrgUnit({ parentId: root.id });
     const leaf = await createOrgUnit({ parentId: middle.id });
@@ -103,8 +102,8 @@ describe("döngü kısıtı", () => {
   });
 });
 
-describe("azami derinlik kısıtı", () => {
-  it("10 kademe kurulabilir", async () => {
+describe("maximum depth constraint", () => {
+  it("can create 10 levels", async () => {
     const deepest = await createChain(10);
 
     const stored = await testDb.orgUnit.findUniqueOrThrow({
@@ -113,7 +112,7 @@ describe("azami derinlik kısıtı", () => {
     expect(stored.parentId).not.toBeNull();
   });
 
-  it("11. kademe eklenemez", async () => {
+  it("cannot add 11th level", async () => {
     const deepest = await createChain(10);
 
     await expect(createOrgUnit({ parentId: deepest })).rejects.toThrow(
@@ -121,8 +120,8 @@ describe("azami derinlik kısıtı", () => {
     );
   });
 
-  it("taşıma, alt dalı 10 kademenin ötesine itemez", async () => {
-    // 8 kademelik ana zincir; kökün altında ayrıca 3 kademelik küçük bir dal.
+  it("move operation cannot push subtree beyond 10 levels", async () => {
+    // 8-level main chain; plus a 3-level branch under root.
     const deepMain = await createChain(8);
     const root = await testDb.orgUnit.findFirstOrThrow({
       where: { parentId: null },
@@ -131,7 +130,7 @@ describe("azami derinlik kısıtı", () => {
     const branchMid = await createOrgUnit({ parentId: branchTop.id });
     await createOrgUnit({ parentId: branchMid.id });
 
-    // 3 kademelik dalı 8. kademenin altına taşımak toplamı 11'e çıkarır.
+    // Moving 3-level branch under 8th level pushes total to 11.
     await expect(
       testDb.orgUnit.update({
         where: { id: branchTop.id },
@@ -141,11 +140,11 @@ describe("azami derinlik kısıtı", () => {
   });
 });
 
-describe("birim yöneticisi kısıtı", () => {
-  // 20.08.2026 kararı: bir birimde birden fazla müdür olabilir. Kısıt
-  // kaldırıldı; yerine yalnızca arama indeksi kaldı. Kural artık şu: kayıt
-  // her iki müdürün de onay kuyruğuna düşer, ilk karar veren kapatır.
-  it("bir birimde ikinci yönetici işaretlenebilir", async () => {
+describe("unit manager constraint", () => {
+  // 2026-08-20 decision: multiple managers can exist in a unit.
+  // Constraint removed; only search index remains. The rule: activity lands in
+  // approval queues of both managers, first one to decide settles it.
+  it("can mark a second manager in the same unit", async () => {
     const unit = await createOrgUnit();
     await createUser(unit.id, { isUnitManager: true });
 
@@ -160,7 +159,7 @@ describe("birim yöneticisi kısıtı", () => {
     ).toBe(2);
   });
 
-  it("farklı birimlerin kendi yöneticisi olabilir", async () => {
+  it("different units can have their own managers", async () => {
     const root = await createOrgUnit();
     const child = await createOrgUnit({ parentId: root.id });
 
@@ -171,8 +170,8 @@ describe("birim yöneticisi kısıtı", () => {
   });
 });
 
-describe("aktif kullanıcı – pasif birim kısıtı", () => {
-  it("aktif kullanıcı pasif birime eklenemez", async () => {
+describe("active user - inactive org unit constraint", () => {
+  it("cannot add active user to inactive org unit", async () => {
     const root = await createOrgUnit();
     const passive = await createOrgUnit({ parentId: root.id, isActive: false });
 
@@ -181,7 +180,7 @@ describe("aktif kullanıcı – pasif birim kısıtı", () => {
     );
   });
 
-  it("kullanıcı pasif birime taşınamaz", async () => {
+  it("cannot move user to inactive org unit", async () => {
     const root = await createOrgUnit();
     const passive = await createOrgUnit({ parentId: root.id, isActive: false });
     const user = await createUser(root.id);
@@ -194,7 +193,7 @@ describe("aktif kullanıcı – pasif birim kısıtı", () => {
     ).rejects.toThrow(/USER_INACTIVE_ORG_UNIT/);
   });
 
-  it("aktif kullanıcısı olan birim pasifleştirilemez", async () => {
+  it("cannot deactivate org unit that has active users", async () => {
     const unit = await createOrgUnit();
     await createUser(unit.id);
 
@@ -206,7 +205,7 @@ describe("aktif kullanıcı – pasif birim kısıtı", () => {
     ).rejects.toThrow(/ORG_UNIT_HAS_ACTIVE_USERS/);
   });
 
-  it("kullanıcıları pasifleştirilmiş birim pasifleştirilebilir", async () => {
+  it("can deactivate org unit once its users are deactivated", async () => {
     const root = await createOrgUnit();
     const unit = await createOrgUnit({ parentId: root.id });
     const user = await createUser(unit.id);

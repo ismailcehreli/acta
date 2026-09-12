@@ -18,16 +18,19 @@ import { Pagination } from "@/components/ui/pagination";
 import { buildQueryAddress } from "@/shared/filters/query-address";
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { AdminNav } from "@/components/shell/admin-nav";
 import { Page, PageHeader } from "@/components/ui/page";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import type { UnitChoice } from "./user-form";
 import { UserList } from "./user-list";
 
-export const metadata = { title: "Kullanıcılar" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.users.pageTitle");
+}
 
-/** Aktif birimleri girintili düz listeye açar. */
+
 function toChoices(nodes: OrgUnitNode[], depth = 0): UnitChoice[] {
   return nodes.flatMap((node) => [
     ...(node.isActive
@@ -41,104 +44,105 @@ export default async function UsersAdminPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    birim?: string;
-    durum?: string;
-    rol?: string;
+    unit?: string;
+    status?: string;
+    role?: string;
     q?: string;
-    sayfa?: string;
-    boyut?: string;
+    page?: string;
+    pageSize?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
 
-  // Ekran artık bölüm yöneticisine de açık (Görev 11.7); kapsamı daralıyor.
-  // Yetki kararı ekranın kendisinde durmuyor: her sunucu eylemi hedefi ayrıca
-  // `canManageUser` ile sınıyor. Ekranın gizlenmesi güvenlik değildir.
-  const yonetilebilirBirimler = await manageableUnitIds(prisma, user.id);
-  if (yonetilebilirBirimler.length === 0) {
+  // The screen is also available to unit managers; every server action checks
+  // its target independently. Hiding the screen is not a security boundary.
+  const manageableUnits = await manageableUnitIds(prisma, user.id);
+  if (manageableUnits.length === 0) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Kullanıcı yönetimi sistem yöneticisine ve birim yöneticilerine açıktır."
+        message={t("screens.users.permission")}
       />
     );
   }
 
-  const sistemYoneticisi = canManageOrganization(user);
+  const isSystemAdmin = canManageOrganization(user);
 
   const params = await searchParams;
 
   const filters: UserListFilters = {
-    // Müdürün göreceği liste kendi ağacıyla sınırlı; süzgeç bunu daraltabilir
-    // ama genişletemez.
-    orgUnitIds: sistemYoneticisi ? undefined : yonetilebilirBirimler,
-    orgUnitId: params.birim || undefined,
+    // A unit manager's list is limited to their tree; filters can narrow it but
+    // can never expand it.
+    orgUnitIds: isSystemAdmin ? undefined : manageableUnits,
+    orgUnitId: params.unit || undefined,
     isActive:
-      params.durum === "aktif" ? true : params.durum === "pasif" ? false : undefined,
+      params.status === "active" ? true : params.status === "inactive" ? false : undefined,
     role:
-      params.rol === "mudur"
+      params.role === "unitManager"
         ? "unitManager"
-        : params.rol === "yonetici"
+        : params.role === "systemAdmin"
           ? "systemAdmin"
           : undefined,
     query: params.q || undefined,
   };
 
-  const SAYFA_BOYU = await resolvePageSize(params.boyut);
-  const istenen = Number.parseInt(params.sayfa ?? "1", 10);
-  const sayfa = Number.isFinite(istenen) && istenen > 0 ? istenen : 1;
+  const PAGE_SIZE = await resolvePageSize(params.pageSize);
+  const requested = Number.parseInt(params.page ?? "1", 10);
+  const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-  const [toplam, roots] = await Promise.all([
+  const [total, roots] = await Promise.all([
     countUsers(prisma, filters),
     loadOrgTree(prisma),
   ]);
 
-  const sayfaSayisi = Math.max(1, Math.ceil(toplam / SAYFA_BOYU));
-  const gecerliSayfa = Math.min(sayfa, sayfaSayisi);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
 
   const users = await listUsers(prisma, filters, {
-    limit: SAYFA_BOYU,
-    skip: (gecerliSayfa - 1) * SAYFA_BOYU,
+    limit: PAGE_SIZE,
+    skip: (currentPage - 1) * PAGE_SIZE,
   });
 
-  const tumBirimler = toChoices(roots);
-  // Birim seçici müdürün ağacıyla sınırlı: başka birime kullanıcı açamaz.
-  const units = sistemYoneticisi
-    ? tumBirimler
-    : tumBirimler.filter((birim) => yonetilebilirBirimler.includes(birim.id));
+  const allUnits = toChoices(roots);
+  // The unit selector is limited to a manager's tree so another unit cannot be
+  // selected for user management.
+  const units = isSystemAdmin
+    ? allUnits
+    : allUnits.filter((unit) => manageableUnits.includes(unit.id));
 
-  const adres = (ek: Record<string, string> = {}) =>
+  const address = (attachment: Record<string, string> = {}) =>
     buildQueryAddress(
       "/admin/users",
       {
-        birim: params.birim,
-        durum: params.durum,
-        rol: params.rol,
+        unit: params.unit,
+        status: params.status,
+        role: params.role,
         q: params.q,
-        boyut: String(SAYFA_BOYU),
+        pageSize: String(PAGE_SIZE),
       },
-      ek,
+      attachment,
     );
 
-  const suzgecliMi =
-    Boolean(params.birim) ||
-    Boolean(params.durum) ||
-    Boolean(params.rol) ||
+  const isFiltered =
+    Boolean(params.unit) ||
+    Boolean(params.status) ||
+    Boolean(params.role) ||
     Boolean(params.q);
 
   return (
     <AppShell
       user={await toShellUser(user)}
     >
-      <Page isaret="kullanici-yonetimi">
+      <Page marker="user-management">
         <PageHeader
-          title="Kullanıcılar"
-          description="Hesaplar silinmez, pasifleştirilir: pasif kullanıcı giriş yapamaz ama yazdığı geçmiş kayıtlar yerinde kalır."
-          breadcrumbs={[{ label: "Yönetim" }, { label: "Kullanıcılar" }]}
+          title={t("screens.users.pageTitle")}
+          description={t("screens.users.pageDescription")}
+          breadcrumbs={[{ label: t("screens.users.administration") }, { label: t("screens.users.pageTitle") }]}
           action={
             <ButtonLink href="/admin/users/new" variant="primary">
-              Yeni kullanıcı
+              {t("screens.users.newUser")}
             </ButtonLink>
           }
         />
@@ -148,40 +152,40 @@ export default async function UsersAdminPage({
         <FilterBar
           action="/admin/users"
           clearHref="/admin/users"
-          filtered={suzgecliMi}
-          pageSize={SAYFA_BOYU}
-          extra={<SearchField value={params.q ?? ""} label="Ad ya da e-posta" />}
+          filtered={isFiltered}
+          pageSize={PAGE_SIZE}
+          extra={<SearchField value={params.q ?? ""} label={t("screens.users.nameOrEmail")} />}
           fields={[
             {
-              name: "birim",
-              label: "Birime göre",
-              value: params.birim ?? "",
+              name: "unit",
+              label: t("screens.users.byUnit"),
+              value: params.unit ?? "",
               width: "w-52",
               options: [
-                { value: "", label: "Hepsi" },
+                { value: "", label: t("screens.users.everyone") },
                 ...units.map((u) => ({ value: u.id, label: u.label })),
               ],
             },
             {
-              name: "durum",
-              label: "Hesap durumu",
-              value: params.durum ?? "",
+              name: "status",
+              label: t("screens.users.accountStatus"),
+              value: params.status ?? "",
               width: "w-36",
               options: [
-                { value: "", label: "Hepsi" },
-                { value: "aktif", label: "Aktif" },
-                { value: "pasif", label: "Pasif" },
+                { value: "", label: t("screens.users.everyone") },
+                { value: "active", label: t("screens.users.active") },
+                { value: "inactive", label: t("screens.users.inactive") },
               ],
             },
             {
-              name: "rol",
-              label: "Rol",
-              value: params.rol ?? "",
+              name: "role",
+              label: t("screens.users.role"),
+              value: params.role ?? "",
               width: "w-44",
               options: [
-                { value: "", label: "Hepsi" },
-                { value: "mudur", label: "Birim yöneticisi" },
-                { value: "yonetici", label: "Sistem yöneticisi" },
+                { value: "", label: t("screens.users.everyone") },
+                { value: "unitManager", label: t("screens.users.unitManager") },
+                { value: "systemAdmin", label: t("screens.users.systemAdministrator") },
               ],
             },
           ]}
@@ -189,16 +193,16 @@ export default async function UsersAdminPage({
 
         <UserList
           users={users}
-          returnTo={adres()}
+          returnTo={address()}
         />
 
         <Pagination
-          page={gecerliSayfa}
-          pageCount={sayfaSayisi}
-          hrefFor={(hedef) =>
-            hedef === 1 ? adres() : adres({ sayfa: String(hedef) })
+          page={currentPage}
+          pageCount={pageCount}
+          hrefFor={(pageNumber) =>
+            pageNumber === 1 ? address() : address({ page: String(pageNumber) })
           }
-          totalLabel={`${toplam} kullanıcı`}
+          totalLabel={t("screens.users.totalUsers", { count: total })}
         />
       </Page>
     </AppShell>

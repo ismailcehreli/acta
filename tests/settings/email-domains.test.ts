@@ -13,13 +13,10 @@ import { saveSettings } from "@/server/settings/system-settings";
 import { createOrgUnit } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// E-posta alan adı kısıtı (ürün sahibi kararı, 19.08.2026).
-//
-// Kısıt bir güvenlik duvarı değil, yanlış yazmaya karşı emniyet mandalıdır:
-// hesapları zaten sistem yöneticisi açar. Bu yüzden **varsayılanı kapalıdır**
-// ve mevcut hesapları etkilemez.
+// Email domain restriction: safety check against typos.
+// Default is disabled and does not affect existing accounts.
 
-const PAROLA = "kurulum-parolasi-1234";
+const PASSWORD = "setup-password-1234";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -29,85 +26,81 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function kisitKoy(deger: string) {
-  const sonuc = await saveSettings(testDb, {
-    [SETTING_KEYS.allowedEmailDomains]: deger,
+async function applyDomainRestriction(value: string) {
+  const result = await saveSettings(testDb, {
+    [SETTING_KEYS.allowedEmailDomains]: value,
   });
-  if (!sonuc.ok) throw new Error(`ayar yazılamadı: ${sonuc.message}`);
+  if (!result.ok) throw new Error(`setting failed: ${result.message}`);
 }
 
-describe("liste ayrıştırma", () => {
-  it("virgül, boşluk ve satır sonu ayırıcı sayılır", () => {
-    const sonuc = parseDomainList("acme.com, ornek.test\nbaska.com.tr");
+describe("domain list parsing", () => {
+  it("commas, whitespace, and newlines act as separators", () => {
+    const result = parseDomainList("acme.com, example.test\nother.com.tr");
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.domains).toEqual(["acme.com", "ornek.test", "baska.com.tr"]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.domains).toEqual(["acme.com", "example.test", "other.com.tr"]);
   });
 
-  it("baştaki @ atılır, büyük harf indirgenir, tekrar teke iner", () => {
-    const sonuc = parseDomainList("@Acme.COM, acme.com");
+  it("leading @ is stripped, converted to lowercase, duplicates deduplicated", () => {
+    const result = parseDomainList("@Acme.COM, acme.com");
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.domains).toEqual(["acme.com"]);
-    expect(formatDomainList(sonuc.domains)).toBe("acme.com");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.domains).toEqual(["acme.com"]);
+    expect(formatDomainList(result.domains)).toBe("acme.com");
   });
 
-  it("boş metin kısıt yok demektir", () => {
-    const sonuc = parseDomainList("   ");
+  it("empty text means no restriction", () => {
+    const result = parseDomainList("   ");
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.domains).toEqual([]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.domains).toEqual([]);
   });
 
-  it("geçersiz alan adı reddedilir ve hangisi olduğu söylenir", () => {
-    const sonuc = parseDomainList("acme.com, nokta_yok");
+  it("invalid domain is rejected and identified", () => {
+    const result = parseDomainList("acme.com, no_dot");
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.message).toContain("nokta_yok");
-  });
-});
-
-describe("eşleşme", () => {
-  it("boş liste her adrese izin verir", () => {
-    expect(isEmailDomainAllowed("kimse@baska.com", [])).toBe(true);
-  });
-
-  it("listedeki alan adı kabul edilir, dışındaki edilmez", () => {
-    const liste = ["acme.com"];
-
-    expect(isEmailDomainAllowed("ali@acme.com", liste)).toBe(true);
-    expect(isEmailDomainAllowed("ali@acme.co", liste)).toBe(false);
-  });
-
-  it("alt alan adı eşleşmez", () => {
-    // "posta.acme.com" başka bir alan adıdır; gevşek eşleşme, kısıtın
-    // amacını (yanlış yazımı yakalamak) bulanıklaştırırdı.
-    expect(isEmailDomainAllowed("ali@posta.acme.com", ["acme.com"])).toBe(
-      false,
-    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toContain("no_dot");
   });
 });
 
-describe("ayar defteri", () => {
-  it("kaydederken kanonik biçime indirger", async () => {
-    await kisitKoy(" @Acme.com ;  ornek.test ");
+describe("domain matching", () => {
+  it("empty list allows all email addresses", () => {
+    expect(isEmailDomainAllowed("anyone@other.com", [])).toBe(true);
+  });
 
-    const kayit = await testDb.systemSetting.findUniqueOrThrow({
+  it("listed domain is accepted, unlisted is rejected", () => {
+    const list = ["acme.com"];
+
+    expect(isEmailDomainAllowed("user@acme.com", list)).toBe(true);
+    expect(isEmailDomainAllowed("user@acme.co", list)).toBe(false);
+  });
+
+  it("subdomains do not match parent domain", () => {
+    expect(isEmailDomainAllowed("user@mail.acme.com", ["acme.com"])).toBe(false);
+  });
+});
+
+describe("settings registry", () => {
+  it("reduces to canonical form when saving", async () => {
+    await applyDomainRestriction(" @Acme.com ;  example.test ");
+
+    const setting = await testDb.systemSetting.findUniqueOrThrow({
       where: { key: SETTING_KEYS.allowedEmailDomains },
     });
-    expect(kayit.value).toBe("acme.com, ornek.test");
+    expect(setting.value).toBe("acme.com, example.test");
   });
 
-  it("geçersiz liste hiç yazılmaz", async () => {
-    const sonuc = await saveSettings(testDb, {
-      [SETTING_KEYS.allowedEmailDomains]: "bozuk alan adı!",
+  it("invalid list is never saved", async () => {
+    const result = await saveSettings(testDb, {
+      [SETTING_KEYS.allowedEmailDomains]: "broken domain name!",
     });
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
     expect(
       await testDb.systemSetting.findUnique({
         where: { key: SETTING_KEYS.allowedEmailDomains },
@@ -116,127 +109,124 @@ describe("ayar defteri", () => {
   });
 });
 
-describe("hesap açma", () => {
-  it("kısıt kapalıyken her adrese hesap açılır", async () => {
-    const birim = await createOrgUnit({ name: "Kök", type: "Kök" });
+describe("account creation", () => {
+  it("accounts can be created with any address when restriction is disabled", async () => {
+    const unit = await createOrgUnit({ name: "Root", type: "Root" });
 
-    const sonuc = await createUser(testDb, {
-      fullName: "Serbest Kişi",
-      email: "kisi@herhangi.test",
-      orgUnitId: birim.id,
+    const result = await createUser(testDb, {
+      fullName: "Free User",
+      email: "user@any.test",
+      orgUnitId: unit.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
-      initialPassword: PAROLA,
+      initialPassword: PASSWORD,
     });
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
-  it("kısıt dışındaki adrese hesap açılamaz", async () => {
-    const birim = await createOrgUnit({ name: "Kök", type: "Kök" });
-    await kisitKoy("acme.com");
+  it("cannot create account with unlisted domain", async () => {
+    const unit = await createOrgUnit({ name: "Root", type: "Root" });
+    await applyDomainRestriction("acme.com");
 
-    const sonuc = await createUser(testDb, {
-      fullName: "Yanlış Yazım",
-      email: "ali@acme.co",
-      orgUnitId: birim.id,
+    const result = await createUser(testDb, {
+      fullName: "Typo User",
+      email: "user@acme.co",
+      orgUnitId: unit.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
-      initialPassword: PAROLA,
+      initialPassword: PASSWORD,
     });
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("email_domain_not_allowed");
-    // Hangi alan adlarının kabul edildiği söylenmeli.
-    expect(sonuc.message).toContain("acme.com");
-    // Kayıt gerçekten açılmamış olmalı.
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("email_domain_not_allowed");
+    expect(result.message).toContain("acme.com");
     expect(await testDb.user.count()).toBe(0);
   });
 
-  it("izinli adrese hesap açılır", async () => {
-    const birim = await createOrgUnit({ name: "Kök", type: "Kök" });
-    await kisitKoy("acme.com, ornek.test");
+  it("creates account with allowed domain", async () => {
+    const unit = await createOrgUnit({ name: "Root", type: "Root" });
+    await applyDomainRestriction("acme.com, example.test");
 
-    const sonuc = await createUser(testDb, {
-      fullName: "Doğru Kişi",
-      email: "ali@ornek.test",
-      orgUnitId: birim.id,
+    const result = await createUser(testDb, {
+      fullName: "Valid User",
+      email: "user@example.test",
+      orgUnitId: unit.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
-      initialPassword: PAROLA,
+      initialPassword: PASSWORD,
     });
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 });
 
-describe("adres değiştirme", () => {
-  it("kısıt sonradan konsa da eski adresli kullanıcı düzenlenebilir", async () => {
-    const birim = await createOrgUnit({ name: "Kök", type: "Kök" });
-    const olusturma = await createUser(testDb, {
-      fullName: "Eski Kişi",
-      email: "eski@baska.test",
-      orgUnitId: birim.id,
+describe("address modification", () => {
+  it("existing user can be edited even if address is outside subsequently added restriction", async () => {
+    const unit = await createOrgUnit({ name: "Root", type: "Root" });
+    const creation = await createUser(testDb, {
+      fullName: "Legacy User",
+      email: "legacy@other.test",
+      orgUnitId: unit.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
-      initialPassword: PAROLA,
+      initialPassword: PASSWORD,
     });
-    if (!olusturma.ok) throw new Error("kurulum başarısız");
+    if (!creation.ok) throw new Error("setup failed");
 
-    await kisitKoy("acme.com");
+    await applyDomainRestriction("acme.com");
 
-    // Adres değişmiyor; yalnız ad düzeltiliyor. Kısıt buna takılmamalı —
-    // yoksa kısıt konur konmaz eski kullanıcılar donardı.
-    const sonuc = await updateUser(testDb, {
-      id: olusturma.user.id,
-      fullName: "Eski Kişi Düzeltildi",
-      email: "eski@baska.test",
-      orgUnitId: birim.id,
+    // Email address does not change; only name is updated.
+    const result = await updateUser(testDb, {
+      id: creation.user.id,
+      fullName: "Legacy User Updated",
+      email: "legacy@other.test",
+      orgUnitId: unit.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
     });
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
-  it("adres kısıt dışına değiştirilemez", async () => {
-    const birim = await createOrgUnit({ name: "Kök", type: "Kök" });
-    const olusturma = await createUser(testDb, {
-      fullName: "Kişi",
-      email: "kisi@acme.com",
-      orgUnitId: birim.id,
+  it("email cannot be changed to unlisted domain", async () => {
+    const unit = await createOrgUnit({ name: "Root", type: "Root" });
+    const creation = await createUser(testDb, {
+      fullName: "User",
+      email: "user@acme.com",
+      orgUnitId: unit.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
-      initialPassword: PAROLA,
+      initialPassword: PASSWORD,
     });
-    if (!olusturma.ok) throw new Error("kurulum başarısız");
+    if (!creation.ok) throw new Error("setup failed");
 
-    await kisitKoy("acme.com");
+    await applyDomainRestriction("acme.com");
 
-    const sonuc = await updateUser(testDb, {
-      id: olusturma.user.id,
-      fullName: "Kişi",
-      email: "kisi@disarida.test",
-      orgUnitId: birim.id,
+    const result = await updateUser(testDb, {
+      id: creation.user.id,
+      fullName: "User",
+      email: "user@outside.test",
+      orgUnitId: unit.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
     });
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("email_domain_not_allowed");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("email_domain_not_allowed");
 
-    const guncel = await testDb.user.findUniqueOrThrow({
-      where: { id: olusturma.user.id },
+    const fresh = await testDb.user.findUniqueOrThrow({
+      where: { id: creation.user.id },
     });
-    expect(guncel.email).toBe("kisi@acme.com");
+    expect(fresh.email).toBe("user@acme.com");
   });
 });

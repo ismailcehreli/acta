@@ -11,27 +11,18 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-/** Sürüm 1 kapsamındaki tablolar (§16, plan Görev 0.2a). */
+
+/** Version 1 scope tables (§16, Task 0.2a). */
 const VERSION_1_TABLES = [
   "Activity",
-  // Takdir ve dönemsel skor (Görev 11.10, 11.11).
   "ActivityAppreciation",
-  // Kaydın uygun onaylayıcıları; bir birimde birden fazla müdür olabilir
-  // (ürün sahibi kararı, 20.08.2026).
   "ActivityApprover",
-  // Root'un silme talebi ve onay kodu (ürün sahibi kararı, 03.09.2026).
-  // Kayıt silindikten sonra da durur: silmenin kanıtıdır.
   "ActivityDeletionRequest",
-  // Gönderilmemiş faaliyet taslakları (ürün sahibi isteği, 21.08.2026).
   "ActivityDraft",
-  // Taslağın gönderilene veya açıkça silinene kadar korunan dosya ekleri.
   "ActivityDraftAttachment",
   "ActivityRevision",
   "ActivityTargetDept",
-  // Onay kararı gerekçe kataloğu (19.08.2026 kararı).
   "ApprovalReason",
-  // Onay turunun değişmez kaydı: gönderim anı karar verilirken kaybolmasın
-  // (denetim 23.08.2026, P3-R2-1).
   "ApprovalRound",
   "Attachment",
   "AuditLog",
@@ -39,11 +30,8 @@ const VERSION_1_TABLES = [
   "CancellationRecord",
   "Conversation",
   "ConversationMessage",
-  // Örnek verinin köken kaydı: hangi nesneleri kurulum **gerçekten**
-  // oluşturdu (denetim 23.08.2026, P3-R5-2).
   "DemoObject",
   "Feedback",
-  // Takip maddeleri Sürüm 1'e alındı (ürün sahibi kararı, 19.08.2026).
   "FollowUpItem",
   "FollowUpItemEvent",
   "HelpArticle",
@@ -51,14 +39,10 @@ const VERSION_1_TABLES = [
   "NoActivityPeriod",
   "NotificationQueue",
   "OrgUnit",
-  // Birime özel mesai penceresi (Görev 11.9).
   "OrgUnitWorkCalendar",
-  // Tarayıcı push abonelikleri (Görev 5.3b).
   "PushSubscription",
   "ReadReceipt",
   "ScheduledJobStatus",
-  // Kapanmış skor sürümleri, yeniden hesaplama kuyruğu ve etkili-tarih
-  // görüntüsü (denetim 25.08.2026, P8-R3-1..4).
   "ScoreCompanyCalendarEvent",
   "ScoreHistoryControl",
   "ScoreHolidayEvent",
@@ -74,12 +58,11 @@ const VERSION_1_TABLES = [
   "User",
   "UserCredential",
   "UserScorePeriod",
-  // Kapanmış dönemin katkı gerçekleri (denetim 23.08.2026, P3-R2-4).
   "UserScorePeriodFact",
   "WorkCalendar",
 ];
 
-/** Sürüm 2'ye ait; bu sürümde açılmaz (§18.2, plan çalışma kuralı 7). */
+/** Belongs to Version 2; not provisioned in this release (§18.2). */
 const VERSION_2_TABLES = [
   "ApprovalTask",
   "ApprovalAction",
@@ -98,12 +81,12 @@ async function tableNames(): Promise<string[]> {
   return rows.map((r) => r.tablename);
 }
 
-describe("şema kurulumu", () => {
-  it("Sürüm 1 tablolarının tamamı kurulmuş", async () => {
+describe("schema installation", () => {
+  it("all Version 1 tables are installed", async () => {
     expect(await tableNames()).toEqual(VERSION_1_TABLES);
   });
 
-  it("Sürüm 2 tabloları açılmamış", async () => {
+  it("Version 2 tables are not created", async () => {
     const names = await tableNames();
     for (const table of VERSION_2_TABLES) {
       expect(names).not.toContain(table);
@@ -111,21 +94,15 @@ describe("şema kurulumu", () => {
   });
 });
 
-// Denetim (17.08.2026, bulgu 12): kapsam testi yalnız tablo adına
-// bakıyordu, dolayısıyla Sürüm 1 tablosuna eklenen bir Sürüm 2 kolonunu
-// yakalayamazdı. Aşağıdaki test kolon düzeyinde bakar.
-describe("kapsam disiplini — kolon düzeyi", () => {
+describe("scope discipline — column level", () => {
   /**
-   * Sürüm 2 kavramlarını çağrıştıran kolonlar. Tek bilinçli istisna
-   * `NoActivityPeriod.deputyId`: tasarım §16.5 bu alanı Sürüm 1 tablosunun
-   * içinde tanımlıyor, davranışı Sürüm 2'de bağlanacak (§4.5).
+   * Columns suggesting Version 2 concepts. The single intentional exception is
+   * `NoActivityPeriod.deputyId`: design §16.5 defines this column in Version 1,
+   * behavior will be bound in Version 2 (§4.5).
    */
-  //
-  // `followUp` deseni listeden **çıkarıldı** (19.08.2026): takip maddeleri
-  // ürün sahibi kararıyla Sürüm 1'e alındı ve artık bu kapsamda değil.
   const ALLOWED_VERSION_2_COLUMNS = new Set(["NoActivityPeriod.deputyId"]);
 
-  it("Sürüm 2 kavramına ait beklenmedik kolon yok", async () => {
+  it("no unexpected Version 2 columns exist", async () => {
     const rows = await testDb.$queryRaw<
       { table_name: string; column_name: string }[]
     >`
@@ -149,21 +126,20 @@ describe("kapsam disiplini — kolon düzeyi", () => {
   });
 });
 
-describe("tekillik kısıtları", () => {
-  it("aynı e-posta ikinci kez kaydedilemez", async () => {
+describe("uniqueness constraints", () => {
+  it("cannot register same email twice", async () => {
     const unit = await createOrgUnit();
-    await createUser(unit.id, { email: "ayni@ornek.test" });
+    await createUser(unit.id, { email: "same@example.test" });
 
     await expect(
-      createUser(unit.id, { email: "ayni@ornek.test" }),
+      createUser(unit.id, { email: "same@example.test" }),
     ).rejects.toThrow(/Unique constraint/i);
   });
 
-  it("aynı muhatap departman aynı faaliyete iki kez eklenemez", async () => {
+  it("cannot add same target department to same activity twice", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
     const activity = await createActivity(user);
-    // Ağaçta tek kök bulunabilir (§4.2); muhatap birim köke bağlanır.
     const target = await createOrgUnit({ parentId: unit.id });
 
     await testDb.activityTargetDept.create({
@@ -177,7 +153,7 @@ describe("tekillik kısıtları", () => {
     ).rejects.toThrow(/Unique constraint/i);
   });
 
-  it("aynı faaliyet için aynı revizyon numarası iki kez yazılamaz", async () => {
+  it("cannot record same revision number for same activity twice", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
     const activity = await createActivity(user);
@@ -198,7 +174,7 @@ describe("tekillik kısıtları", () => {
     ).rejects.toThrow(/Unique constraint/i);
   });
 
-  it("okundu kaydı kullanıcı başına tek satırdır", async () => {
+  it("read receipt is single row per user", async () => {
     const unit = await createOrgUnit();
     const author = await createUser(unit.id);
     const reader = await createUser(unit.id);
@@ -216,13 +192,9 @@ describe("tekillik kısıtları", () => {
   });
 });
 
-// §16.6: fiziksel silme yoktur. Bu kural iki katmanla korunur: her satır için
-// çalışan silme engeli (bkz. constraints/no-physical-delete.test.ts) ve
-// yabancı anahtarlardaki RESTRICT. Aşağıdaki testler ikinci katmanın şemada
-// gerçekten kurulu olduğunu doğrular — davranış testi silme engeline takıldığı
-// için tek başına bunu gösteremez.
-describe("yabancı anahtar kuralları", () => {
-  it("silmeyi engelleyen kurallar RESTRICT olarak tanımlı", async () => {
+// §16.6: No physical deletion. Protected by trigger and RESTRICT on foreign keys.
+describe("foreign key rules", () => {
+  it("deletion-preventing rules defined as RESTRICT", async () => {
     const rules = await testDb.$queryRaw<
       { constraint_name: string; delete_rule: string }[]
     >`
@@ -237,7 +209,7 @@ describe("yabancı anahtar kuralları", () => {
     expect(cascading).toEqual([]);
   });
 
-  it("kullanıcı silinmeye çalışılırsa veritabanı reddeder", async () => {
+  it("database rejects physical user deletion", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
     await createActivity(user);
@@ -248,8 +220,8 @@ describe("yabancı anahtar kuralları", () => {
   });
 });
 
-describe("tarih ve saat davranışı", () => {
-  it("faaliyet tarihi gün olarak saklanır, zaman dilimiyle kaymaz", async () => {
+describe("date and time handling", () => {
+  it("stores activity date as date without time zone shift", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
 
@@ -261,11 +233,10 @@ describe("tarih ve saat davranışı", () => {
       where: { id: activity.id },
     });
 
-    // Europe/Istanbul (UTC+3) altında bile gün 17 Ağustos kalmalı.
     expect(stored.activityDate.toISOString()).toBe("2026-08-17T00:00:00.000Z");
   });
 
-  it("oluşturulma zamanı zaman dilimi bilgisiyle saklanır", async () => {
+  it("stores creation time with time zone information", async () => {
     const unit = await createOrgUnit();
 
     const [column] = await testDb.$queryRaw<{ data_type: string }[]>`
@@ -279,15 +250,13 @@ describe("tarih ve saat davranışı", () => {
   });
 });
 
-// Denetim (17.08.2026, bulgu 11): tekil indeks harfe duyarlıydı, oysa
-// uygulama e-postayı küçük harfe çeviriyor — aynı kişi iki kimliğe bölünebilirdi.
-describe("e-posta tekilliği", () => {
-  it("aynı adres büyük harfle ikinci kez kaydedilemez", async () => {
+describe("case-insensitive email uniqueness", () => {
+  it("cannot register same email with uppercase letters", async () => {
     const unit = await createOrgUnit();
-    await createUser(unit.id, { email: "mudur@ornek.test" });
+    await createUser(unit.id, { email: "manager@example.test" });
 
     await expect(
-      createUser(unit.id, { email: "Mudur@Ornek.Test" }),
+      createUser(unit.id, { email: "Manager@Example.Test" }),
     ).rejects.toThrow(/Unique constraint|23505/i);
   });
 });

@@ -12,8 +12,8 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// "Faaliyet beklenmiyor" işareti (§12.1). Kim işaretler: kişinin yöneticisi.
-// Yetki ağaçtan gelir; kapsam dışı birine işaret konamaz (§18.4).
+// Absence / "No Activity Expected" period service tests.
+// Authorization stems from organizational hierarchy: only direct managers (or delegates) can mark absences.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
@@ -25,368 +25,358 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const gm = await createOrgUnit({ name: "Genel Müdürlük", parentId: root.id });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: gm.id });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: gm.id });
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
+  const executive = await createOrgUnit({ name: "Executive Management", parentId: root.id });
+  const tooling = await createOrgUnit({ name: "Tooling", parentId: executive.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: executive.id });
 
-  const genelMudur = await createUser(gm.id, {
-    fullName: "Genel Müdür",
+  const ceo = await createUser(executive.id, {
+    fullName: "Chief Executive",
     isUnitManager: true,
   });
-  const kalipMudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const toolingManager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const kalipCalisan = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Çalışanı",
+  const toolingEmployee = await createUser(tooling.id, {
+    fullName: "Tooling Employee",
   });
-  const planlamaMudur = await createUser(planlama.id, {
-    fullName: "Planlama Müdürü",
+  const planningManager = await createUser(planning.id, {
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
-  // Akran yöneticinin de bir astı olmalı: aksi hâlde "kaldıramaz" iddiası,
-  // ekibi boş olduğu için de geçerdi ve yetki kontrolünü sınamazdı.
-  const planlamaCalisan = await createUser(planlama.id, {
-    fullName: "Planlama Çalışanı",
+  const planningEmployee = await createUser(planning.id, {
+    fullName: "Planning Employee",
   });
 
-  return { genelMudur, kalipMudur, kalipCalisan, planlamaMudur, planlamaCalisan };
+  return { ceo, toolingManager, toolingEmployee, planningManager, planningEmployee };
 }
 
-describe("işaret koyma yetkisi", () => {
-  it("yönetici kendi astı için işaret koyar", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
+describe("absence marking authorization", () => {
+  it("manager can mark absence for direct subordinate", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     expect(await testDb.noActivityPeriod.count()).toBe(1);
   });
 
-  it("akranın astına işaret konamaz", async () => {
-    const { planlamaMudur, kalipCalisan } = await sirket();
+  it("peer manager cannot mark absence for another department's employee", async () => {
+    const { planningManager, toolingEmployee } = await setupCompany();
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      planlamaMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      planningManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("not_subordinate");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("not_subordinate");
     expect(await testDb.noActivityPeriod.count()).toBe(0);
   });
 
-  it("astı olmayan kimse için işaret koyamaz", async () => {
-    const { kalipCalisan, kalipMudur } = await sirket();
+  it("user with no subordinates cannot mark absence", async () => {
+    const { toolingEmployee, toolingManager } = await setupCompany();
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      kalipCalisan.id,
-      { userId: kalipMudur.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingEmployee.id,
+      { userId: toolingManager.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("not_subordinate");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("not_subordinate");
   });
 
-  it("üst kademe alt departmandaki çalışan için koyamaz", async () => {
-    const { genelMudur, kalipCalisan } = await sirket();
+  it("upper tier cannot mark absence for sub-department employee directly", async () => {
+    const { ceo, toolingEmployee } = await setupCompany();
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      genelMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      ceo.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("not_subordinate");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("not_subordinate");
   });
 
-  it("çalışan için vekil gösterilemez", async () => {
-    const { kalipMudur, kalipCalisan, planlamaMudur } = await sirket();
+  it("deputy cannot be assigned for regular non-manager employee", async () => {
+    const { toolingManager, toolingEmployee, planningManager } = await setupCompany();
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
+      toolingManager.id,
       {
-        userId: kalipCalisan.id,
+        userId: toolingEmployee.id,
         startDate: "2026-08-18",
         endDate: "2026-08-22",
-        deputyId: planlamaMudur.id,
+        deputyId: planningManager.id,
       },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("absent_not_manager");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("absent_not_manager");
   });
 });
 
-describe("tarih aralığı", () => {
-  it("bitiş başlangıçtan önce olamaz", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
+describe("date range validation", () => {
+  it("rejects end date earlier than start date", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-22", endDate: "2026-08-18" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-22", endDate: "2026-08-18" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("invalid_range");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_range");
   });
 
-  it("çakışan aralık reddedilir", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
+  it("rejects overlapping absence range", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
     await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-20", endDate: "2026-08-25" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-20", endDate: "2026-08-25" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("overlaps");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("overlaps");
     expect(await testDb.noActivityPeriod.count()).toBe(1);
   });
 
-  it("bitişik ama çakışmayan aralıklar kabul edilir", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
+  it("accepts adjacent non-overlapping ranges", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
     await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    const sonuc = await markNoActivityPeriod(
+    const result = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-23", endDate: "2026-08-25" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-23", endDate: "2026-08-25" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 });
 
-describe("listeleme ve iptal", () => {
-  it("yönetici yalnızca kendi ekibinin işaretlerini görür", async () => {
-    const { kalipMudur, kalipCalisan, planlamaMudur, genelMudur } = await sirket();
+describe("listing and cancellation", () => {
+  it("manager only sees absences for their own team", async () => {
+    const { toolingManager, toolingEmployee, planningManager, ceo } = await setupCompany();
     await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    expect(await listTeamAbsences(testDb, kalipMudur.id)).toHaveLength(1);
-    // Akran ekibin işaretini görmez — kendi ekibi boş olmadığı hâlde.
-    expect(await listTeamAbsences(testDb, planlamaMudur.id)).toHaveLength(0);
-    // Üst kademe alt organizasyonun izin kayıtlarını görebilir; karar yetkisi
-    // yine yalnızca kendisine yönlendirilen bekleyen taleplerde açılır.
-    const ustListe = await listTeamAbsences(testDb, genelMudur.id);
-    expect(ustListe).toHaveLength(1);
-    expect(ustListe[0]?.canDecide).toBe(false);
-    expect(ustListe[0]?.canCancel).toBe(false);
+    expect(await listTeamAbsences(testDb, toolingManager.id)).toHaveLength(1);
+    expect(await listTeamAbsences(testDb, planningManager.id)).toHaveLength(0);
+
+    const upperList = await listTeamAbsences(testDb, ceo.id);
+    expect(upperList).toHaveLength(1);
+    expect(upperList[0]?.canDecide).toBe(false);
+    expect(upperList[0]?.canCancel).toBe(false);
   });
 
-  it("başka departmanın yöneticisi bekleyen talebi karara bağlayamaz", async () => {
-    const { kalipMudur, kalipCalisan, planlamaMudur } = await sirket();
-    const talep = await markOwnNoActivityPeriod(
+  it("manager of another department cannot decide on pending absence request", async () => {
+    const { toolingManager, toolingEmployee, planningManager } = await setupCompany();
+    const request = await markOwnNoActivityPeriod(
       testDb,
-      kalipCalisan.id,
+      toolingEmployee.id,
       { startDate: "2026-09-01", endDate: "2026-09-05" },
       NOW,
     );
-    if (!talep.ok) throw new Error("talep kurulamadı");
+    if (!request.ok) throw new Error("Request creation failed");
 
-    const yabanciKarar = await decideNoActivityPeriod(
+    const foreignDecision = await decideNoActivityPeriod(
       testDb,
-      planlamaMudur.id,
-      talep.id,
+      planningManager.id,
+      request.id,
       "APPROVED",
       "",
       NOW,
     );
-    expect(yabanciKarar.ok).toBe(false);
-    if (!yabanciKarar.ok) expect(yabanciKarar.error).toBe("not_found");
+    expect(foreignDecision.ok).toBe(false);
+    if (!foreignDecision.ok) expect(foreignDecision.error).toBe("not_found");
 
-    const kendiKarar = await decideNoActivityPeriod(
+    const directDecision = await decideNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      talep.id,
+      toolingManager.id,
+      request.id,
       "APPROVED",
       "",
       NOW,
     );
-    expect(kendiKarar.ok).toBe(true);
+    expect(directDecision.ok).toBe(true);
   });
 
-  it("başkasının ekibindeki işaret iptal edilemez", async () => {
-    const { kalipMudur, kalipCalisan, planlamaMudur } = await sirket();
-    const konan = await markNoActivityPeriod(
+  it("cannot cancel absence of another team's member", async () => {
+    const { toolingManager, toolingEmployee, planningManager } = await setupCompany();
+    const created = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
-    if (!konan.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("Creation failed");
 
-    const yabanci = await cancelNoActivityPeriod(
+    const foreignCancel = await cancelNoActivityPeriod(
       testDb,
-      planlamaMudur.id,
-      konan.id,
-      "yanlış giriş",
+      planningManager.id,
+      created.id,
+      "Incorrect entry",
       NOW,
     );
-    expect(yabanci.ok).toBe(false);
-    if (!yabanci.ok) expect(yabanci.error).toBe("not_found");
+    expect(foreignCancel.ok).toBe(false);
+    if (!foreignCancel.ok) expect(foreignCancel.error).toBe("not_found");
 
-    // Kendi ekibi için iptal edilebilir.
-    const kendi = await cancelNoActivityPeriod(
+    const ownCancel = await cancelNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      konan.id,
-      "yanlış giriş",
+      toolingManager.id,
+      created.id,
+      "Incorrect entry",
       NOW,
     );
-    expect(kendi.ok).toBe(true);
+    expect(ownCancel.ok).toBe(true);
   });
 
-  it("iptal SİLMEZ: satır gerekçesiyle durur", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
-    const konan = await markNoActivityPeriod(
+  it("cancellation does NOT delete: record remains with reason", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
+    const created = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
-    if (!konan.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("Creation failed");
 
-    await cancelNoActivityPeriod(testDb, kalipMudur.id, konan.id, "sehven girildi", NOW);
+    await cancelNoActivityPeriod(testDb, toolingManager.id, created.id, "Entered in error", NOW);
 
-    // Satır **duruyor**: vekilin geçmiş görünürlüğü buna bağlı (§4.5).
-    const satir = await testDb.noActivityPeriod.findUniqueOrThrow({
-      where: { id: konan.id },
+    const record = await testDb.noActivityPeriod.findUniqueOrThrow({
+      where: { id: created.id },
     });
-    expect(satir.cancelledAt).not.toBeNull();
-    expect(satir.cancelledById).toBe(kalipMudur.id);
-    expect(satir.cancellationReason).toBe("sehven girildi");
+    expect(record.cancelledAt).not.toBeNull();
+    expect(record.cancelledById).toBe(toolingManager.id);
+    expect(record.cancellationReason).toBe("Entered in error");
   });
 
-  it("gerekçesiz iptal edilemez", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
-    const konan = await markNoActivityPeriod(
+  it("cannot cancel without providing a reason", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
+    const created = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
-    if (!konan.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("Creation failed");
 
-    const sonuc = await cancelNoActivityPeriod(testDb, kalipMudur.id, konan.id, "   ", NOW);
-    expect(sonuc.ok).toBe(false);
-    if (!sonuc.ok) expect(sonuc.error).toBe("reason_required");
+    const result = await cancelNoActivityPeriod(testDb, toolingManager.id, created.id, "   ", NOW);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("reason_required");
   });
 
-  it("aynı kayıt iki kez iptal edilemez", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
-    const konan = await markNoActivityPeriod(
+  it("cannot cancel the same record twice", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
+    const created = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
-    if (!konan.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("Creation failed");
 
-    expect((await cancelNoActivityPeriod(testDb, kalipMudur.id, konan.id, "bir", NOW)).ok).toBe(true);
-    const ikinci = await cancelNoActivityPeriod(testDb, kalipMudur.id, konan.id, "iki", NOW);
-    expect(ikinci.ok).toBe(false);
-    if (!ikinci.ok) expect(ikinci.error).toBe("not_found");
+    expect((await cancelNoActivityPeriod(testDb, toolingManager.id, created.id, "first", NOW)).ok).toBe(true);
+    const second = await cancelNoActivityPeriod(testDb, toolingManager.id, created.id, "second", NOW);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error).toBe("not_found");
   });
 
-  it("iptal edilen dönem hatırlatmayı durdurmaz", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
-    const konan = await markNoActivityPeriod(
+  it("cancelled period does not pause activity reminders", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
+    const created = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
-    if (!konan.ok) throw new Error("kurulum");
+    if (!created.ok) throw new Error("Creation failed");
 
-    expect(await isNoActivityDay(testDb, kalipCalisan.id, "2026-08-20")).toBe(true);
-    await cancelNoActivityPeriod(testDb, kalipMudur.id, konan.id, "sehven", NOW);
-    // İptal edilen dönem hiç yaşanmamış sayılır.
-    expect(await isNoActivityDay(testDb, kalipCalisan.id, "2026-08-20")).toBe(false);
+    expect(await isNoActivityDay(testDb, toolingEmployee.id, "2026-08-20")).toBe(true);
+    await cancelNoActivityPeriod(testDb, toolingManager.id, created.id, "In error", NOW);
+    expect(await isNoActivityDay(testDb, toolingEmployee.id, "2026-08-20")).toBe(false);
   });
 
-  it("iptal edilen dönemin tarihlerine yenisi girilebilir", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
-    const konan = await markNoActivityPeriod(
+  it("allows entering a new period over cancelled period dates", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
+    const created = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
-    if (!konan.ok) throw new Error("kurulum");
-    await cancelNoActivityPeriod(testDb, kalipMudur.id, konan.id, "yanlış tarih", NOW);
+    if (!created.ok) throw new Error("Creation failed");
+    await cancelNoActivityPeriod(testDb, toolingManager.id, created.id, "Wrong dates", NOW);
 
-    // Çakışma kısıtı yalnız geçerli dönemleri sayar.
-    const yeni = await markNoActivityPeriod(
+    const replacement = await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
-    expect(yeni.ok).toBe(true);
+    expect(replacement.ok).toBe(true);
   });
 });
 
-describe("gün sorgusu", () => {
-  it("aralığın içindeki günler işaretli sayılır", async () => {
-    const { kalipMudur, kalipCalisan } = await sirket();
+describe("isNoActivityDay query", () => {
+  it("counts days within range as marked", async () => {
+    const { toolingManager, toolingEmployee } = await setupCompany();
     await markNoActivityPeriod(
       testDb,
-      kalipMudur.id,
-      { userId: kalipCalisan.id, startDate: "2026-08-18", endDate: "2026-08-22" },
+      toolingManager.id,
+      { userId: toolingEmployee.id, startDate: "2026-08-18", endDate: "2026-08-22" },
       NOW,
     );
 
-    // Sınırlar dahildir.
-    expect(await isNoActivityDay(testDb, kalipCalisan.id, "2026-08-18")).toBe(true);
-    expect(await isNoActivityDay(testDb, kalipCalisan.id, "2026-08-20")).toBe(true);
-    expect(await isNoActivityDay(testDb, kalipCalisan.id, "2026-08-22")).toBe(true);
+    expect(await isNoActivityDay(testDb, toolingEmployee.id, "2026-08-18")).toBe(true);
+    expect(await isNoActivityDay(testDb, toolingEmployee.id, "2026-08-20")).toBe(true);
+    expect(await isNoActivityDay(testDb, toolingEmployee.id, "2026-08-22")).toBe(true);
 
-    expect(await isNoActivityDay(testDb, kalipCalisan.id, "2026-08-17")).toBe(false);
-    expect(await isNoActivityDay(testDb, kalipCalisan.id, "2026-08-23")).toBe(false);
-    // Başkasının işareti bu kişiyi kapsamaz.
-    expect(await isNoActivityDay(testDb, kalipMudur.id, "2026-08-20")).toBe(false);
+    expect(await isNoActivityDay(testDb, toolingEmployee.id, "2026-08-17")).toBe(false);
+    expect(await isNoActivityDay(testDb, toolingEmployee.id, "2026-08-23")).toBe(false);
+    expect(await isNoActivityDay(testDb, toolingManager.id, "2026-08-20")).toBe(false);
   });
 });

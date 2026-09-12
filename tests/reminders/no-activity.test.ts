@@ -10,14 +10,11 @@ import { sendMissingActivityReminders } from "@/worker/reminders/no-activity";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Mesai sonu hatırlatması (§12.1). Sahte saatle sınanır: hafta içi tetiklenir,
-// hafta sonu ve tatilde tetiklenmez, izinliye gitmez, faaliyet girene gitmez.
-//
-// Şirket saati Europe/Istanbul (UTC+3): 15:00 UTC = 18:00 İstanbul, yani
-// varsayılan mesai bitişinden (17:30) sonrası.
+// Missing activity reminder tests.
+// Company timezone is Europe/Istanbul (UTC+3): 15:00 UTC = 18:00 Istanbul (after default 17:30 work end).
 
-const MESAI_SONRASI = new Date("2026-08-17T15:00:00.000Z"); // Pazartesi 18:00
-const MESAI_ICINDE = new Date("2026-08-17T09:00:00.000Z"); // Pazartesi 12:00
+const AFTER_WORK_HOURS = new Date("2026-08-17T15:00:00.000Z"); // Monday 18:00
+const DURING_WORK_HOURS = new Date("2026-08-17T09:00:00.000Z"); // Monday 12:00
 
 beforeEach(async () => {
   await resetDatabase();
@@ -28,20 +25,20 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function ekip() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
+async function setupTeam() {
+  const root = await createOrgUnit({ name: "Company", type: "ROOT" });
+  const tooling = await createOrgUnit({ name: "Tooling Department", parentId: root.id });
 
-  const mudur = await createUser(kaliphane.id, {
-    fullName: "Müdür",
+  const manager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const calisan = await createUser(kaliphane.id, { fullName: "Çalışan" });
+  const employee = await createUser(tooling.id, { fullName: "Tooling Worker" });
 
-  return { mudur, calisan, kaliphane };
+  return { manager, employee, tooling };
 }
 
-async function faaliyetYaz(
+async function createActivityEntry(
   author: { id: string; orgUnitId: string },
   day: string,
   approvalStatus: "APPROVED" | "CANCELLED" = "APPROVED",
@@ -51,303 +48,284 @@ async function faaliyetYaz(
       authorId: author.id,
       authorOrgUnitId: author.orgUnitId,
       activityDate: new Date(`${day}T00:00:00.000Z`),
-      title: "Başlık",
-      description: "Açıklama",
+      title: "Title",
+      description: "Description",
       approvalStatus,
     },
   });
 }
 
-describe("ne zaman tetiklenir", () => {
-  it("hafta içi mesai bitince hatırlatma kuyruğa yazılır", async () => {
-    await ekip();
+describe("timing and triggers", () => {
+  it("enqueues reminders after work hours on weekdays", async () => {
+    await setupTeam();
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.skippedNotDue).toBe(false);
-    expect(sonuc.queued).toBe(2);
-    const kuyruk = await testDb.notificationQueue.findMany();
-    expect(kuyruk).toHaveLength(2);
-    expect(kuyruk[0].eventType).toBe("no_activity_today");
+    expect(result.skippedNotDue).toBe(false);
+    expect(result.queued).toBe(2);
+    const queue = await testDb.notificationQueue.findMany();
+    expect(queue).toHaveLength(2);
+    expect(queue[0].eventType).toBe("no_activity_today");
   });
 
-  it("mesai bitmeden tetiklenmez", async () => {
-    await ekip();
+  it("does not trigger before work hours end", async () => {
+    await setupTeam();
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_ICINDE);
+    const result = await sendMissingActivityReminders(testDb, DURING_WORK_HOURS);
 
-    expect(sonuc.skippedNotDue).toBe(true);
+    expect(result.skippedNotDue).toBe(true);
     expect(await testDb.notificationQueue.count()).toBe(0);
   });
 
-  it("hafta sonu tetiklenmez", async () => {
-    await ekip();
-    // 22 Ağustos 2026 Cumartesi.
-    const cumartesi = new Date("2026-08-22T15:00:00.000Z");
+  it("does not trigger on weekends", async () => {
+    await setupTeam();
+    const saturday = new Date("2026-08-22T15:00:00.000Z");
 
-    const sonuc = await sendMissingActivityReminders(testDb, cumartesi);
+    const result = await sendMissingActivityReminders(testDb, saturday);
 
-    expect(sonuc.skippedNotDue).toBe(true);
+    expect(result.skippedNotDue).toBe(true);
     expect(await testDb.notificationQueue.count()).toBe(0);
   });
 
-  it("resmî tatilde tetiklenmez", async () => {
-    await ekip();
-    await addHoliday(testDb, { date: "2026-08-17", description: "Deneme tatili" });
+  it("does not trigger on public holidays", async () => {
+    await setupTeam();
+    await addHoliday(testDb, { date: "2026-08-17", description: "Test holiday" });
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.skippedNotDue).toBe(true);
+    expect(result.skippedNotDue).toBe(true);
     expect(await testDb.notificationQueue.count()).toBe(0);
   });
 
-  it("takvim değişince yeni çalışma günü de tetikler", async () => {
-    await ekip();
+  it("triggers on newly configured working days in calendar", async () => {
+    await setupTeam();
     await saveWorkCalendar(testDb, {
       ...DEFAULT_WORK_CALENDAR,
       workingDays: [1, 2, 3, 4, 5, 6],
     });
-    const cumartesi = new Date("2026-08-22T15:00:00.000Z");
+    const saturday = new Date("2026-08-22T15:00:00.000Z");
 
-    const sonuc = await sendMissingActivityReminders(testDb, cumartesi);
+    const result = await sendMissingActivityReminders(testDb, saturday);
 
-    expect(sonuc.skippedNotDue).toBe(false);
-    expect(sonuc.queued).toBeGreaterThan(0);
+    expect(result.skippedNotDue).toBe(false);
+    expect(result.queued).toBeGreaterThan(0);
   });
 
-  it("mesai bitişi takvimden okunur", async () => {
-    await ekip();
+  it("reads work end minute directly from calendar configuration", async () => {
+    await setupTeam();
     await saveWorkCalendar(testDb, {
       ...DEFAULT_WORK_CALENDAR,
       workEndMinute: 20 * 60, // 20:00
     });
 
-    // 18:00 İstanbul: yeni mesai bitişinden önce.
-    expect((await sendMissingActivityReminders(testDb, MESAI_SONRASI)).skippedNotDue).toBe(
+    expect((await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS)).skippedNotDue).toBe(
       true,
     );
-    // 20:30 İstanbul.
-    const gec = new Date("2026-08-17T17:30:00.000Z");
-    expect((await sendMissingActivityReminders(testDb, gec)).skippedNotDue).toBe(false);
+    const late = new Date("2026-08-17T17:30:00.000Z");
+    expect((await sendMissingActivityReminders(testDb, late)).skippedNotDue).toBe(false);
   });
 });
 
-describe("kime gitmez", () => {
-  it("bugün faaliyet girene gitmez", async () => {
-    const { calisan } = await ekip();
-    await faaliyetYaz(calisan, "2026-08-17");
+describe("recipient filtering", () => {
+  it("does not send reminder if user already logged activity today", async () => {
+    const { employee } = await setupTeam();
+    await createActivityEntry(employee, "2026-08-17");
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.skippedHasActivity).toBe(1);
-    expect(sonuc.queued).toBe(1);
-    const kuyruk = await testDb.notificationQueue.findMany();
-    expect(kuyruk.map((k) => k.userId)).not.toContain(calisan.id);
+    expect(result.skippedHasActivity).toBe(1);
+    expect(result.queued).toBe(1);
+    const queue = await testDb.notificationQueue.findMany();
+    expect(queue.map((k) => k.userId)).not.toContain(employee.id);
   });
 
-  it("dünkü faaliyet bugünü kurtarmaz", async () => {
-    const { calisan } = await ekip();
-    await faaliyetYaz(calisan, "2026-08-16");
+  it("does not treat yesterday's activity as fulfilling today's requirement", async () => {
+    const { employee } = await setupTeam();
+    await createActivityEntry(employee, "2026-08-16");
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.queued).toBe(2);
+    expect(result.queued).toBe(2);
   });
 
-  it("iptal edilmiş faaliyet 'girdi' saymaz", async () => {
-    const { calisan } = await ekip();
-    await faaliyetYaz(calisan, "2026-08-17", "CANCELLED");
+  it("does not count cancelled activity as valid daily entry", async () => {
+    const { employee } = await setupTeam();
+    await createActivityEntry(employee, "2026-08-17", "CANCELLED");
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.skippedHasActivity).toBe(0);
-    expect(sonuc.queued).toBe(2);
+    expect(result.skippedHasActivity).toBe(0);
+    expect(result.queued).toBe(2);
   });
 
-  it("faaliyet yazması beklenmeyen kişiye gitmez", async () => {
-    const { calisan } = await ekip();
+  it("excludes users configured as not expected to write activities", async () => {
+    const { employee } = await setupTeam();
     await testDb.user.update({
-      where: { id: calisan.id },
+      where: { id: employee.id },
       data: { writesActivities: false },
     });
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    // Kişi hiç aday listesine girmez: "atlandı" bile sayılmaz, çünkü ondan
-    // faaliyet beklenmiyor (§7.4 istisnası).
-    expect(sonuc.queued).toBe(1);
-    const kuyruk = await testDb.notificationQueue.findMany();
-    expect(kuyruk.map((k) => k.userId)).not.toContain(calisan.id);
+    expect(result.queued).toBe(1);
+    const queue = await testDb.notificationQueue.findMany();
+    expect(queue.map((k) => k.userId)).not.toContain(employee.id);
   });
 
-  it("'faaliyet beklenmiyor' işareti taşıyana gitmez", async () => {
-    const { mudur, calisan } = await ekip();
+  it("excludes users on approved absence period", async () => {
+    const { manager, employee } = await setupTeam();
     await markNoActivityPeriod(
       testDb,
-      mudur.id,
-      { userId: calisan.id, startDate: "2026-08-17", endDate: "2026-08-21" },
-      MESAI_ICINDE,
+      manager.id,
+      { userId: employee.id, startDate: "2026-08-17", endDate: "2026-08-21" },
+      DURING_WORK_HOURS,
     );
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.skippedNoActivityMark).toBe(1);
-    const kuyruk = await testDb.notificationQueue.findMany();
-    expect(kuyruk.map((k) => k.userId)).not.toContain(calisan.id);
+    expect(result.skippedNoActivityMark).toBe(1);
+    const queue = await testDb.notificationQueue.findMany();
+    expect(queue.map((k) => k.userId)).not.toContain(employee.id);
   });
 
-  it("onay bekleyen talep hatırlatmayı durdurmaz", async () => {
-    const { calisan } = await ekip();
+  it("does not stop reminders for requests still pending approval", async () => {
+    const { employee } = await setupTeam();
     await testDb.noActivityPeriod.create({
       data: {
-        userId: calisan.id,
+        userId: employee.id,
         startDate: new Date("2026-08-17T00:00:00.000Z"),
         endDate: new Date("2026-08-21T00:00:00.000Z"),
-        note: "Onay bekleyen talep",
-        markedById: calisan.id,
+        note: "Pending request",
+        markedById: employee.id,
         status: "PENDING",
       },
     });
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.skippedNoActivityMark).toBe(0);
-    expect(sonuc.queued).toBe(2);
+    expect(result.skippedNoActivityMark).toBe(0);
+    expect(result.queued).toBe(2);
     expect((await testDb.notificationQueue.findMany()).map((k) => k.userId)).toContain(
-      calisan.id,
+      employee.id,
     );
   });
 
-  it("pasifleştirilmiş kullanıcıya gitmez", async () => {
-    const { calisan } = await ekip();
+  it("excludes deactivated users from reminders", async () => {
+    const { employee } = await setupTeam();
     await testDb.user.update({
-      where: { id: calisan.id },
+      where: { id: employee.id },
       data: { isActive: false },
     });
 
-    const sonuc = await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    const result = await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    expect(sonuc.queued).toBe(1);
-    const kuyruk = await testDb.notificationQueue.findMany();
-    expect(kuyruk.map((k) => k.userId)).not.toContain(calisan.id);
+    expect(result.queued).toBe(1);
+    const queue = await testDb.notificationQueue.findMany();
+    expect(queue.map((k) => k.userId)).not.toContain(employee.id);
   });
 
-  it("hatırlatma yalnız kişiye gider, yöneticisine değil", async () => {
-    const { mudur, calisan } = await ekip();
-    await faaliyetYaz(mudur, "2026-08-17");
+  it("sends reminder strictly to the individual user and not their manager", async () => {
+    const { manager, employee } = await setupTeam();
+    await createActivityEntry(manager, "2026-08-17");
 
-    await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+    await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    const kuyruk = await testDb.notificationQueue.findMany();
-    // Yalnız çalışan; yöneticiye "ekibin girmedi" bildirimi yok (§12.1).
-    expect(kuyruk).toHaveLength(1);
-    expect(kuyruk[0].userId).toBe(calisan.id);
+    const queue = await testDb.notificationQueue.findMany();
+    expect(queue).toHaveLength(1);
+    expect(queue[0].userId).toBe(employee.id);
   });
 });
 
-describe("günde tek hatırlatma", () => {
-  it("aynı gün ikinci tur yeni kayıt yazmaz", async () => {
-    await ekip();
+describe("once per day reminder constraint", () => {
+  it("does not enqueue duplicate notifications on subsequent run on same day", async () => {
+    await setupTeam();
 
-    await sendMissingActivityReminders(testDb, MESAI_SONRASI);
-    const ikinci = await sendMissingActivityReminders(
+    await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
+    const second = await sendMissingActivityReminders(
       testDb,
       new Date("2026-08-17T16:00:00.000Z"),
     );
 
-    expect(ikinci.queued).toBe(0);
+    expect(second.queued).toBe(0);
     expect(await testDb.notificationQueue.count()).toBe(2);
   });
 
-  it("ertesi gün yeniden yazılır", async () => {
-    await ekip();
-    await sendMissingActivityReminders(testDb, MESAI_SONRASI);
+  it("triggers again on the next day", async () => {
+    await setupTeam();
+    await sendMissingActivityReminders(testDb, AFTER_WORK_HOURS);
 
-    // 18 Ağustos Salı 18:00.
-    const ertesiGun = await sendMissingActivityReminders(
+    const nextDay = await sendMissingActivityReminders(
       testDb,
       new Date("2026-08-18T15:00:00.000Z"),
     );
 
-    expect(ertesiGun.queued).toBe(2);
+    expect(nextDay.queued).toBe(2);
     expect(await testDb.notificationQueue.count()).toBe(4);
   });
 });
 
-describe("mesai öncesi hatırlatma süresi ayarı (§12.1)", () => {
-  it("varsayılan 60 dakika ile mesai bitmeden önce tetiklenir", async () => {
-    await ekip();
+describe("lead time setting before work end", () => {
+  it("triggers before shift end with default 60 minute lead time", async () => {
+    await setupTeam();
 
-    // 17:30 mesai bitişi; 60 dk önce = 16:30.
-    // 16:25 İstanbul (13:25 UTC): henüz erken.
-    const erken = new Date("2026-08-17T13:25:00.000Z");
-    expect((await sendMissingActivityReminders(testDb, erken)).skippedNotDue).toBe(true);
+    const tooEarly = new Date("2026-08-17T13:25:00.000Z");
+    expect((await sendMissingActivityReminders(testDb, tooEarly)).skippedNotDue).toBe(true);
 
-    // 16:35 İstanbul (13:35 UTC): 16:30 geçmiş, tetiklenmeli.
-    const vaktinde = new Date("2026-08-17T13:35:00.000Z");
-    const sonuc = await sendMissingActivityReminders(testDb, vaktinde);
-    expect(sonuc.skippedNotDue).toBe(false);
-    expect(sonuc.queued).toBe(2);
+    const onTime = new Date("2026-08-17T13:35:00.000Z");
+    const result = await sendMissingActivityReminders(testDb, onTime);
+    expect(result.skippedNotDue).toBe(false);
+    expect(result.queued).toBe(2);
   });
 
-  it("ayar 0'a çekilince mesai bitmeden önce tetiklenmez, mesai bitince tetiklenir", async () => {
-    await ekip();
+  it("triggers only after shift end when lead time is set to 0", async () => {
+    await setupTeam();
     await saveSettings(testDb, {
       [SETTING_KEYS.noActivityReminderLeadMinutes]: "0",
     });
 
-    // 17:00 İstanbul (14:00 UTC): mesai 17:30'da bittiği için 0 dk ile henüz erken.
-    const mesaiIci = new Date("2026-08-17T14:00:00.000Z");
-    expect((await sendMissingActivityReminders(testDb, mesaiIci)).skippedNotDue).toBe(true);
+    const duringWork = new Date("2026-08-17T14:00:00.000Z");
+    expect((await sendMissingActivityReminders(testDb, duringWork)).skippedNotDue).toBe(true);
 
-    // 17:35 İstanbul (14:35 UTC): mesai bitti, tetiklenmeli.
-    const mesaiSonu = new Date("2026-08-17T14:35:00.000Z");
-    const sonuc = await sendMissingActivityReminders(testDb, mesaiSonu);
-    expect(sonuc.skippedNotDue).toBe(false);
-    expect(sonuc.queued).toBe(2);
+    const afterWork = new Date("2026-08-17T14:35:00.000Z");
+    const result = await sendMissingActivityReminders(testDb, afterWork);
+    expect(result.skippedNotDue).toBe(false);
+    expect(result.queued).toBe(2);
   });
 
-  it("ayar 90 dakikaya çekilince 1.5 saat önce tetiklenir", async () => {
-    await ekip();
+  it("triggers 1.5 hours before work end when lead time is 90 minutes", async () => {
+    await setupTeam();
     await saveSettings(testDb, {
       [SETTING_KEYS.noActivityReminderLeadMinutes]: "90",
     });
 
-    // 17:30 - 90 dk = 16:00.
-    // 15:55 İstanbul (12:55 UTC): henüz erken.
-    const erken = new Date("2026-08-17T12:55:00.000Z");
-    expect((await sendMissingActivityReminders(testDb, erken)).skippedNotDue).toBe(true);
+    const tooEarly = new Date("2026-08-17T12:55:00.000Z");
+    expect((await sendMissingActivityReminders(testDb, tooEarly)).skippedNotDue).toBe(true);
 
-    // 16:05 İstanbul (13:05 UTC): tetiklenmeli.
-    const vaktinde = new Date("2026-08-17T13:05:00.000Z");
-    const sonuc = await sendMissingActivityReminders(testDb, vaktinde);
-    expect(sonuc.skippedNotDue).toBe(false);
-    expect(sonuc.queued).toBe(2);
+    const onTime = new Date("2026-08-17T13:05:00.000Z");
+    const result = await sendMissingActivityReminders(testDb, onTime);
+    expect(result.skippedNotDue).toBe(false);
+    expect(result.queued).toBe(2);
   });
 
-  it("mesai başlangıcından daha önceye taşınamaz (clamping)", async () => {
-    await ekip();
-    // Mesai: 16:00 - 17:00 (kısa mesai).
+  it("clamps lead time so it cannot trigger before shift start", async () => {
+    await setupTeam();
     await saveWorkCalendar(testDb, {
       ...DEFAULT_WORK_CALENDAR,
       workStartMinute: 16 * 60,
       workEndMinute: 17 * 60,
     });
-    // Süre: 120 dakika (17:00 - 120 = 15:00, mesai başlangıcı olan 16:00'dan önce).
     await saveSettings(testDb, {
       [SETTING_KEYS.noActivityReminderLeadMinutes]: "120",
     });
 
-    // 15:30 İstanbul (12:30 UTC): mesai bile başlamadı, tetiklenmemeli.
-    const mesaiOncesi = new Date("2026-08-17T12:30:00.000Z");
-    expect((await sendMissingActivityReminders(testDb, mesaiOncesi)).skippedNotDue).toBe(
+    const beforeShift = new Date("2026-08-17T12:30:00.000Z");
+    expect((await sendMissingActivityReminders(testDb, beforeShift)).skippedNotDue).toBe(
       true,
     );
 
-    // 16:05 İstanbul (13:05 UTC): mesai başladı (16:00 alt sınırı), tetiklenmeli.
-    const baslangicSonrasi = new Date("2026-08-17T13:05:00.000Z");
-    const sonuc = await sendMissingActivityReminders(testDb, baslangicSonrasi);
-    expect(sonuc.skippedNotDue).toBe(false);
-    expect(sonuc.queued).toBe(2);
+    const afterShiftStart = new Date("2026-08-17T13:05:00.000Z");
+    const result = await sendMissingActivityReminders(testDb, afterShiftStart);
+    expect(result.skippedNotDue).toBe(false);
+    expect(result.queued).toBe(2);
   });
 });

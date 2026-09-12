@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Taslak eki, faaliyet eki ve gönderimdeki atomik taşıma (§5.7, §15.4).
+// Draft attachment, activity attachment, and atomic transfer during submission (§5.7, §15.4).
 const NOW = new Date("2026-09-04T09:00:00.000Z");
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -17,7 +17,7 @@ const PNG = Buffer.from(
 let storageDir: string;
 
 beforeAll(async () => {
-  storageDir = await mkdtemp(path.join(tmpdir(), "taslak-ek-testi-"));
+  storageDir = await mkdtemp(path.join(tmpdir(), "draft-attachment-test-"));
   process.env.ATTACHMENT_STORAGE_DIR = storageDir;
 });
 
@@ -32,98 +32,98 @@ afterAll(async () => {
 
 const DRAFT = {
   activityDate: "2026-09-04",
-  title: "Kalıp bakımı",
-  description: "İki parça üzerinde bakım yapıldı.",
+  title: "Tooling maintenance",
+  description: "Maintenance was performed on two parts.",
   targetDepartmentIds: [] as string[],
   openFollowUp: false,
   savedManually: true,
 };
 
 async function createDraft() {
-  const unit = await createOrgUnit({ name: "Kalıphane" });
-  const author = await createUser(unit.id, { email: "taslak-yazar@ornek.test" });
-  const other = await createUser(unit.id, { email: "taslak-baskasi@ornek.test" });
+  const unit = await createOrgUnit({ name: "Tooling Workshop" });
+  const author = await createUser(unit.id, { email: "draft-author@example.test" });
+  const other = await createUser(unit.id, { email: "draft-other@example.test" });
   const { saveDraft } = await import("@/server/activities/drafts");
   const draft = await saveDraft(testDb, author.id, DRAFT, NOW);
-  if (!draft.ok) throw new Error("taslak kurulamadı");
+  if (!draft.ok) throw new Error("failed to create draft");
   return { unit, author, other, draft: draft.draft };
 }
 
-describe("taslak eklerinin yaşam döngüsü", () => {
-  it("iki ayrı seçim kaydı da taslakta tutulur ve yalnız yazarı görür", async () => {
+describe("lifecycle of draft attachments", () => {
+  it("keeps both selections in draft and only visible to author", async () => {
     const { author, other, draft } = await createDraft();
     const { listDraftAttachments, saveDraftAttachments } = await import(
       "@/server/activities/draft-attachments"
     );
 
-    const sonuc = await saveDraftAttachments(
+    const result = await saveDraftAttachments(
       testDb,
       author.id,
       draft.id,
       [
-        { originalName: "ilk.png", content: PNG },
-        { originalName: "ikinci.png", content: PNG },
+        { originalName: "first.png", content: PNG },
+        { originalName: "second.png", content: PNG },
       ],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value).toHaveLength(2);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toHaveLength(2);
     expect(
       (await listDraftAttachments(testDb, author.id, draft.id)).map(
         (file) => file.originalName,
       ),
-    ).toEqual(["ilk.png", "ikinci.png"]);
+    ).toEqual(["first.png", "second.png"]);
     expect(await listDraftAttachments(testDb, other.id, draft.id)).toEqual([]);
   });
 
-  it("taslak eki doğrudan silinemez; açık taslak silme işleminde silinir", async () => {
+  it("cannot delete draft attachment directly; deleted during explicit draft deletion", async () => {
     const { author, draft } = await createDraft();
     const { saveDraftAttachments } = await import(
       "@/server/activities/draft-attachments"
     );
     const { deleteDraft } = await import("@/server/activities/drafts");
 
-    const sonuc = await saveDraftAttachments(
+    const result = await saveDraftAttachments(
       testDb,
       author.id,
       draft.id,
-      [{ originalName: "korunacak.png", content: PNG }],
+      [{ originalName: "keep.png", content: PNG }],
       NOW,
     );
-    if (!sonuc.ok) throw new Error("ek kurulamadı");
+    if (!result.ok) throw new Error("failed to setup attachment");
 
     await expect(
       testDb.activityDraftAttachment.deleteMany({ where: { draftId: draft.id } }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
     expect(await testDb.activityDraftAttachment.count()).toBe(1);
 
-    const storagePath = sonuc.value[0].storagePath;
+    const storagePath = result.value[0].storagePath;
     expect(await deleteDraft(testDb, author.id, draft.id)).toBe(true);
     expect(await testDb.activityDraftAttachment.count()).toBe(0);
     await expect(readFile(path.join(storageDir, storagePath))).rejects.toThrow();
   });
 });
 
-describe("taslak gönderimi", () => {
-  it("taslak eklerini ve gönderimde seçilen eki tek faaliyette birleştirir", async () => {
+describe("draft submission", () => {
+  it("combines draft attachments and files selected at submission into single activity", async () => {
     const { author, draft } = await createDraft();
     const { saveDraftAttachments } = await import(
       "@/server/activities/draft-attachments"
     );
     const { createActivity } = await import("@/server/activities/write");
 
-    const taslakEkleri = await saveDraftAttachments(
+    const draftAttachments = await saveDraftAttachments(
       testDb,
       author.id,
       draft.id,
-      [{ originalName: "taslak.png", content: PNG }],
+      [{ originalName: "draft.png", content: PNG }],
       NOW,
     );
-    if (!taslakEkleri.ok) throw new Error("ek kurulamadı");
+    if (!draftAttachments.ok) throw new Error("failed to setup attachment");
 
-    const sonuc = await createActivity(
+    const result = await createActivity(
       testDb,
       {
         id: author.id,
@@ -139,32 +139,32 @@ describe("taslak gönderimi", () => {
       NOW,
       {
         draftId: draft.id,
-        files: [{ originalName: "gonderimde.png", content: PNG }],
+        files: [{ originalName: "submission.png", content: PNG }],
       },
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
     const attachments = await testDb.attachment.findMany({
-      where: { activityId: sonuc.activity.id },
+      where: { activityId: result.activity.id },
       orderBy: { originalName: "asc" },
     });
     expect(attachments.map((file) => file.originalName)).toEqual([
-      "gonderimde.png",
-      "taslak.png",
+      "draft.png",
+      "submission.png",
     ]);
     expect(await testDb.activityDraft.count()).toBe(0);
     expect(await testDb.activityDraftAttachment.count()).toBe(0);
 
-    // Taşınan dosyanın fiziksel içeriği de aynı kalır; yalnız satırın sahibi
-    // taslaktan faaliyete geçmiştir.
+    // Physical contents of moved file remain the same; ownership simply moves
+    // from draft to activity.
     await expect(
-      readFile(path.join(storageDir, attachments[1].storagePath)),
+      readFile(path.join(storageDir, attachments[0].storagePath)),
     ).resolves.toEqual(PNG);
   });
 
-  it("gönderim başarısız olursa taslak ve ekleri korunur", async () => {
+  it("preserves draft and attachments if submission fails", async () => {
     const { author, draft } = await createDraft();
     const { saveDraftAttachments } = await import(
       "@/server/activities/draft-attachments"
@@ -172,24 +172,24 @@ describe("taslak gönderimi", () => {
     const { createActivity } = await import("@/server/activities/write");
     const { SETTING_KEYS } = await import("@/server/settings/system-settings");
 
-    const taslakEkleri = await saveDraftAttachments(
+    const draftAttachments = await saveDraftAttachments(
       testDb,
       author.id,
       draft.id,
-      [{ originalName: "kaybolmayacak.png", content: PNG }],
+      [{ originalName: "persistent.png", content: PNG }],
       NOW,
     );
-    if (!taslakEkleri.ok) throw new Error("ek kurulamadı");
+    if (!draftAttachments.ok) throw new Error("failed to setup attachment");
 
     await testDb.systemSetting.create({
       data: {
         key: SETTING_KEYS.attachmentMaxCount,
         value: "1",
-        description: "Azami ek sayısı",
+        description: "Maximum attachment count",
       },
     });
 
-    const sonuc = await createActivity(
+    const result = await createActivity(
       testDb,
       {
         id: author.id,
@@ -205,35 +205,35 @@ describe("taslak gönderimi", () => {
       NOW,
       {
         draftId: draft.id,
-        files: [{ originalName: "ikinci.png", content: PNG }],
+        files: [{ originalName: "second.png", content: PNG }],
       },
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("too_many");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("too_many");
     expect(await testDb.activity.count()).toBe(0);
     expect(await testDb.activityDraft.count()).toBe(1);
     expect(await testDb.activityDraftAttachment.count()).toBe(1);
     await expect(
-      readFile(path.join(storageDir, taslakEkleri.value[0].storagePath)),
+      readFile(path.join(storageDir, draftAttachments.value[0].storagePath)),
     ).resolves.toEqual(PNG);
   });
 });
 
-describe("onay beklerken ek yükleme", () => {
-  it("yazar üç dakika sonra aynı onay turunda ek yükleyebilir", async () => {
-    const root = await createOrgUnit({ name: "Üst Birim", type: "Kök" });
+describe("uploading attachment while pending approval", () => {
+  it("author can upload attachment within three minutes during same approval round", async () => {
+    const root = await createOrgUnit({ name: "Parent Unit", type: "Root" });
     const unit = await createOrgUnit({
-      name: "Kalıphane",
+      name: "Tooling Workshop",
       parentId: root.id,
       requiresApproval: true,
     });
     const manager = await createUser(root.id, {
-      email: "onayci@ornek.test",
+      email: "approver@example.test",
       isUnitManager: true,
     });
-    const author = await createUser(unit.id, { email: "faaliyet-yazar@ornek.test" });
+    const author = await createUser(unit.id, { email: "activity-author@example.test" });
     const { createActivity, updateActivity } = await import(
       "@/server/activities/write"
     );
@@ -243,8 +243,8 @@ describe("onay beklerken ek yükleme", () => {
       { id: author.id, orgUnitId: unit.id, requiresApproval: true },
       {
         activityDate: DRAFT.activityDate,
-        title: "İlk kayıt",
-        description: "İlk açıklama",
+        title: "Initial record",
+        description: "Initial description",
         targetDepartmentIds: [],
       },
       NOW,
@@ -259,12 +259,12 @@ describe("onay beklerken ek yükleme", () => {
       {
         id: created.activity.id,
         activityDate: DRAFT.activityDate,
-        title: "Düzeltilmiş kayıt",
-        description: "Fotoğraf sonradan eklendi.",
+        title: "Corrected record",
+        description: "Photo added later.",
         targetDepartmentIds: [],
       },
       new Date(NOW.getTime() + 3 * 60_000),
-      { files: [{ originalName: "sonradan.png", content: PNG }] },
+      { files: [{ originalName: "subsequent.png", content: PNG }] },
     );
 
     expect(updated.ok).toBe(true);

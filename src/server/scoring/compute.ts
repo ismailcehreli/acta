@@ -1,18 +1,12 @@
 import { computeScoreV1 } from "./formula-v1";
 import { computeScoreV2 } from "./formula-v2";
 
-// Dönemsel skor hesabı (Görev 11.10, tasarım Paket I).
+// Period-based score calculation (Task 11.10, design Package I).
 //
-// **Üç ilke:** kümülatif değil dönemsel · sayı değil gün · onay sayısı değil
-// karar kalitesi.
+// Three principles: periodic not cumulative; days not count; decision quality not approval count.
 //
-// İster belgesi §3.2'deki formül olduğu gibi uygulanmadı; beş kusuru tasarım
-// belgesinde yazılı. En ciddi ikisi: yöneticiye onay başına puan vermek onay
-// mekanizmasının işini tersine çeviriyordu, ve "genel sıralama" belgenin
-// kendi §5.1'ini deliyordu.
-//
-// Temel skor 100 üzerinden hesaplanır. Takdir katkısı, değerli faaliyetlerin
-// genel toplamda ayrıca görünmesini sağlamak için bunun üzerine eklenebilir.
+// Base score is calculated out of 100. Appreciation contribution can be added on top of this
+// to make valuable activities visible in the overall total.
 
 export type ScoreProfile = "employee" | "unapproved" | "manager";
 
@@ -24,13 +18,13 @@ export interface ScoreWeights {
 }
 
 /**
- * Ayarlardaki dört ağırlığın varsayılanı (tasarım satır 672-686).
+ * Default values for the four score weights from settings (design lines 672-686).
  *
- * Bunlar **varsayılan**dır, kural değil: gerçek değerler `SystemSetting`ten
- * gelir ve `readScoreWeights` ile okunur. Buradaki nesne yalnız ayar
- * okunamayan saf hesap testleri için duruyor.
+ * These are defaults, not hard constraints: real values come from `SystemSetting`
+ * and are read with `readScoreWeights`. This object exists for pure calculation
+ * tests where settings are not read.
  */
-export const VARSAYILAN_AGIRLIKLAR: ScoreWeights = {
+export const DEFAULT_SCORE_WEIGHTS: ScoreWeights = {
   regularity: 60,
   acceptance: 30,
   approval: 30,
@@ -38,23 +32,20 @@ export const VARSAYILAN_AGIRLIKLAR: ScoreWeights = {
 };
 
 /**
- * Profil başına temel skor ağırlık dağılımı. Üçünün de toplamı 100 — çapraz doğrulama
- * bunu kaydetme sınırında zorluyor (`SETTING_SUM_RULES`).
+ * Base score weight distribution per profile. All three sum to 100 —
+ * cross-validation enforces this at the save boundary (`SETTING_SUM_RULES`).
  *
- * Bazı boyutlar bazı kişilerde **tanımı gereği sabit** olduğu için profil
- * ayrımı var:
- *
- *   · Onaya tabi olmayan birimde kayıt doğrudan `APPROVED` doğar; kabul
- *     oranı hep %100 olurdu. Ölçmeyen bir boyut ağırlığını boşa harcar, o
- *     yüzden ağırlığı düzenliliğe **ekleniyor** — ayrı bir ayar değil,
- *     türetilmiş değer (tasarım satır 686).
- *   · Yöneticiler onaya tabi değildir (§18.2); aynı sorun. Yerine "onay
- *     süresi" geçiyor — kendisine düşen kaydı kaç iş gününde karara bağladı.
- *     **Ret de karardır ve aynı puanı getirir.**
+ * Profiles exist because some dimensions are definitionally fixed for certain roles:
+ *   - In units not requiring approval, records are created directly as APPROVED;
+ *     acceptance rate would always be 100%. An unmeasured dimension wastes its weight,
+ *     so its weight is added to regularity (design line 686).
+ *   - Managers are not subject to approval (§18.2). Instead "approval duration" replaces it —
+ *     in how many work days did they decide on activities assigned to them.
+ *     Rejection is also a decision and awards the same score.
  */
 export function profileWeights(
   profile: ScoreProfile,
-  weights: ScoreWeights = VARSAYILAN_AGIRLIKLAR,
+  weights: ScoreWeights = DEFAULT_SCORE_WEIGHTS,
 ): ScoreWeights {
   if (profile === "unapproved") {
     return {
@@ -83,24 +74,24 @@ export function profileWeights(
 }
 
 export interface ScoreInput {
-  /** Dönemde kaç iş günü bekleniyordu (izin ve tatil düşülmüş). */
+  /** How many work days were expected in period (leaves and holidays deducted). */
   expectedDays: number;
-  /** Kaç **günde** kayıt girildi. Bir günde beş kayıt bir gün sayılır. */
+  /** On how many days were activities logged. Five records on one day count as one day. */
   writtenDays: number;
-  /** Dönemde yazılan kayıt sayısı; kabul oranının paydası. */
+  /** Number of activities written in period; denominator for acceptance rate. */
   writtenCount: number;
   approvedCount: number;
-  /** Yöneticinin karara bağladığı kayıt sayısı (ret dahil). */
+  /** Number of records decided by manager (including rejections). */
   decidedCount: number;
-  /** Bunların kaçı eşik içinde karara bağlandı. */
+  /** How many of those were decided within the threshold. */
   decidedOnTimeCount: number;
-  /** Dönemde sorumlu olduğu takip maddesi ve cevaplaması gereken soru. */
+  /** Follow-up items responsible for and questions needing answers in period. */
   followUpTotal: number;
-  /** Bunların kaçını kapattı ya da cevapladı. */
+  /** How many of those were closed or answered. */
   followUpHandled: number;
-  /** Dönemde onaylanmış faaliyetlere verilen geçerli takdir sayısı. */
+  /** Valid appreciation count granted to approved activities in period. */
   appreciationCount?: number;
-  /** O dönemde geçerli olan takdir başına puan. */
+  /** Points per appreciation active during that period. */
   appreciationPointsPer?: number;
 }
 
@@ -110,13 +101,13 @@ export interface ScoreResult {
   approval: number | null;
   followUp: number;
   total: number;
-  /** Takdir eklenmeden önceki üç temel bölümün toplamı. */
+  /** Sum of the three base dimensions before appreciation is added. */
   baseTotal?: number;
-  /** Skora katkı sağlayan takdir sayısı. */
+  /** Number of appreciations contributing to score. */
   appreciationCount?: number;
-  /** Takdirlerin toplam puan katkısı. */
+  /** Total points contributed by appreciations. */
   appreciationPoints?: number;
-  /** Hesapta kullanılan takdir başına puan. */
+  /** Points per appreciation used in calculation. */
   appreciationPointsPer?: number;
 }
 
@@ -129,59 +120,50 @@ export function resolveScoreProfile(person: {
 }
 
 /**
- * Yürürlükteki formül sürümü (denetim 25.08.2026, P8-5).
+ * Currently active formula version (audit 25.08.2026, P8-5).
  *
- * Ağırlıkları donduruyorduk ama **algoritmayı** değil. Yuvarlama, boş payda
- * davranışı, boyut tanımı ya da profil eşlemesi ileride değişirse kişinin
- * kendi gördüğü saklanmış `total` aynı kalır, yöneticisinin gördüğü aynı
- * dönem ise yeni algoritmayla hesaplanıp **değişirdi**. Paket tam olarak
- * "aynı tarihçe farklı günlerde farklı toplam vermesin" diye yazıldı;
- * normal bir formül düzeltmesi bunu sessizce bozardı.
- *
- * Dönem satırı hangi sürümle kapandığını taşıyor ve okuma o sürümün
- * hesaplayıcısını seçiyor.
+ * Weights were frozen but the algorithm must also be frozen.
+ * The period row carries which version it closed with, and reads select
+ * that version's calculator.
  */
 export const SCORE_FORMULA_VERSION = 2;
 
 /**
- * Sürüme göre hesaplayıcılar.
+ * Calculators by formula version.
  *
- * Formül değiştiğinde **yeni bir sürüm eklenir**, mevcut olan
- * değiştirilmez: eski dönemler eski hesaplayıcıyla okunmaya devam eder.
+ * When the formula changes, a new version is added rather than modifying existing ones:
+ * past periods continue to be read with their respective calculator.
  */
 export const SCORE_CALCULATORS: Record<
   number,
   (profile: ScoreProfile, input: ScoreInput, weights: ScoreWeights) => ScoreResult
 > = {
-  // V1 **kendi modülünde** ve kendi yardımcılarıyla duruyor
-  // (denetim 25.08.2026, P8-R2-4): buradaki ortak `profileWeights` ve
-  // `puan` değişirse V1 dönemleri de yeniden yorumlanırdı.
+  // V1 resides in its own module with its own helpers (audit 25.08.2026, P8-R2-4).
   1: computeScoreV1,
-  // V2, V1'in üç temel bölümünü korur ve takdir katkısını toplamın üzerine
-  // ekler. V1'e dokunulmaz; kapanmış eski dönemler aynı kalır.
+  // V2 preserves the three base sections of V1 and adds appreciation points to the total.
   2: computeScoreV2,
 };
 
 export function computeScore(
   profile: ScoreProfile,
   input: ScoreInput,
-  /** Ayarlardan gelen dört ağırlık; verilmezse tasarımın varsayılanları. */
-  weights: ScoreWeights = VARSAYILAN_AGIRLIKLAR,
+  /** Four weights from settings; if omitted, defaults are used. */
+  weights: ScoreWeights = DEFAULT_SCORE_WEIGHTS,
 ): ScoreResult {
   return computeScoreByVersion(SCORE_FORMULA_VERSION, profile, input, weights);
 }
 
-/** Seçilen sürümü çalıştırır; kapanış yazdığı etiketle aynı değeri geçirir. */
+/** Executes the specified version; passes the same value as the label written at closing. */
 export function computeScoreByVersion(
   version: number,
   profile: ScoreProfile,
   input: ScoreInput,
-  weights: ScoreWeights = VARSAYILAN_AGIRLIKLAR,
+  weights: ScoreWeights = DEFAULT_SCORE_WEIGHTS,
 ): ScoreResult {
-  const hesaplayici = SCORE_CALCULATORS[version];
-  if (!hesaplayici) {
-    throw new Error(`Desteklenmeyen skor formülü: ${version}`);
+  const calculator = SCORE_CALCULATORS[version];
+  if (!calculator) {
+    throw new Error(`Unsupported score formula: ${version}`);
   }
 
-  return hesaplayici(profile, input, weights);
+  return calculator(profile, input, weights);
 }

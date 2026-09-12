@@ -5,8 +5,8 @@ import { isInManagementChain, managementChain } from "@/server/org/chain";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Üst zincir, §4.4'teki yönetici türetmesinin tekrarlanmasıdır. İptal yetkisi
-// (§5.5) ve ileride görünürlük (§8.1) buna dayanır.
+
+
 
 beforeEach(async () => {
   await resetDatabase();
@@ -17,13 +17,13 @@ afterAll(async () => {
 });
 
 async function threeLevels() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
+  const root = await createOrgUnit({ name: "General Management", type: "Root" });
   const directorate = await createOrgUnit({
-    name: "Direktörlük",
+    name: "Directorate",
     parentId: root.id,
   });
   const department = await createOrgUnit({
-    name: "Kalıphane",
+    name: "Mold Shop",
     parentId: directorate.id,
   });
   const peerDepartment = await createOrgUnit({
@@ -40,14 +40,14 @@ async function threeLevels() {
   };
 }
 
-describe("üst zincir", () => {
-  it("doğrudan yönetici zincirdedir", async () => {
+describe("management chain", () => {
+  it("the direct manager is in the chain", async () => {
     const { worker, manager } = await threeLevels();
 
     expect(await isInManagementChain(testDb, worker.id, manager.id)).toBe(true);
   });
 
-  it("iki kademe yukarısı da zincirdedir", async () => {
+  it("a manager two levels up is also in the chain", async () => {
     const { worker, generalManager } = await threeLevels();
 
     expect(await isInManagementChain(testDb, worker.id, generalManager.id)).toBe(
@@ -55,25 +55,25 @@ describe("üst zincir", () => {
     );
   });
 
-  it("akran zincirde değildir", async () => {
+  it("a peer is not in the chain", async () => {
     const { worker, peer } = await threeLevels();
 
     expect(await isInManagementChain(testDb, worker.id, peer.id)).toBe(false);
   });
 
-  it("ast, üstünün zincirinde değildir", async () => {
+  it("a subordinate is not in their manager's chain", async () => {
     const { worker, manager } = await threeLevels();
 
     expect(await isInManagementChain(testDb, manager.id, worker.id)).toBe(false);
   });
 
-  it("kişinin kendisi kendi zincirinde sayılmaz", async () => {
+  it("a person is not in their own chain", async () => {
     const { worker } = await threeLevels();
 
     expect(await isInManagementChain(testDb, worker.id, worker.id)).toBe(false);
   });
 
-  it("zincir en yakın yöneticiden köke doğru sıralanır", async () => {
+  it("the chain is ordered from the nearest manager to the root", async () => {
     const { worker, manager, director, generalManager } = await threeLevels();
 
     expect(await managementChain(testDb, worker.id)).toEqual([
@@ -83,13 +83,13 @@ describe("üst zincir", () => {
     ]);
   });
 
-  it("kökteki yöneticinin üstü yoktur", async () => {
+  it("the root manager has no manager above them", async () => {
     const { generalManager } = await threeLevels();
 
     expect(await managementChain(testDb, generalManager.id)).toEqual([]);
   });
 
-  it("pasifleştirilmiş yönetici zincirde sayılmaz", async () => {
+  it("a deactivated manager is not counted in the chain", async () => {
     const { worker, manager, director } = await threeLevels();
     await testDb.user.update({
       where: { id: manager.id },

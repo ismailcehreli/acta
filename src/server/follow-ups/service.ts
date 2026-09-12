@@ -8,14 +8,14 @@ import {
 import type { Viewer } from "@/server/authz/visibility";
 import { isInManagementChain } from "@/server/org/chain";
 
-// Takip maddeleri (§11).
+// Follow-up items (§11).
 //
-// Madde bir boolean değil, geçmişi olan bağımsız kayıttır (§16.4). Excel'de
-// "Açık/Kapalı" sütunu vardı ve öldü: kimse sahibi değildi, kapatmanın bedeli
-// yoktu. Burada **sahiplik** ve **zorunlu kapanış notu** bu ikisini çözüyor.
+
+
+
 //
-// Sistem hiçbir maddeyi kendiliğinden yukarı taşımaz (§11.2). Yaptığı tek şey
-// hareketsiz olanları ayrı bir ekranda görünür kılmak.
+
+
 
 export type FollowUpDb = Pick<
   PrismaClient,
@@ -46,23 +46,21 @@ export type FollowUpResult =
   | { ok: false; error: FollowUpError; message: string };
 
 const MESSAGES: Record<FollowUpError, string> = {
-  activity_not_found: "Faaliyet bulunamadı.",
-  activity_closed:
-    "İptal edilmiş ya da reddedilmiş faaliyet için takip açılamaz.",
-  already_open: "Bu faaliyetin zaten açık bir takip maddesi var.",
-  not_found: "Takip maddesi bulunamadı.",
-  not_allowed: "Bu işlem için yetkiniz yok.",
-  note_required: "Kapanış notu zorunludur.",
-  owner_cannot_see:
-    "Seçilen kişi bu faaliyeti göremiyor; devredilirse takip edemez.",
-  wrong_status: "Takip maddesi bu durumda değil.",
+  activity_not_found: "Activity not found.",
+  activity_closed: "A follow-up cannot be opened for a cancelled or rejected activity.",
+  already_open: "This activity already has an open follow-up item.",
+  not_found: "Follow-up item not found.",
+  not_allowed: "You are not authorized to perform this action.",
+  note_required: "A closing note is required.",
+  owner_cannot_see: "The selected person cannot see this activity and cannot own its follow-up.",
+  wrong_status: "The follow-up item is not in the required status.",
 };
 
 function fail(error: FollowUpError): FollowUpResult {
   return { ok: false, error, message: MESSAGES[error] };
 }
 
-/** İçeriği görebilmeyen kişi takip de açamaz, devralamaz. */
+
 async function canSee(db: FollowUpDb, viewer: Viewer, activityId: string) {
   const activity = await findVisibleActivity(db, viewer, {
     where: { id: activityId },
@@ -75,7 +73,7 @@ export interface OpenFollowUpInput {
   activityId: string;
   nextStep?: string | null;
   reviewDate?: Date | null;
-  /** Devralacak kişi; boşsa açan kişi sahiplenir. */
+
   ownerId?: string | null;
 }
 
@@ -88,26 +86,26 @@ export async function openFollowUp(
   const activity = await canSee(db, actor, input.activityId);
   if (!activity) return fail("activity_not_found");
 
-  // Kapanmış kayıt için takip açmak anlamsız: iptal edilen faaliyetin açık
-  // maddeleri zaten otomatik kapanıyor (§5.5).
+
+
   if (activity.approvalStatus === "CANCELLED" || activity.approvalStatus === "REJECTED") {
     return fail("activity_closed");
   }
 
   const ownerId = input.ownerId ?? actor.id;
   if (ownerId !== actor.id) {
-    const sahipGorur = await canSee(
+    const canSeeOwner = await canSee(
       db,
       { id: ownerId, isSystemAdmin: false },
       input.activityId,
     );
-    if (!sahipGorur) return fail("owner_cannot_see");
+    if (!canSeeOwner) return fail("owner_cannot_see");
   }
 
-  const acikVarMi = await db.followUpItem.count({
+  const hasOpenItems = await db.followUpItem.count({
     where: { activityId: input.activityId, status: "OPEN" },
   });
-  if (acikVarMi > 0) return fail("already_open");
+  if (hasOpenItems > 0) return fail("already_open");
 
   const item = await db.$transaction(async (tx) => {
     const created = await tx.followUpItem.create({
@@ -131,7 +129,7 @@ export async function openFollowUp(
       objectType: AUDIT_OBJECTS.followUp,
       objectId: created.id,
       action: AUDIT_ACTIONS.followUpOpened,
-      // Denetim izi içerik taşımaz (§15.1); yalnız hangi faaliyet.
+
       detail: { activityId: input.activityId },
       now,
     });
@@ -142,11 +140,7 @@ export async function openFollowUp(
   return { ok: true, item };
 }
 
-/**
- * Kapatma yetkisi: **sahibi ve üstündeki yöneticiler** (§11.1). Maddeyi açan
- * kişi de sahibi değilse kapatamaz — sahiplik devredilebildiği için "açan"
- * ile "sorumlu" ayrışabiliyor.
- */
+
 async function canManage(
   db: FollowUpDb,
   actor: Viewer,
@@ -163,36 +157,36 @@ export async function closeFollowUp(
   note: string,
   now: Date = new Date(),
 ): Promise<FollowUpResult> {
-  const gerekce = note.trim();
-  if (gerekce === "") return fail("note_required");
+  const reason = note.trim();
+  if (reason === "") return fail("note_required");
 
   const item = await db.followUpItem.findUnique({ where: { id: followUpId } });
   if (!item) return fail("not_found");
   if (!(await canManage(db, actor, item))) return fail("not_allowed");
   if (item.status !== "OPEN") return fail("wrong_status");
 
-  const guncel = await db.$transaction(async (tx) => {
-    // **Durum kilit altında yeniden okunur** (denetim 21.08.2026,
-    // bulgu 10). Kilitsiz kurguda iki yönetici aynı maddeyi aynı anda farklı
-    // notlarla kapatabiliyordu: ikisi de başarı dönüyor ve olay geçmişinde
-    // arada REOPENED olmadan iki CLOSED satırı doğuyordu. Madde bir boolean
-    // değil, **geçmişi olan** bir kayıt (§11.1); geçmiş gerçekte olmamış bir
-    // ikinci kapanışı göstermemeli.
+  const current = await db.$transaction(async (tx) => {
+
+
+
+
+
+
     await tx.$executeRaw`SELECT "id" FROM "FollowUpItem" WHERE "id" = ${followUpId} FOR UPDATE`;
 
-    const taze = await tx.followUpItem.findUnique({
+    const fresh = await tx.followUpItem.findUnique({
       where: { id: followUpId },
       select: { status: true },
     });
-    if (!taze || taze.status !== "OPEN") return null;
+    if (!fresh || fresh.status !== "OPEN") return null;
 
-    const kapali = await tx.followUpItem.update({
+    const closed = await tx.followUpItem.update({
       where: { id: followUpId },
       data: {
         status: "CLOSED",
         closedById: actor.id,
         closedAt: now,
-        closingNote: gerekce,
+        closingNote: reason,
         lastMovedAt: now,
       },
     });
@@ -202,7 +196,7 @@ export async function closeFollowUp(
         followUpId,
         kind: "CLOSED",
         actorId: actor.id,
-        note: gerekce,
+        note: reason,
         createdAt: now,
       },
     });
@@ -215,16 +209,16 @@ export async function closeFollowUp(
       now,
     });
 
-    return kapali;
+    return closed;
   });
 
-  // Kilidi kaybeden ikinci çağrı: madde bu arada kapanmış.
-  if (!guncel) return fail("wrong_status");
+  // A concurrent caller may have acquired the lock and closed the item first.
+  if (!current) return fail("wrong_status");
 
-  return { ok: true, item: guncel };
+  return { ok: true, item: current };
 }
 
-/** Yeniden açma (§11.1): mümkündür, gerekçeyle. */
+/** Reopening is allowed with a reason (§11.1). */
 export async function reopenFollowUp(
   db: FollowUpDb,
   actor: Viewer,
@@ -232,21 +226,21 @@ export async function reopenFollowUp(
   note: string,
   now: Date = new Date(),
 ): Promise<FollowUpResult> {
-  const gerekce = note.trim();
-  if (gerekce === "") return fail("note_required");
+  const reason = note.trim();
+  if (reason === "") return fail("note_required");
 
   const item = await db.followUpItem.findUnique({ where: { id: followUpId } });
   if (!item) return fail("not_found");
   if (!(await canManage(db, actor, item))) return fail("not_allowed");
   if (item.status !== "CLOSED") return fail("wrong_status");
 
-  const acikVarMi = await db.followUpItem.count({
+  const hasOpenItems = await db.followUpItem.count({
     where: { activityId: item.activityId, status: "OPEN" },
   });
-  if (acikVarMi > 0) return fail("already_open");
+  if (hasOpenItems > 0) return fail("already_open");
 
-  const guncel = await db.$transaction(async (tx) => {
-    const acik = await tx.followUpItem.update({
+  const current = await db.$transaction(async (tx) => {
+    const open = await tx.followUpItem.update({
       where: { id: followUpId },
       data: {
         status: "OPEN",
@@ -262,7 +256,7 @@ export async function reopenFollowUp(
         followUpId,
         kind: "REOPENED",
         actorId: actor.id,
-        note: gerekce,
+        note: reason,
         createdAt: now,
       },
     });
@@ -275,13 +269,13 @@ export async function reopenFollowUp(
       now,
     });
 
-    return acik;
+    return open;
   });
 
-  return { ok: true, item: guncel };
+  return { ok: true, item: current };
 }
 
-/** Devir (§4.6): pasifleştirme öncesi açık işler devredilir ya da kapatılır. */
+/** Transfer (§4.6): open work is transferred or closed before deactivation. */
 export async function transferFollowUp(
   db: FollowUpDb,
   actor: Viewer,
@@ -294,17 +288,16 @@ export async function transferFollowUp(
   if (!(await canManage(db, actor, item))) return fail("not_allowed");
   if (item.status !== "OPEN") return fail("wrong_status");
 
-  // Göremediği bir faaliyetin takibini devralan kişi, takip edemeyeceği bir
-  // iş üstlenmiş olurdu.
-  const gorur = await canSee(
+  // The new owner must be able to see the activity they are taking over.
+  const canSeeActivity = await canSee(
     db,
     { id: newOwnerId, isSystemAdmin: false },
     item.activityId,
   );
-  if (!gorur) return fail("owner_cannot_see");
+  if (!canSeeActivity) return fail("owner_cannot_see");
 
-  const guncel = await db.$transaction(async (tx) => {
-    const devredilen = await tx.followUpItem.update({
+  const current = await db.$transaction(async (tx) => {
+    const transferredItem = await tx.followUpItem.update({
       where: { id: followUpId },
       data: { ownerId: newOwnerId, lastMovedAt: now },
     });
@@ -327,32 +320,31 @@ export async function transferFollowUp(
       now,
     });
 
-    return devredilen;
+    return transferredItem;
   });
 
-  return { ok: true, item: guncel };
+  return { ok: true, item: current };
 }
 
 /**
- * Faaliyete hareket geldi (§11.1: "faaliyete yeni yorum/cevap geldiğinde
- * güncellenir"). Açık madde yoksa hiçbir şey yapmaz.
+ * Touches follow-ups when an activity receives a comment or reply (§11.1).
+ * Does nothing when the activity has no open item.
  */
 export async function touchFollowUps(
   db: Pick<PrismaClient, "followUpItemEvent" | "$queryRaw">,
   activityId: string,
-  /** Hareketi yapan kişi: soruyu soran ya da cevabı yazan. */
+  /** Person who caused the movement: the asker or reply author. */
   actorId: string,
   now: Date,
 ): Promise<void> {
-  // **Tek ifade, tek karar** (denetim 23.08.2026, P3-R3-5).
+  // **One statement, one decision** (audit 23.08.2026, P3-R3-5).
   //
-  // Önce oku–sonra yaz kurgusunda iki şey bozuluyordu: gecikmiş bir istek
-  // daha yeni bir hareketin üstüne eski zamanı yazıp `lastMovedAt` değerini
-  // **geriye** götürebiliyor, ve okuma ile yazma arasında kapanan bir madde
-  // kapandıktan sonra yeniden hareket görebiliyordu. `GREATEST` zamanı
-  // monoton tutuyor, `WHERE status = 'OPEN'` kararı yazma anına taşıyor ve
-  // `RETURNING` yalnız **gerçekten** güncellenen satırları veriyor.
-  const guncellenen = await db.$queryRaw<{ id: string }[]>`
+  // Read-then-write could fail in two ways: a delayed request could overwrite
+  // a newer movement with an older `lastMovedAt`, and an item could close
+  // between the read and the write. `GREATEST` keeps time monotonic, the
+  // `WHERE status = 'OPEN'` clause moves the decision to write time, and
+  // `RETURNING` reports only **actually updated** rows.
+  const updatedItems = await db.$queryRaw<{ id: string }[]>`
     UPDATE "FollowUpItem"
     SET "lastMovedAt" = GREATEST("lastMovedAt", ${now}),
         "updatedAt" = GREATEST("updatedAt", ${now})
@@ -360,16 +352,15 @@ export async function touchFollowUps(
     RETURNING "id"
   `;
 
-  if (guncellenen.length === 0) return;
+  if (updatedItems.length === 0) return;
 
-  // **Hareket geçmişe de yazılır** (P3-R2-3). `lastMovedAt` güncel bir
-  // sütundur ve yalnız "şu an ne kadar hareketsiz" sorusunu cevaplar;
-  // kapanmış bir dönemin hesabı ondan yapılamaz. Olay içerik taşımaz, ama
-  // **kim** hareket ettirdiğini taşır: aktör soruyu soran ya da cevabı
-  // yazandır, maddenin sahibi değil (P3-R3-4).
+  // **Movement is also written to history** (P3-R2-3). `lastMovedAt` is a
+  // current-state column that answers only "how stale is it now?"; it cannot
+  // calculate a closed period. The event carries no content, but records
+  // **who** moved it: the asker or reply author, not the item owner (P3-R3-4).
   await db.followUpItemEvent.createMany({
-    data: guncellenen.map((madde) => ({
-      followUpId: madde.id,
+    data: updatedItems.map((item) => ({
+      followUpId: item.id,
       kind: "TOUCHED" as const,
       actorId,
       createdAt: now,
@@ -378,8 +369,8 @@ export async function touchFollowUps(
 }
 
 /**
- * Faaliyet iptal edilince açık maddeler otomatik kapanır (§5.5). Gerekçe
- * sabittir: kaydın kendisi ortadan kalktığı için takip edilecek bir şey yok.
+ * Closes open items when an activity is cancelled (§5.5). The reason is
+ * constant because the activity no longer exists as actionable work.
  */
 export async function closeFollowUpsForCancelledActivity(
   db: Pick<PrismaClient, "followUpItem" | "followUpItemEvent">,
@@ -387,33 +378,33 @@ export async function closeFollowUpsForCancelledActivity(
   actorId: string,
   now: Date,
 ): Promise<number> {
-  const acikOlanlar = await db.followUpItem.findMany({
+  const openItems = await db.followUpItem.findMany({
     where: { activityId, status: "OPEN" },
     select: { id: true },
   });
 
-  for (const madde of acikOlanlar) {
+  for (const item of openItems) {
     await db.followUpItem.update({
-      where: { id: madde.id },
+      where: { id: item.id },
       data: {
         status: "CLOSED",
         closedById: actorId,
         closedAt: now,
-        closingNote: "Faaliyet iptal edildi.",
+        closingNote: "Activity cancelled.",
         lastMovedAt: now,
       },
     });
 
     await db.followUpItemEvent.create({
       data: {
-        followUpId: madde.id,
+        followUpId: item.id,
         kind: "CLOSED",
         actorId,
-        note: "Faaliyet iptal edildi.",
+        note: "Activity cancelled.",
         createdAt: now,
       },
     });
   }
 
-  return acikOlanlar.length;
+  return openItems.length;
 }

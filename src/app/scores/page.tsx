@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { AppShell } from "@/components/shell/app-shell";
 import { ScoreCard } from "@/components/scoring/score-card";
 import { toShellUser } from "@/components/shell/shell-user";
@@ -19,75 +20,65 @@ import {
   readUserScore,
 } from "@/server/scoring/read";
 import { SETTING_KEYS, readBooleanSetting } from "@/server/settings/system-settings";
+import { getLocale } from "@/server/i18n/locale";
 
-// Ekip skorları (Görev 11.11).
-//
-// **Liste varsayılan olarak alfabetik sıralanır**, skora göre değil.
-// Varsayılan sıralama ekranın ne hakkında olduğunu söyler; skora göre açılan
-// bir liste "bu bir yarışma" der.
-//
-// Genel sıralama **yok**. Liste kapsam içidir: skor bir toplamdır ve toplam,
-// görülmeyen kaydı ele verir.
-
-export const metadata = { title: "Ekip skorları" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.scoresPage.pageTitle");
+}
 
 export default async function ScoresPage({
   searchParams,
 }: {
-  searchParams: Promise<{ siralama?: string }>;
+  searchParams: Promise<{ ranking?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
   const now = new Date();
-
   const params = await searchParams;
 
-  const [hamSkorlar, esik, subordinates, siralamaAcik, ownScore] = await Promise.all([
-    readTeamScores(prisma, viewer, now),
-    readDeclineThreshold(prisma),
-    subordinateUserIds(prisma, viewer.id),
-    readBooleanSetting(prisma, SETTING_KEYS.scoringRankingEnabled),
-    readUserScore(prisma, viewer, viewer.id, now),
-  ]);
+  const [rawScores, declineThreshold, subordinates, rankingEnabled, ownScore] =
+    await Promise.all([
+      readTeamScores(prisma, viewer, now),
+      readDeclineThreshold(prisma),
+      subordinateUserIds(prisma, viewer.id),
+      readBooleanSetting(prisma, SETTING_KEYS.scoringRankingEnabled),
+      readUserScore(prisma, viewer, viewer.id, now),
+    ]);
 
-  // Düşüş işareti geçmişe bakıyor. Trend **tek sorguda** okunuyor: kişi
-  // başına okunduğunda altı dönemlik grafik kişi başına altı çok tablolu
-  // hesap demekti (denetim 23.08.2026, bulgu 9).
-  const trendler = await readScoreTrends(
+  const trends = await readScoreTrends(
     prisma,
     viewer,
-    hamSkorlar.map((skor) => skor.userId),
+    rawScores.map((score) => score.userId),
   );
-  const skorlar = hamSkorlar.map((skor) => ({
-    ...skor,
-    declining: trendler.get(skor.userId)?.declining ?? false,
+  const scores = rawScores.map((score) => ({
+    ...score,
+    declining: trends.get(score.userId)?.declining ?? false,
   }));
 
-  // **Varsayılan sıralama alfabetik.** Skora göre sıralamak bir tıkla mümkün
-  // ama varsayılan değil: varsayılan sıralama ekranın ne hakkında olduğunu
-  // söyler ve skora göre açılan bir liste "bu bir yarışma" der.
-  //
-  // Sıralama **kapsam içidir**; genel sıralama yok. Skor bir toplamdır ve
-  // toplam, görülmeyen kaydı ele verir.
-  const skoraGore = siralamaAcik && params.siralama === "skor";
-  if (skoraGore) skorlar.sort((a, b) => b.total - a.total);
+  const sortByScore = rankingEnabled && params.ranking === "score";
+  if (sortByScore) scores.sort((a, b) => b.total - a.total);
 
   return (
     <AppShell user={await toShellUser(user, subordinates)}>
-      <Page isaret="skorlar">
+      <Page marker="scores">
         <PageHeader
-          title="Ekip skorları"
-          description="Bu dönemki puanları ve zaman içindeki değişimi görebilirsiniz. Liste yalnızca sizin kapsamınızdaki kişileri içerir."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Skorlar" }]}
+          title={t("screens.scoresPage.pageTitle")}
+          description={t("screens.scoresPage.pageDescription")}
+          breadcrumbs={[
+            { label: t("screens.scoresPage.dashboard"), href: "/" },
+            { label: t("screens.scoresPage.pageTitle") },
+          ]}
         />
 
         {ownScore ? (
           <Card>
             <CardHeader
-              title="Benim puanım"
-              description="Temel puanınız üç bölümden oluşur; takdir katkısı genel puana ayrıca eklenebilir."
+              title={t("screens.scoresPage.myScore")}
+              description={t("screens.scoresPage.myScoreDescription")}
             />
             <CardBody>
               <ScoreCard score={ownScore} appreciations={null} />
@@ -97,59 +88,71 @@ export default async function ScoresPage({
 
         <Card>
           <CardHeader
-            title="Bu dönem"
-            description={`Temel puan 100 üzerinden hesaplanır; takdir katkısıyla genel puan 100’ü aşabilir. ${esik} dönem üst üste düşüş görülen kişinin yanında uyarı gösterilir.`}
+            title={t("screens.scoresPage.currentPeriod")}
+            description={t("screens.scoresPage.currentPeriodDescription", {
+              periods: declineThreshold,
+            })}
             action={
-              siralamaAcik ? (
+              rankingEnabled ? (
                 <Link
-                  href={skoraGore ? "/scores" : "/scores?siralama=skor"}
+                  href={sortByScore ? "/scores" : "/scores?ranking=score"}
                   className="text-[length:var(--text-sm)] text-primary underline-offset-4 hover:underline"
                 >
-                  {skoraGore ? "Alfabetik sırala" : "Skora göre sırala"}
+                  {sortByScore
+                    ? t("screens.scoresPage.sortAlphabetically")
+                    : t("screens.scoresPage.sortByScore")}
                 </Link>
               ) : null
             }
           />
 
-          {skorlar.length === 0 ? (
+          {scores.length === 0 ? (
             <EmptyState
-              title="Gösterilecek skor yok"
-              description="Skor sistemi kapalı olabilir ya da ekibinizde puanlanan kullanıcı bulunmuyor. Sistem ayarlarından açılır."
+              title={t("screens.scoresPage.noScores")}
+              description={t("screens.scoresPage.noScoresDescription")}
             />
           ) : (
             <RecordList>
-              {skorlar.map((skor) => (
-                <RecordItem key={skor.userId} data-test="skor-satiri">
+              {scores.map((score) => (
+                <RecordItem key={score.userId} data-test="score-record">
                   <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                     <span className="flex min-w-0 items-center gap-3">
                       <Avatar
-                        user={{ id: skor.userId, fullName: skor.fullName }}
+                        user={{ id: score.userId, fullName: score.fullName }}
                         size={28}
+                        locale={locale}
                       />
                       <Link
-                        href={`/users/${skor.userId}`}
+                        href={`/users/${score.userId}`}
                         className="font-medium text-ink hover:underline"
                       >
-                        {skor.fullName}
+                        {score.fullName}
                       </Link>
                       <span className="text-[length:var(--text-xs)] text-muted">
-                        {skor.writtenDays}/{skor.expectedDays} iş günü
+                        {t("screens.scoresPage.businessDays", {
+                          written: score.writtenDays,
+                          expected: score.expectedDays,
+                        })}
                       </span>
                     </span>
 
                     <span className="flex items-center gap-3">
-                      {skor.declining ? (
-                        <Badge tone="danger">{esik} dönemdir düşüyor</Badge>
+                      {score.declining ? (
+                        <Badge tone="danger">
+                          {t("screens.scoresPage.declining", { periods: declineThreshold })}
+                        </Badge>
                       ) : null}
-                      {skor.regularity === 0 && skor.expectedDays > 0 ? (
-                        <Badge tone="danger">bu dönem kayıt yok</Badge>
+                      {score.regularity === 0 && score.expectedDays > 0 ? (
+                        <Badge tone="danger">{t("screens.scoresPage.noActivity")}</Badge>
                       ) : null}
                       <span className="mono text-[length:var(--text-lg)] font-semibold text-ink">
-                        {skor.total}
+                        {score.total}
                       </span>
-                      {skor.appreciationCount > 0 ? (
+                      {score.appreciationCount > 0 ? (
                         <span className="text-[length:var(--text-xs)] text-muted">
-                          +{skor.appreciationPoints} takdir katkısı
+                          {t("screens.scoresPage.recognitionContribution", {
+                            points: score.appreciationPoints,
+                          })}
                         </span>
                       ) : null}
                     </span>

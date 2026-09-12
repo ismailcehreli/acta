@@ -18,11 +18,8 @@ import {
   enqueueScoreRecalculation,
 } from "@/server/scoring/recalculation";
 
-// Faaliyet iptali (§5.5).
-//
-// Silme yoktur: kayıt üstü çizili kalır, aramada ve raporda "iptal" etiketiyle
-// görünür. İptal **geri alınamaz** — veritabanı da CANCELLED durumundan çıkışa
-// izin vermez. Hata varsa yeni faaliyet yazılır.
+// Activity cancellation (§5.5).
+
 
 export type CancelActivityDb = Pick<
   PrismaClient,
@@ -48,37 +45,30 @@ export type CancelError =
   | "not_allowed"
   | "already_cancelled"
   | "reason_required"
-  /** İptal yalnızca onaylanmış faaliyet için tanımlıdır (§5.4 durum modeli). */
+
   | "not_cancellable";
 
 export type CancelResult =
   | { ok: true; activity: Activity; closedConversationCount: number }
   | { ok: false; error: CancelError; message: string };
 
-// Yetkisiz erişim ile var olmayan kayıt **aynı** cevabı alır; durum bilgisi
-// (zaten iptal edilmiş vb.) ancak yetki doğrulandıktan sonra açıklanır
-// (denetim 18.08.2026, bulgu 1).
+
+
+// (audit finding 1, 18.08.2026).
 const MESSAGES: Record<CancelError, string> = {
-  not_found: "Faaliyet bulunamadı.",
-  not_allowed: "Faaliyet bulunamadı.",
-  already_cancelled: "Faaliyet zaten iptal edilmiş.",
-  reason_required: "İptal gerekçesi zorunludur.",
+  not_found: "Activity not found.",
+  not_allowed: "Activity not found.",
+  already_cancelled: "The activity has already been cancelled.",
+  reason_required: "A cancellation reason is required.",
   not_cancellable:
-    "Bu faaliyet iptal edilemez; iptal yalnızca kayda geçmiş faaliyetler için tanımlıdır.",
+    "This activity cannot be cancelled; cancellation is available only for recorded activities.",
 };
 
 function fail(error: CancelError): CancelResult {
   return { ok: false, error, message: MESSAGES[error] };
 }
 
-/**
- * İptal yetkisi: yazan kişi veya üstündeki herhangi bir yönetici (§5.5).
- *
- * Ek koşul: kişinin faaliyeti **görebiliyor** olması gerekir. Üst zincir, onay
- * sürecindeki kayıtları görmez (§8.2); görmediği bir kaydı iptal edebilmesi
- * tutarsız olurdu. Sürüm 1'de tüm kayıtlar onaylı doğduğu için bu koşul
- * pratikte hiçbir şeyi değiştirmez, ama kural doğru tarafta durur.
- */
+
 export async function canCancelActivity(
   db: VisibilityDb & Pick<PrismaClient, "user" | "orgUnit">,
   activity: Pick<Activity, "id" | "authorId" | "approvalStatus">,
@@ -105,32 +95,32 @@ export async function cancelActivity(
   const activity = await activityMaintenanceReader(db).findUnique({ where: { id: activityId } });
   if (!activity) return fail("not_found");
 
-  // Yetki, durum kontrollerinden **önce** doğrulanır: "zaten iptal edilmiş"
-  // cevabı yetkisiz birine kaydın durumunu açıklardı.
+
+
   //
-  // Bu **ön eleme**dir; kararın dayandığı kontrol kilitten sonra, işlemin
-  // içinde tekrarlanır (denetim 21.08.2026, bulgu 5).
+
+
   if (!(await canCancelActivity(db, activity, actor))) {
     return fail("not_allowed");
   }
 
   if (activity.approvalStatus === "CANCELLED") return fail("already_cancelled");
 
-  // İptal yalnızca onaylanmış faaliyet için tanımlıdır (§5.4). Veritabanı da
-  // başka geçişi reddediyor; burada durdurulmazsa kullanıcı 500 görürdü
-  // (denetim 18.08.2026, bulgu 6).
+
+
+  // (audit finding 6, 18.08.2026).
   if (activity.approvalStatus !== "APPROVED") return fail("not_cancellable");
 
   const result = await db.$transaction(async (tx) => {
     await acquireScoreMutationLock(tx);
 
-    // Faaliyet satırı kilitlenir: yetki, durum ve yan etkiler tek karara
-    // bağlanmalı. Kilitsiz kurguda düzeltme ile iptal yarışabiliyor, araya
-    // yeni konuşma açılabiliyordu (bulgu 5).
+
+
+
     await lockActivityForMaintenance(tx, activityId);
 
-    // Durum işlem içinde yeniden doğrulanır: araya başka bir iptal girmiş
-    // olabilir.
+
+    // The status may have changed while the row was unlocked.
     const fresh = await activityMaintenanceReader(tx).findUnique({
       where: { id: activityId },
       select: {
@@ -142,11 +132,11 @@ export async function cancelActivity(
     });
     if (!fresh || fresh.approvalStatus !== "APPROVED") return null;
 
-    // **Yetki de yeniden doğrulanır** (bulgu 5). Görünürlük güncel
-    // ağaçtan hesaplanır (§4.6): iptale basan yönetici kilitte beklerken
-    // yazar başka bir dala taşınırsa, kilit açıldığında artık o kaydı
-    // göremeyen biri kaydı iptal ediyordu. Ön kontrolün sonucu, yazmanın
-    // yapıldığı anın kanıtı değildir.
+
+
+
+
+
     if (!(await canCancelActivity(tx, fresh, actor))) return null;
 
     const openConversations = await tx.conversation.findMany({
@@ -176,16 +166,16 @@ export async function cancelActivity(
       now,
     });
 
-    // İptal edilen faaliyetin açık takip maddeleri **otomatik kapanır**
-    // (§5.5). Takip edilecek bir kayıt kalmadı; açık bırakmak, kimsenin
-    // kapatamayacağı bir madde üretirdi.
+
+
+
     await closeFollowUpsForCancelledActivity(tx, activityId, actorId, now);
 
-    // İptal edilen faaliyetin açık konuşmaları kapanır: cevabı beklenen soru
-    // ortada kalmaz (§5.5, §9.3). Kapanış türü **idari değildir** — idari
-    // kapatma sistem yöneticisinin gerekçeli işlemidir; ikisini aynı türde
-    // birleştirmek raporlamayı kirletiyordu (ürün sahibi kararı, açık soru 9).
-    // Gerekçe burada tekrarlanmaz; faaliyetin iptal kaydında durur.
+
+
+
+
+
     for (const conversation of openConversations) {
       await tx.conversation.update({
         where: { id: conversation.id },
@@ -198,9 +188,9 @@ export async function cancelActivity(
       });
     }
 
-    // Taraflara haber verilir. Gönderim işleyici sürecinde yapılacak
-    // (Görev 5.3); burada yalnızca kuyruğa yazılır — aynı işlemde, çünkü
-    // iptal olup bildirimin yazılmaması sessiz bir kayıptır.
+
+
+
     const recipients = new Set<string>();
     for (const conversation of openConversations) {
       recipients.add(conversation.askerId);
@@ -209,7 +199,7 @@ export async function cancelActivity(
     recipients.delete(actorId);
 
     for (const userId of recipients) {
-      // Aynı olay iki kez işlense de kişiye tek bildirim gider (§12.3).
+
       await enqueueNotification(tx, {
         userId,
         eventType: NOTIFICATION_EVENTS.activityCancelled,
@@ -228,16 +218,17 @@ export async function cancelActivity(
       objectType: AUDIT_OBJECTS.activity,
       objectId: activityId,
       action: AUDIT_ACTIONS.activityCancelled,
-      // Gerekçe metni **kayda geçmez**: sistem yöneticisi denetim izini görür
-      // ama içeriğe erişemez (§15.1). Gerekçenin kendisi iptal kaydındadır ve
-      // görünürlük modülünden geçer.
+      // The reason text is **not copied to the audit trail**: system
+      // administrators can see the audit entry without accessing content
+      // (§15.1). The reason remains on the cancellation record and follows
+      // the visibility module.
       detail: { closedConversationCount: openConversations.length },
       now,
     });
 
-    // Ekranı tazelemesi gerekenler: kapanan konuşmaların tarafları, faaliyeti
-    // yazan ve iptal eden. Bildirim listesinden farkı, iptal edenin de
-    // çıkarılmaması — kendi ekranı da değişti (Görev 7.3).
+    // Refresh the participants of closed conversations, the activity author,
+    // and the cancelling user. Unlike a notification list, the cancelling
+    // user is included because their screen also changed (Task 7.3).
     await publishRealtimeEvent(tx, {
       kind: REALTIME_EVENTS.activityCancelled,
       userIds: [...recipients, activity.authorId, actorId],
@@ -246,7 +237,7 @@ export async function cancelActivity(
     return { cancelled, closedConversationCount: openConversations.length };
   });
 
-  // İşlem içinde durum değişmişse (araya başka bir iptal girdi) sonuç yok.
+  // A concurrent cancellation changes the state, so there is no result.
   if (result === null) return fail("already_cancelled");
 
   return {

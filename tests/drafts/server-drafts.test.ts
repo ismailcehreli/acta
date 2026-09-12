@@ -13,32 +13,32 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Sunucu tarafındaki faaliyet taslakları (21.08.2026).
+// Server-side activity drafts.
 //
-// Sınanan asıl şey **taslağın kime ait olduğu**. Taslak yalnız yazarınındır;
-// yöneticisi de sistem yöneticisi de göremez, değiştiremez, silemez. Bu
-// dosyadaki her testin bir "başkası" tarafı var.
+// The core invariant tested is draft ownership. A draft belongs strictly to its author;
+// neither unit managers nor system administrators can view, modify, or delete it.
+// Every test in this file includes an unauthorized access verification.
 
 const NOW = new Date("2026-08-21T09:00:00.000Z");
 
-const TASLAK = {
+const DRAFT = {
   activityDate: "2026-08-21",
-  title: "Kalıp bakımı",
-  description: "Üç preste bakım yapıldı.",
+  title: "Mold maintenance",
+  description: "Maintenance performed on three presses.",
   targetDepartmentIds: [] as string[],
   openFollowUp: false,
   savedManually: false,
 };
 
-async function ikiKisi() {
-  const kok = await createOrgUnit({ name: "Şirket" });
-  const yazar = await createUser(kok.id, { email: "yazar@ornek.test" });
-  const baskasi = await createUser(kok.id, {
-    email: "baskasi@ornek.test",
+async function setupTwoUsers() {
+  const root = await createOrgUnit({ name: "Company" });
+  const author = await createUser(root.id, { email: "author@example.test" });
+  const otherUser = await createUser(root.id, {
+    email: "other@example.test",
     isUnitManager: true,
   });
 
-  return { yazar, baskasi };
+  return { author, otherUser };
 }
 
 beforeEach(async () => {
@@ -49,159 +49,159 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-describe("içerik kuralı", () => {
-  it("bomboş taslak anlamlı sayılmaz", () => {
+describe("content criteria", () => {
+  it("empty draft is not considered meaningful", () => {
     expect(hasDraftContent({ title: "", description: "" })).toBe(false);
     expect(hasDraftContent({ title: "   ", description: "\n\t" })).toBe(false);
   });
 
-  it("başlık ya da açıklamadan biri yeter", () => {
-    expect(hasDraftContent({ title: "Bir şey", description: "" })).toBe(true);
-    expect(hasDraftContent({ title: "", description: "Bir şey" })).toBe(true);
+  it("either title or description is sufficient", () => {
+    expect(hasDraftContent({ title: "Some title", description: "" })).toBe(true);
+    expect(hasDraftContent({ title: "", description: "Some description" })).toBe(true);
   });
 });
 
-describe("taslak kaydetme", () => {
-  it("yeni taslak açılır ve okunur", async () => {
-    const { yazar } = await ikiKisi();
+describe("saving drafts", () => {
+  it("new draft is created and readable", async () => {
+    const { author } = await setupTwoUsers();
 
-    const sonuc = await saveDraft(testDb, yazar.id, TASLAK, NOW);
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    const result = await saveDraft(testDb, author.id, DRAFT, NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
-    const okunan = await findDraft(testDb, yazar.id, sonuc.draft.id);
-    expect(okunan?.title).toBe("Kalıp bakımı");
-    expect(okunan?.savedManually).toBe(false);
+    const fetched = await findDraft(testDb, author.id, result.draft.id);
+    expect(fetched?.title).toBe("Mold maintenance");
+    expect(fetched?.savedManually).toBe(false);
   });
 
-  it("aynı taslak güncellenir, yenisi açılmaz", async () => {
-    const { yazar } = await ikiKisi();
+  it("same draft is updated instead of creating a new one", async () => {
+    const { author } = await setupTwoUsers();
 
-    const ilk = await saveDraft(testDb, yazar.id, TASLAK, NOW);
-    expect(ilk.ok).toBe(true);
-    if (!ilk.ok) return;
+    const first = await saveDraft(testDb, author.id, DRAFT, NOW);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
 
     await saveDraft(
       testDb,
-      yazar.id,
-      { ...TASLAK, id: ilk.draft.id, title: "Kalıp bakımı — düzeltildi" },
+      author.id,
+      { ...DRAFT, id: first.draft.id, title: "Mold maintenance — updated" },
       NOW,
     );
 
-    expect(await countDrafts(testDb, yazar.id)).toBe(1);
-    const okunan = await findDraft(testDb, yazar.id, ilk.draft.id);
-    expect(okunan?.title).toBe("Kalıp bakımı — düzeltildi");
+    expect(await countDrafts(testDb, author.id)).toBe(1);
+    const fetched = await findDraft(testDb, author.id, first.draft.id);
+    expect(fetched?.title).toBe("Mold maintenance — updated");
   });
 
-  it("bilerek kaydedilmiş taslak otomatik kaydetmeyle geri dönmez", async () => {
-    const { yazar } = await ikiKisi();
+  it("manually saved draft does not revert flag on subsequent auto-save", async () => {
+    const { author } = await setupTwoUsers();
 
-    const ilk = await saveDraft(
+    const first = await saveDraft(
       testDb,
-      yazar.id,
-      { ...TASLAK, savedManually: true },
+      author.id,
+      { ...DRAFT, savedManually: true },
       NOW,
     );
-    expect(ilk.ok).toBe(true);
-    if (!ilk.ok) return;
-    expect(ilk.draft.savedManually).toBe(true);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.draft.savedManually).toBe(true);
 
-    // Kullanıcı taslağa dönüp yazmaya devam etti; otomatik kaydetme çalıştı.
-    const sonra = await saveDraft(
+    // User resumed editing; automatic background save triggered.
+    const nextResult = await saveDraft(
       testDb,
-      yazar.id,
-      { ...TASLAK, id: ilk.draft.id, savedManually: false, title: "Devam" },
+      author.id,
+      { ...DRAFT, id: first.draft.id, savedManually: false, title: "Continued" },
       NOW,
     );
 
-    expect(sonra.ok).toBe(true);
-    if (!sonra.ok) return;
-    // Kullanıcının kararı kalıcı: "bekletiliyor" rozeti düşmemeli.
-    expect(sonra.draft.savedManually).toBe(true);
+    expect(nextResult.ok).toBe(true);
+    if (!nextResult.ok) return;
+    // Manual decision is sticky: the "held" badge must persist.
+    expect(nextResult.draft.savedManually).toBe(true);
   });
 
-  it("sınıra ulaşınca yeni taslak açılmaz", async () => {
-    const { yazar } = await ikiKisi();
+  it("does not create draft once limit is reached", async () => {
+    const { author } = await setupTwoUsers();
 
     for (let i = 0; i < MAX_DRAFTS_PER_USER; i += 1) {
-      const sonuc = await saveDraft(
+      const result = await saveDraft(
         testDb,
-        yazar.id,
-        { ...TASLAK, title: `Taslak ${i}` },
+        author.id,
+        { ...DRAFT, title: `Draft ${i}` },
         NOW,
       );
-      expect(sonuc.ok).toBe(true);
+      expect(result.ok).toBe(true);
     }
 
-    const fazlasi = await saveDraft(testDb, yazar.id, TASLAK, NOW);
-    expect(fazlasi.ok).toBe(false);
-    if (fazlasi.ok) return;
-    expect(fazlasi.error).toBe("too_many");
+    const excess = await saveDraft(testDb, author.id, DRAFT, NOW);
+    expect(excess.ok).toBe(false);
+    if (excess.ok) return;
+    expect(excess.error).toBe("too_many");
   });
 });
 
-describe("taslak yalnız yazarınındır", () => {
-  it("başkasının taslağı listelenmez", async () => {
-    const { yazar, baskasi } = await ikiKisi();
-    await saveDraft(testDb, yazar.id, TASLAK, NOW);
+describe("draft is isolated per author", () => {
+  it("another user's draft is not listed", async () => {
+    const { author, otherUser } = await setupTwoUsers();
+    await saveDraft(testDb, author.id, DRAFT, NOW);
 
-    expect(await listDrafts(testDb, baskasi.id)).toHaveLength(0);
-    expect(await countDrafts(testDb, baskasi.id)).toBe(0);
+    expect(await listDrafts(testDb, otherUser.id)).toHaveLength(0);
+    expect(await countDrafts(testDb, otherUser.id)).toBe(0);
   });
 
-  it("başkasının taslağı kimliğiyle bile okunmaz", async () => {
-    const { yazar, baskasi } = await ikiKisi();
-    const sonuc = await saveDraft(testDb, yazar.id, TASLAK, NOW);
-    if (!sonuc.ok) throw new Error("taslak kurulamadı");
+  it("another user's draft cannot be read even with its ID", async () => {
+    const { author, otherUser } = await setupTwoUsers();
+    const result = await saveDraft(testDb, author.id, DRAFT, NOW);
+    if (!result.ok) throw new Error("failed to save draft fixture");
 
-    // Kimliği bilmek yetmez: sorgu yazar kimliğini de arıyor.
-    expect(await findDraft(testDb, baskasi.id, sonuc.draft.id)).toBeNull();
+    // Knowing the ID is insufficient: query scopes by author ID.
+    expect(await findDraft(testDb, otherUser.id, result.draft.id)).toBeNull();
   });
 
-  it("başkasının taslağı güncellenemez", async () => {
-    const { yazar, baskasi } = await ikiKisi();
-    const sonuc = await saveDraft(testDb, yazar.id, TASLAK, NOW);
-    if (!sonuc.ok) throw new Error("taslak kurulamadı");
+  it("another user's draft cannot be updated", async () => {
+    const { author, otherUser } = await setupTwoUsers();
+    const result = await saveDraft(testDb, author.id, DRAFT, NOW);
+    if (!result.ok) throw new Error("failed to save draft fixture");
 
-    const deneme = await saveDraft(
+    const attempt = await saveDraft(
       testDb,
-      baskasi.id,
-      { ...TASLAK, id: sonuc.draft.id, title: "ELE GEÇİRİLDİ" },
+      otherUser.id,
+      { ...DRAFT, id: result.draft.id, title: "HIJACKED" },
       NOW,
     );
 
-    expect(deneme.ok).toBe(false);
-    // Taslak dokunulmamış olmalı.
-    const okunan = await findDraft(testDb, yazar.id, sonuc.draft.id);
-    expect(okunan?.title).toBe("Kalıp bakımı");
+    expect(attempt.ok).toBe(false);
+    // Draft must remain unchanged.
+    const fetched = await findDraft(testDb, author.id, result.draft.id);
+    expect(fetched?.title).toBe("Mold maintenance");
   });
 
-  it("başkasının taslağı silinemez", async () => {
-    const { yazar, baskasi } = await ikiKisi();
-    const sonuc = await saveDraft(testDb, yazar.id, TASLAK, NOW);
-    if (!sonuc.ok) throw new Error("taslak kurulamadı");
+  it("another user's draft cannot be deleted", async () => {
+    const { author, otherUser } = await setupTwoUsers();
+    const result = await saveDraft(testDb, author.id, DRAFT, NOW);
+    if (!result.ok) throw new Error("failed to save draft fixture");
 
-    expect(await deleteDraft(testDb, baskasi.id, sonuc.draft.id)).toBe(false);
-    expect(await countDrafts(testDb, yazar.id)).toBe(1);
+    expect(await deleteDraft(testDb, otherUser.id, result.draft.id)).toBe(false);
+    expect(await countDrafts(testDb, author.id)).toBe(1);
   });
 });
 
-describe("taslak silme", () => {
-  // Taslak **fiziksel olarak silinir**: olmuş bir şeyin kaydı değil, hiç
-  // gönderilmemiş bir müsvedde. Faaliyet silme yasağı buraya uzanmaz.
-  it("yazar kendi taslağını siler", async () => {
-    const { yazar } = await ikiKisi();
-    const sonuc = await saveDraft(testDb, yazar.id, TASLAK, NOW);
-    if (!sonuc.ok) throw new Error("taslak kurulamadı");
+describe("draft deletion", () => {
+  // Drafts are physically deleted: they are unsubmitted manuscripts, not historical events.
+  // The physical deletion prohibition on activities does not apply to drafts.
+  it("author deletes their own draft", async () => {
+    const { author } = await setupTwoUsers();
+    const result = await saveDraft(testDb, author.id, DRAFT, NOW);
+    if (!result.ok) throw new Error("failed to save draft fixture");
 
-    expect(await deleteDraft(testDb, yazar.id, sonuc.draft.id)).toBe(true);
-    expect(await countDrafts(testDb, yazar.id)).toBe(0);
+    expect(await deleteDraft(testDb, author.id, result.draft.id)).toBe(true);
+    expect(await countDrafts(testDb, author.id)).toBe(0);
   });
 
-  it("olmayan taslağı silmek hata değil, sonuçsuzdur", async () => {
-    const { yazar } = await ikiKisi();
+  it("deleting non-existent draft is a no-op returning false", async () => {
+    const { author } = await setupTwoUsers();
     expect(
-      await deleteDraft(testDb, yazar.id, "11111111-1111-4111-8111-111111111111"),
+      await deleteDraft(testDb, author.id, "11111111-1111-4111-8111-111111111111"),
     ).toBe(false);
   });
 });

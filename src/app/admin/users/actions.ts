@@ -8,6 +8,7 @@ import { AuthorizationError, requireSystemAdmin } from "@/server/authz/admin";
 import { canManageUser, manageableUnitIds } from "@/server/authz/unit-admin";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
 import { sendPasswordResetForUser } from "@/server/auth/reset";
 import {
   AUDIT_ACTIONS,
@@ -35,35 +36,36 @@ import {
   setUserPasswordSchema,
   updateUserSchema,
 } from "@/shared/schemas/user";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 
 import type { UserFormState } from "./form-state";
 
-/**
- * Personel işlemi yapabilen kişi: sistem yöneticisi ya da bölüm yöneticisi
- * (Görev 11.7). Hedefe göre kapsam ayrıca sınanır.
- */
+
 async function requireUserManager() {
+  const t = await getTranslations();
   const me = await getCurrentUser();
-  if (!me) throw new AuthorizationError("Oturum bulunamadı.");
+  if (!me) throw new AuthorizationError(t("auth.sessionNotFound"));
 
   if (!me.isSystemAdmin && !me.isUnitManager) {
-    throw new AuthorizationError(
-      "Bu işlem için sistem yöneticisi ya da birim yöneticisi yetkisi gerekir.",
-    );
+    throw new AuthorizationError(t("screens.users.newPermission"));
   }
 
   return me;
 }
 
-/** Hedef kullanıcı üzerinde işlem yetkisi; yoksa form hatası döner. */
-async function kapsamHatasi(
+/** Target user management permission; returns form error if unauthorized. */
+async function validateScope(
   actorId: string,
   targetId: string,
 ): Promise<UserFormState | null> {
   if (await canManageUser(prisma, actorId, targetId)) return null;
+  const t = await getTranslations();
 
   return {
-    error: "Bu kullanıcı üzerinde işlem yapma yetkiniz yok.",
+    error: t("screens.users.permissionManage"),
     success: null,
     blockers: null,
   };
@@ -75,26 +77,27 @@ function refreshUserPages(userId?: string): void {
 }
 
 /**
- * Müdürün açtığı hesabın geçici parolası.
+ * Temporary password for account created by manager.
  *
- * Kimseye gösterilmez ve hiçbir yere yazılmaz; yalnız hesabın parolasız
- * kalmaması için var. Kullanıcı kendi e-postasına giden bağlantıyla kendi
- * parolasını kurar.
+ * Never displayed to anyone and never logged anywhere; exists solely to ensure
+ * account does not remain passwordless. The user sets their own password via the
+ * link sent to their email.
  */
-function kimseninBilmedigiParola(): string {
+function generateRandomInitialPassword(): string {
   return randomBytes(24).toString("base64url");
 }
 
 /**
- * Bölüm müdürünün kullanıcı düzenlemesi: yalnız ad ve unvan.
+ * Department manager user update: full name and title only.
  *
- * Diğer alanlar okunmuyor bile — `managerUpdateUserSchema` üç alan tanıyor,
- * `updateUserByManager` geri kalanını veritabanından alıyor.
+ * Other fields are not even read — `managerUpdateUserSchema` accepts three fields,
+ * `updateUserByManager` fetches the rest from the database.
  */
-async function mudurGuncellemesi(
+async function managerUpdateUser(
   actorId: string,
   formData: FormData,
 ): Promise<UserFormState> {
+  const t = await getTranslations();
   const parsed = managerUpdateUserSchema.safeParse({
     id: formData.get("id"),
     fullName: formData.get("fullName"),
@@ -103,46 +106,47 @@ async function mudurGuncellemesi(
 
   if (!parsed.success) {
     return {
-      error: parsed.error.issues[0]?.message ?? "Girdi geçersiz",
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
       success: null,
       blockers: null,
     };
   }
 
-  const kapsam = await kapsamHatasi(actorId, parsed.data.id);
-  if (kapsam) return kapsam;
+  const scopeError = await validateScope(actorId, parsed.data.id);
+  if (scopeError) return scopeError;
 
-  // Kapsam listesi **taşınmıyor**: servise yalnız aktörün kimliği veriliyor
-  // ve kapsam yazma ifadesinin içinde, o anki ağaca göre hesaplanıyor.
-  // Yukarıdaki `kapsamHatasi` yalnız erken ve anlaşılır bir cevap için;
-  // kararın dayandığı kontrol serviste.
+  // Scope list is **not carried**: only the actor ID is passed to the service
+  // and computed inside the write statement according to the current tree.
+  // The `validateScope` check above is only for an early and clear response;
+  // the authoritative check lives in the service.
   const result = await updateUserByManager(prisma, parsed.data, actorId);
   if (!result.ok) {
-    return { error: result.message, success: null, blockers: null };
+    return {
+      error: localizeServiceMessage(t, "user", result),
+      success: null,
+      blockers: null,
+    };
   }
 
   refreshUserPages(result.user.id);
   return {
     error: null,
-    success: `"${result.user.fullName}" güncellendi.`,
+    success: t("screens.users.updated", { user: result.user.fullName }),
     blockers: null,
   };
 }
 
 /**
- * Bölüm müdürünün personel eklemesi.
+ * Department manager adding staff member.
  *
- * Müdür yalnız kim olduğunu ve nereye ekleneceğini söyler; **bayrakları ve
- * rolleri sunucu belirler.** İlk denemede kutuları formdan kaldırmak yeterli
- * sanılmıştı; eylem gönderilmeyen kutuyu "işaretlenmemiş" sayıp `false`
- * yazdı ve müdürün eklediği personelden faaliyet beklenmez, kişi
- * skorlanmaz oldu (23.08.2026, ikinci denetim turu). Ekranda alan olmaması
- * koruma değildir; karar veriyi yazan yolun üstünde durmalı.
+ * Manager only provides identity and destination unit; **flags and roles
+ * are determined by the server.**
  */
-async function mudurEklemesi(
+async function managerCreateUser(
   actorId: string,
   formData: FormData,
 ): Promise<UserFormState> {
+  const t = await getTranslations();
   const parsed = managerCreateUserSchema.safeParse({
     fullName: formData.get("fullName"),
     title: formData.get("title"),
@@ -152,19 +156,18 @@ async function mudurEklemesi(
 
   if (!parsed.success) {
     return {
-      error: parsed.error.issues[0]?.message ?? "Girdi geçersiz",
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
       success: null,
       blockers: null,
     };
   }
 
-  // Kapsam **serviste**, kaydın açıldığı işlemin içinde doğrulanıyor:
-  // burada hesaplanıp taşınsaydı, arada ağaç değiştiğinde bayat kalırdı.
+  // Scope is validated in the service within the transaction:
+  // computing and passing it here would risk staleness if the tree changed in between.
   const result = await createUser(
     prisma,
     {
       ...parsed.data,
-      // Sunucunun kararı; istekten okunmuyor.
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
@@ -172,25 +175,27 @@ async function mudurEklemesi(
       canAppreciate: false,
       canViewReports: false,
       canViewScoreReports: false,
-      // Müdür parola belirleyemez (tasarım, Paket F): müdürün bildiği parola,
-      // denetim izindeki "bu kaydı kim yazdı" cevabını zayıflatır.
-      initialPassword: kimseninBilmedigiParola(),
+      initialPassword: generateRandomInitialPassword(),
     },
     actorId,
     new Date(),
-    // Bildirim hesapla **aynı işlemde** yazılır: parolayı kimse bilmiyor,
-    // tek giriş yolu bu bağlantı. Yazılamazsa hesap da oluşmamalı.
     { welcomeEmail: true, managerScope: { actorId } },
   );
 
   if (!result.ok) {
-    return { error: result.message, success: null, blockers: null };
+    return {
+      error: localizeServiceMessage(t, "user", result),
+      success: null,
+      blockers: null,
+    };
   }
 
   refreshUserPages(result.user.id);
   return {
     error: null,
-    success: `"${result.user.fullName}" eklendi. Kullanıcıya parola belirleme bağlantısı içeren bir e-posta gönderildi.`,
+    success: t("screens.users.addedWithPasswordLink", {
+      user: result.user.fullName,
+    }),
     blockers: null,
   };
 }
@@ -200,48 +205,45 @@ export async function createUserAction(
   formData: FormData,
 ): Promise<UserFormState> {
   const me = await requireUserManager();
+  const t = await getTranslations();
 
   if (!me.isSystemAdmin) {
-    return mudurEklemesi(me.id, formData);
+    return managerCreateUser(me.id, formData);
   }
 
   const parsed = createUserSchema.safeParse({
     fullName: formData.get("fullName"),
-    // Unvan hiç okunmuyordu: yeni kullanıcı unvansız açılıyordu ve müdüre
-    // verilen iki alandan biri kâğıt üstünde kalıyordu (bulgu 13).
+    // Read the title so the manager form does not silently discard it.
     title: formData.get("title"),
     email: formData.get("email"),
     orgUnitId: formData.get("orgUnitId"),
     isUnitManager: formData.get("isUnitManager") === "on",
     isSystemAdmin: formData.get("isSystemAdmin") === "on",
     writesActivities: formData.get("writesActivities") === "on",
-    // İşaretsiz kutu hiçbir şey göndermez; `!== "off"` bu yüzden her zaman
-    // doğruydu ve skoru kapalı kullanıcı hiç açılamıyordu (bulgu 13).
+    // An unchecked checkbox sends nothing; compare explicitly with "on".
     isScored: formData.get("isScored") === "on",
     canAppreciate: formData.get("canAppreciate") === "on",
     canViewReports: formData.get("canViewReports") === "on",
     canViewScoreReports: formData.get("canViewScoreReports") === "on",
-    // **Müdür parola belirleyemez** (tasarım, Paket F). Müdürün bildiği
-    // parola, denetim izindeki "bu kaydı kim yazdı" cevabını zayıflatır.
-    // Hesap kimsenin bilmediği bir parolayla açılır; kullanıcı kendi
-    // e-postasına giden bağlantıyla kendi parolasını kurar.
+    // A manager cannot choose a password. The user sets it through the
+    // password setup link sent to their own email address.
     initialPassword: formData.get("initialPassword"),
   });
 
   if (!parsed.success) {
     return {
-      error: parsed.error.issues[0]?.message ?? "Girdi geçersiz",
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
       success: null,
       blockers: null,
     };
   }
 
-  // Müdür yalnız **kendi alt ağacına** personel açar; birim seçici zaten
-  // daraltılmış ama istek elle kurulabilir ve karar burada verilir.
-  const yonetilebilir = await manageableUnitIds(prisma, me.id);
-  if (!yonetilebilir.includes(parsed.data.orgUnitId)) {
+  // The unit selector is narrowed in the UI, but the server validates the
+  // manager's scope again because requests can be crafted manually.
+  const manageableUnits = await manageableUnitIds(prisma, me.id);
+  if (!manageableUnits.includes(parsed.data.orgUnitId)) {
     return {
-      error: "Bu birime kullanıcı ekleme yetkiniz yok.",
+      error: t("screens.users.permissionAddToUnit"),
       success: null,
       blockers: null,
     };
@@ -250,31 +252,29 @@ export async function createUserAction(
   const result = await createUser(prisma, parsed.data, me.id);
 
   if (!result.ok) {
-    return { error: result.message, success: null, blockers: null };
+    return {
+      error: localizeServiceMessage(t, "user", result),
+      success: null,
+      blockers: null,
+    };
   }
 
-  // Hoş geldiniz e-postası **isteğe bağlı** (21.08.2026, ürün sahibi isteği).
-  //
-  // Parola postayla gitmez: kullanıcıya sistemin adresi ve kendi giriş adresi
-  // bildirilir, parolayı kendisi belirlesin diye sıfırlama bağlantısı
-  // gönderilir. Sistem yöneticisinin belirlediği başlangıç parolası böylece
-  // hiç dolaşıma girmez.
-  let postaNotu = "Başlangıç parolasını kullanıcıya güvenli bir yoldan iletin.";
+  // Welcome email is optional. Passwords are never sent by email; the user
+  // receives a link and sets their own password.
+  let emailNote = t("screens.users.initialPasswordReminder");
 
   if (formData.get("sendWelcome") === "on") {
-    const posta = await sendWelcomeEmail(prisma, result.user.id, new Date());
+    const emailResult = await sendWelcomeEmail(prisma, result.user.id, new Date());
 
-    postaNotu = posta.ok
-      ? "Kullanıcıya parola belirleme bağlantısı içeren bir e-posta gönderildi."
-      : // Sessiz başarısızlık yok: hesap açıldı ama posta gitmediyse yönetici
-        // bunu bilmeli, yoksa kullanıcının e-postayı beklemesini söyler.
-        "Hesap açıldı ancak e-posta kuyruğa yazılamadı; parolayı kendiniz iletin.";
+    emailNote = emailResult.ok
+      ? t("screens.users.welcomeEmailSent")
+      : t("screens.users.welcomeEmailFailed");
   }
 
   refreshUserPages(result.user.id);
   return {
     error: null,
-    success: `"${result.user.fullName}" eklendi. ${postaNotu}`,
+    success: `${result.user.fullName}: ${emailNote}`,
     blockers: null,
   };
 }
@@ -284,47 +284,49 @@ export async function deactivateUserAction(
   formData: FormData,
 ): Promise<UserFormState> {
   const me = await requireUserManager();
+  const t = await getTranslations();
 
   const parsed = deactivateUserSchema.safeParse({ id: formData.get("id") });
 
   if (!parsed.success) {
-    return { error: "Kullanıcı bilgisi geçersiz.", success: null, blockers: null };
+    return { error: t("screens.users.invalidUser"), success: null, blockers: null };
   }
 
-  // Kendi hesabı **kapsam kontrolünden geçmez** ama buradaki mesaj daha
-  // açıklayıcı: `canDeactivate` "kendi hesabınızı pasifleştiremezsiniz" der,
-  // kapsam kontrolü ise yalnız "yetkiniz yok". Kullanıcıya sebebi söylenmeli.
+  // The actor's own account skips the scope check so the error can explain
+  // that self-deactivation is not allowed rather than only saying access is denied.
   if (parsed.data.id !== me.id) {
-    const kapsam = await kapsamHatasi(me.id, parsed.data.id);
-    if (kapsam) return kapsam;
+    const scopeError = await validateScope(me.id, parsed.data.id);
+    if (scopeError) return scopeError;
   }
 
-  // Geri dönüşü olmayan iki durum: kendini pasifleştirmek ve son sistem
-  // yöneticisini kapatmak. İkisi de sistemi yönetilemez bırakırdı.
-  const izin = await canDeactivate(prisma, me.id, parsed.data.id);
-  if (!izin.allowed) {
-    return { error: izin.message, success: null, blockers: null };
+  // Two irreversible cases: deactivating oneself and closing the last system
+  // admin. Both would leave the system unmanageable.
+  const permission = await canDeactivate(prisma, me.id, parsed.data.id);
+  if (!permission.allowed) {
+    return {
+      error: localizeServiceMessage(t, "user", permission),
+      success: null,
+      blockers: null,
+    };
   }
 
   const result = await deactivateUser(prisma, parsed.data.id, new Date(), me.id);
 
   if (!result.ok) {
     if (result.reason === "user_not_found") {
-      return { error: "Kullanıcı bulunamadı.", success: null, blockers: null };
+      return { error: t("screens.users.userNotFound"), success: null, blockers: null };
     }
     if (result.reason === "root_protected") {
       return {
-        error: "Ana sistem yöneticisi hesabı korunuyor.",
+        error: t("screens.users.rootProtected"),
         success: null,
         blockers: null,
       };
     }
 
-    // Engeller sessizce yutulmaz; sistem yöneticisi ne yapması gerektiğini
-    // görmeli (§4.6).
     return {
       error:
-        "Bu kullanıcının üzerinde açık iş var. Devredilmeden veya kapatılmadan pasifleştirilemez.",
+        t("screens.users.openWorkBlock"),
       success: null,
       blockers: result.blockers,
     };
@@ -333,7 +335,7 @@ export async function deactivateUserAction(
   refreshUserPages(result.user.id);
   return {
     error: null,
-    success: `"${result.user.fullName}" pasifleştirildi; açık oturumları kapatıldı.`,
+    success: t("screens.users.deactivated", { user: result.user.fullName }),
     blockers: null,
   };
 }
@@ -343,43 +345,43 @@ export async function reactivateUserAction(
   formData: FormData,
 ): Promise<UserFormState> {
   const me = await requireUserManager();
+  const t = await getTranslations();
 
   const parsed = deactivateUserSchema.safeParse({ id: formData.get("id") });
 
   if (!parsed.success) {
-    return { error: "Kullanıcı bilgisi geçersiz.", success: null, blockers: null };
+    return { error: t("screens.users.invalidUser"), success: null, blockers: null };
   }
 
-  const kapsam = await kapsamHatasi(me.id, parsed.data.id);
-  if (kapsam) return kapsam;
+  const scopeError = await validateScope(me.id, parsed.data.id);
+  if (scopeError) return scopeError;
 
   const result = await reactivateUser(prisma, parsed.data.id, new Date(), me.id);
 
   if (!result.ok) {
-    const mesajlar: Record<typeof result.reason, string> = {
-      user_not_found: "Kullanıcı bulunamadı.",
-      already_active: "Kullanıcı zaten aktif.",
+    const messages: Record<typeof result.reason, string> = {
+      user_not_found: t("screens.users.userNotFound"),
+      already_active: t("screens.users.alreadyActive"),
       inactive_org_unit:
-        "Kullanıcının birimi pasif. Önce birimi organizasyon ekranından aktifleştirin.",
+        t("screens.users.inactiveUnit"),
     };
 
-    return { error: mesajlar[result.reason], success: null, blockers: null };
+    return { error: messages[result.reason], success: null, blockers: null };
   }
 
   refreshUserPages(parsed.data.id);
   return {
     error: null,
-    // Yöneticilik ve parola konusundaki iki gerçek açıkça yazılır; kullanıcı
-    // "her şey eskisi gibi geri geldi" varsayımına düşmemeli.
-    success: `"${result.user.fullName}" aktifleştirildi. Birim yöneticiliği geri verilmedi; parolası değişmedi.`,
+    // Explain that manager access and the password are not restored automatically.
+    success: t("screens.users.reactivated", { user: result.user.fullName }),
     blockers: null,
   };
 }
 
 /**
- * Pasifleştirmenin önündeki açık konuşmaları gerekçeyle kapatır (§9.3).
- * Ayrı bir adımdır: kapatma ile pasifleştirme tek düğmeye bağlansaydı, sistem
- * yöneticisi ne kapattığını görmeden onaylamış olurdu.
+ * Close open conversations with a reason before deactivation (§9.3).
+ * This is a separate step so the administrator explicitly reviews what will
+ * be closed before confirming the account change.
  */
 export async function closeConversationsForUserAction(
   _previous: UserFormState,
@@ -387,7 +389,8 @@ export async function closeConversationsForUserAction(
 ): Promise<UserFormState> {
   await requireSystemAdmin();
   const me = await getCurrentUser();
-  if (!me) return { error: "Oturum bulunamadı.", success: null, blockers: null };
+  const t = await getTranslations();
+  if (!me) return { error: t("auth.sessionNotFound"), success: null, blockers: null };
 
   const parsed = closeConversationsForUserSchema.safeParse({
     id: formData.get("id"),
@@ -396,7 +399,7 @@ export async function closeConversationsForUserAction(
 
   if (!parsed.success) {
     return {
-      error: parsed.error.issues[0]?.message ?? "Girdi geçersiz",
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
       success: null,
       blockers: null,
     };
@@ -404,7 +407,7 @@ export async function closeConversationsForUserAction(
 
   if (!(await canManageUser(prisma, me.id, parsed.data.id))) {
     return {
-      error: "Bu kullanıcı üzerinde işlem yapma yetkiniz yok.",
+      error: t("screens.users.permissionManage"),
       success: null,
       blockers: null,
     };
@@ -420,11 +423,14 @@ export async function closeConversationsForUserAction(
 
   refreshUserPages(parsed.data.id);
 
-  // Kısmi başarı gizlenmez: kapanmayan konuşma varsa pasifleştirme yine
-  // engellenecek ve sebebi ekranda görünmeli.
+  // Do not hide partial success: remaining open conversations still block
+  // deactivation and must remain visible to the administrator.
   if (outcome.failed > 0) {
     return {
-      error: `${outcome.closed} konuşma kapatıldı, ${outcome.failed} tanesi kapatılamadı.`,
+      error: t("screens.users.partialConversationClose", {
+        closed: outcome.closed,
+        failed: outcome.failed,
+      }),
       success: null,
       blockers: null,
     };
@@ -434,8 +440,8 @@ export async function closeConversationsForUserAction(
     error: null,
     success:
       outcome.closed === 0
-        ? "Kapatılacak açık konuşma yok."
-        : `${outcome.closed} konuşma gerekçeyle kapatıldı.`,
+        ? t("screens.users.noOpenConversations")
+        : t("screens.users.conversationsClosed", { count: outcome.closed }),
     blockers: null,
   };
 }
@@ -445,14 +451,12 @@ export async function updateUserAction(
   formData: FormData,
 ): Promise<UserFormState> {
   const me = await requireUserManager();
+  const t = await getTranslations();
 
-  // **Müdür ve sistem yöneticisi ayrı yollardan geçer.** Tek bir şemayla
-  // ilerleyip sonra fazlalığı temizlemek yetmiyordu: temizlik iki bayrakla
-  // sınırlıydı, e-posta ve birim geçiyordu ve hesap devralınabiliyordu
-  // (denetim 23.08.2026, bulgu 4). Müdür yolu artık fazla alanı
-  // **hiç görmüyor**.
+  // Managers and system administrators use separate input paths so a manager
+  // never receives or submits fields outside the manager update contract.
   if (!me.isSystemAdmin) {
-    return mudurGuncellemesi(me.id, formData);
+    return managerUpdateUser(me.id, formData);
   }
 
   if (me.isRoot && String(formData.get("id") ?? "") === me.id) {
@@ -468,19 +472,25 @@ export async function updateUserAction(
 
     if (!rootParsed.success) {
       return {
-        error: rootParsed.error.issues[0]?.message ?? "Girdi geçersiz",
+        error: localizeValidationIssue(t, rootParsed.error.issues[0]),
         success: null,
         blockers: null,
       };
     }
 
     const result = await updateRootSelf(prisma, rootParsed.data, me.id);
-    if (!result.ok) return { error: result.message, success: null, blockers: null };
+    if (!result.ok) {
+      return {
+        error: localizeServiceMessage(t, "user", result),
+        success: null,
+        blockers: null,
+      };
+    }
 
     refreshUserPages(me.id);
     return {
       error: null,
-      success: "Ana hesap ayarları güncellendi.",
+      success: t("screens.users.rootSettingsUpdated"),
       blockers: null,
     };
   }
@@ -502,21 +512,21 @@ export async function updateUserAction(
 
   if (!parsed.success) {
     return {
-      error: parsed.error.issues[0]?.message ?? "Girdi geçersiz",
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
       success: null,
       blockers: null,
     };
   }
 
-  const kapsam = await kapsamHatasi(me.id, parsed.data.id);
-  if (kapsam) return kapsam;
+  const scopeError = await validateScope(me.id, parsed.data.id);
+  if (scopeError) return scopeError;
 
-  // Müdür kişiyi **başka birime taşıyamaz**: hedef birim kendi ağacının
-  // dışında olabilir ve taşıma ağaç kararıdır.
-  const yonetilebilir = await manageableUnitIds(prisma, me.id);
-  if (!yonetilebilir.includes(parsed.data.orgUnitId)) {
+  // Manager cannot move user to another unit: destination unit may be outside
+  // their tree and moving is an org tree decision.
+  const manageableUnits = await manageableUnitIds(prisma, me.id);
+  if (!manageableUnits.includes(parsed.data.orgUnitId)) {
     return {
-      error: "Kullanıcıyı bu birime taşıma yetkiniz yok.",
+      error: t("screens.users.unitPermission"),
       success: null,
       blockers: null,
     };
@@ -524,34 +534,31 @@ export async function updateUserAction(
 
   const result = await updateUser(prisma, parsed.data, me.id);
   if (!result.ok) {
-    return { error: result.message, success: null, blockers: null };
+    return {
+      error: localizeServiceMessage(t, "user", result),
+      success: null,
+      blockers: null,
+    };
   }
 
   refreshUserPages(result.user.id);
   return {
     error: null,
-    success: `"${result.user.fullName}" güncellendi.`,
+    success: t("screens.users.updated", { user: result.user.fullName }),
     blockers: null,
   };
 }
 
 /**
- * Sistem yöneticisi bir kullanıcıya yeni parola belirler. Mevcut parola
- * sorulmaz: buraya zaten kullanıcı parolasını unuttuğu için gelinir (§15.1).
- */
-/**
- * Parolayı **doğrudan belirleme** — yalnız sistem yöneticisi (Görev 11.7).
- *
- * Bölüm müdürü bu yolu kullanamaz; onun için `triggerPasswordResetAction`
- * var. Müdürün belirlediği parola, müdürün bildiği paroladır: o andan sonra
- * "bu kaydı kim yazdı" sorusunun cevabı kesin olmaktan çıkar ve denetim
- * izinin değeri düşer.
+ * System admin sets a new password for a user. Current password is not requested:
+ * this action is invoked because the user forgot their password (§15.1).
  */
 export async function setUserPasswordAction(
   _previous: UserFormState,
   formData: FormData,
 ): Promise<UserFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = setUserPasswordSchema.safeParse({
     id: formData.get("id"),
@@ -560,14 +567,14 @@ export async function setUserPasswordAction(
 
   if (!parsed.success) {
     return {
-      error: parsed.error.issues[0]?.message ?? "Girdi geçersiz",
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
       success: null,
       blockers: null,
     };
   }
 
-  const kapsam = await kapsamHatasi(me.id, parsed.data.id);
-  if (kapsam) return kapsam;
+  const scopeError = await validateScope(me.id, parsed.data.id);
+  if (scopeError) return scopeError;
 
   const result = await setUserPassword(
     prisma,
@@ -577,40 +584,45 @@ export async function setUserPasswordAction(
     me.id,
   );
 
-  if (!result.ok) return { error: result.message, success: null, blockers: null };
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "user", result),
+      success: null,
+      blockers: null,
+    };
+  }
 
   refreshUserPages(parsed.data.id);
   return {
     error: null,
-    success:
-      `Parola değiştirildi; ${result.revokedSessionCount} açık oturum kapatıldı. ` +
-      "Yeni parolayı kullanıcıya güvenli bir yoldan iletin.",
+    success: t("screens.users.passwordChanged", {
+      count: result.revokedSessionCount,
+    }),
     blockers: null,
   };
 }
 
 /**
- * Şifre sıfırlama bağlantısı gönderir (Görev 11.7).
+ * Sends a password reset link (Task 11.7).
  *
- * Bölüm müdürü ve sistem yöneticisi tetikler. Parola **değişmez**; bağlantı
- * personelin kendi e-postasına gider ve şifreyi kişi kendisi belirler.
- * İşlem denetim izine yazılır: "kim, kimin için tetikledi" sonradan
- * sorulabilmeli.
+ * Triggered by unit manager or system admin. Password **does not change**;
+ * link goes to staff member's own email and user sets password themselves.
  */
 export async function triggerPasswordResetAction(
   _previous: UserFormState,
   formData: FormData,
 ): Promise<UserFormState> {
   const me = await requireUserManager();
+  const t = await getTranslations();
 
-  const hedefId = String(formData.get("id") ?? "");
-  const kapsam = await kapsamHatasi(me.id, hedefId);
-  if (kapsam) return kapsam;
+  const targetId = String(formData.get("id") ?? "");
+  const scopeError = await validateScope(me.id, targetId);
+  if (scopeError) return scopeError;
 
-  const sonuc = await sendPasswordResetForUser(prisma, hedefId, new Date());
-  if (!sonuc.ok) {
+  const result = await sendPasswordResetForUser(prisma, targetId, new Date());
+  if (!result.ok) {
     return {
-      error: "Sıfırlama bağlantısı gönderilemedi; hesap pasif olabilir.",
+      error: t("screens.users.resetLinkFailed"),
       success: null,
       blockers: null,
     };
@@ -619,17 +631,16 @@ export async function triggerPasswordResetAction(
   await recordAudit(prisma, {
     userId: me.id,
     objectType: AUDIT_OBJECTS.user,
-    objectId: hedefId,
+    objectId: targetId,
     action: AUDIT_ACTIONS.userUpdated,
-    detail: { islem: "şifre sıfırlama bağlantısı gönderildi" },
+    detail: { operation: "password_reset_link_sent" },
     now: new Date(),
   });
 
-  refreshUserPages(hedefId);
+  refreshUserPages(targetId);
   return {
     error: null,
-    success:
-      "Sıfırlama bağlantısı kullanıcının e-posta adresine gönderildi. Parolayı kendisi belirleyecek.",
+    success: t("screens.users.resetLinkSent"),
     blockers: null,
   };
 }

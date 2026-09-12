@@ -1,9 +1,6 @@
 import { redirect } from "next/navigation";
 
-import {
-  absenceDecisionRouteLabel,
-  AbsenceStatusBadge,
-} from "@/components/absence/absence-status";
+import { AbsenceStatusBadge } from "@/components/absence/absence-status";
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
 import { Badge } from "@/components/ui/badge";
@@ -14,22 +11,38 @@ import { listAbsenceDeputies, listOwnAbsences } from "@/server/absence/service";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { subordinateUserIds } from "@/server/authz/visibility";
 import { prisma } from "@/server/db";
+import { getLocale } from "@/server/i18n/locale";
 import { SETTING_KEYS, readNumericSetting } from "@/server/settings/system-settings";
 import { formatDay, formatInstantShort, toDateValue } from "@/shared/format/date-time";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import { CancelOwnAbsenceButton, MarkOwnAbsenceForm } from "./absence-forms";
 
-// Kişinin kendi "faaliyet beklenmiyor" günleri.
-// Çalışanın talebi yöneticisi onaylayana kadar geçerli değildir; yöneticinin
-// kendi kaydı ise doğrudan onaylı oluşturulur.
+function decisionRouteKey(route: string): string {
+  return route === "DIRECT_ENTRY"
+    ? "screens.absence.routeDirectEntry"
+    : route === "DIRECT_MANAGER"
+      ? "screens.absence.routeDirectManager"
+      : route === "DEPUTY"
+        ? "screens.absence.routeDeputy"
+        : "screens.absence.routeUpperManager";
+}
 
-export const metadata = { title: "İzinlerim" };
+
+
+
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.absence.pageTitle");
+}
 
 export default async function OwnAbsencePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const [donemler, enUzun, subordinates, deputyPeople] = await Promise.all([
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
+
+  const [periods, maxSelfAbsenceDays, subordinates, deputyPeople] = await Promise.all([
     listOwnAbsences(prisma, user.id),
     readNumericSetting(prisma, SETTING_KEYS.selfAbsenceMaxDays),
     subordinateUserIds(prisma, user.id),
@@ -40,19 +53,19 @@ export default async function OwnAbsencePage() {
     <AppShell user={await toShellUser(user, subordinates)}>
       <Page>
         <PageHeader
-          title="İzinlerim"
-          description="İzinli, raporlu veya başka bir nedenle faaliyet giremeyeceğiniz günleri buraya yazın. Çalışanların talepleri yöneticisi onayladıktan sonra geçerli olur; yöneticiler kendi kayıtlarını doğrudan geçerli olarak oluşturur."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "İzinlerim" }]}
+          title={t("screens.absence.pageTitle")}
+          description={t("screens.absence.pageDescription")}
+          breadcrumbs={[{ label: t("screens.absence.dashboard"), href: "/" }, { label: t("screens.absence.pageTitle") }]}
         />
 
         <Card>
           <CardHeader
-            title="İzin günü ekle"
-            description="Çalışansanız talebiniz yöneticinize gider. Onaylanana kadar bu günler hatırlatma ve katılım hesabından düşülmez."
+            title={t("screens.absence.addTitle")}
+            description={t("screens.absence.addDescription")}
           />
           <CardBody>
             <MarkOwnAbsenceForm
-              maxDays={enUzun}
+              maxDays={maxSelfAbsenceDays}
               deputyPeople={user.isUnitManager ? deputyPeople : []}
             />
           </CardBody>
@@ -60,87 +73,85 @@ export default async function OwnAbsencePage() {
 
         <Card>
           <CardHeader
-            title="Girdiğim izinler"
-            description="Yöneticinizin sizin için girdiği kayıtlar da burada görünür. Yanlış girdiğiniz bir kaydı gerekçe yazarak iptal edebilirsiniz; kayıt silinmez, üstü çizili kalır."
+            title={t("screens.absence.listTitle")}
+            description={t("screens.absence.listDescription")}
           />
 
-          {donemler.length === 0 ? (
+          {periods.length === 0 ? (
             <EmptyState
-              title="İzin kaydı yok"
-              description="İzinli ya da raporlu olacağınız günleri önceden girerseniz o günlerde faaliyet hatırlatması almazsınız."
+              title={t("screens.absence.noRecords")}
+              description={t("screens.absence.noRecordsDescription")}
             />
           ) : (
             <RecordList>
-              {donemler.map((donem) => {
-                const iptal = donem.cancelledReason !== null;
+              {periods.map((period) => {
+                const cancelled = period.cancelledReason !== null;
 
                 return (
-                  <RecordItem key={donem.id} data-test="kendi-donem-satiri">
+                  <RecordItem key={period.id} data-test="own-period-row">
                     <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
                       <div className="min-w-0">
                         <p
                           className={
-                            iptal
+                            cancelled
                               ? "font-medium text-faint line-through"
                               : "font-medium text-ink"
                           }
                         >
-                          {formatDay(toDateValue(donem.startDate))} –{" "}
-                          {formatDay(toDateValue(donem.endDate))}
+                          {formatDay(toDateValue(period.startDate), locale)} –{" "}
+                          {formatDay(toDateValue(period.endDate), locale)}
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                          {iptal ? (
-                            <Badge tone="cancelled">İptal edildi</Badge>
+                          {cancelled ? (
+                            <Badge tone="cancelled">{t("screens.absence.cancelled")}</Badge>
                           ) : (
-                            <AbsenceStatusBadge status={donem.status} />
+                            <AbsenceStatusBadge status={period.status} />
                           )}
                         </div>
                         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                          <RecordField label="Kaydı giren">
-                            {donem.markedBySelf ? "Kendim" : "Yöneticim"}
+                          <RecordField label={t("screens.absence.enteredBy")}>
+                            {period.markedBySelf ? t("screens.absence.self") : t("screens.absence.manager")}
                           </RecordField>
-                          {donem.note ? (
-                            <RecordField label="Not">{donem.note}</RecordField>
+                          {period.note ? (
+                            <RecordField label={t("screens.absence.note")}>{period.note}</RecordField>
                           ) : null}
-                          {donem.deputyName ? (
-                            <RecordField label="Vekil">{donem.deputyName}</RecordField>
+                          {period.deputyName ? (
+                            <RecordField label={t("screens.absence.deputy")}>{period.deputyName}</RecordField>
                           ) : null}
-                          {donem.decidedByName ? (
+                          {period.decidedByName ? (
                             <RecordField
-                              label={donem.status === "REJECTED" ? "Reddeden" : "Onaylayan"}
+                              label={period.status === "REJECTED" ? t("screens.absence.rejectedBy") : t("screens.absence.approvedBy")}
                             >
-                              {donem.decidedByName}
-                              {donem.decisionRoute
-                                ? ` · ${absenceDecisionRouteLabel(donem.decisionRoute)}`
-                                : ""}
+                              {period.decidedByName}
+                              {period.decisionRoute ? ` · ${t(decisionRouteKey(period.decisionRoute))}` : ""}
                             </RecordField>
                           ) : null}
-                          {donem.decidedAt ? (
-                            <RecordField label="Karar zamanı">
-                              {formatInstantShort(donem.decidedAt)}
+                          {period.decidedAt ? (
+                            <RecordField label={t("screens.absence.decisionTime")}>
+                              {formatInstantShort(period.decidedAt, locale)}
                             </RecordField>
                           ) : null}
                         </div>
-                        {iptal ? (
+                        {cancelled ? (
                           <p className="mt-2 text-[length:var(--text-sm)] text-muted">
                             <span className="font-medium text-ink">
-                              İptal gerekçesi:
+                              {t("screens.absence.cancellationReasonText")}
                             </span>{" "}
-                            {donem.cancelledReason}
+                            {period.cancelledReason}
                           </p>
                         ) : null}
-                        {!iptal && donem.decisionReason ? (
+                        {!cancelled && period.decisionReason ? (
                           <p className="mt-2 text-[length:var(--text-sm)] text-muted">
                             <span className="font-medium text-ink">
-                              Yönetici açıklaması:
+                              {t("screens.absence.managerExplanation")}
                             </span>{" "}
-                            {donem.decisionReason}
+                            {period.decisionReason}
                           </p>
                         ) : null}
                       </div>
 
-                      {iptal || donem.status === "REJECTED" ? null : (
-                        <CancelOwnAbsenceButton id={donem.id} />
+                      {cancelled || period.status === "REJECTED" ? null : (
+                        <CancelOwnAbsenceButton id={period.id} />
                       )}
                     </div>
                   </RecordItem>

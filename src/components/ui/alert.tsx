@@ -1,31 +1,34 @@
-import type { ReactNode } from "react";
+"use client";
 
-// Bildirim şeridi (§9).
+import type { ReactNode } from "react";
+import { useTranslations } from "@/components/i18n/provider";
+
+
 //
-// Kutu değil **şerit**: sol kenarda kalın bir kenar işareti, düz bir yüzey,
-// köşeli. Renk tek taşıyıcı değildir — her tonun ikonu ve genellikle bir
-// başlığı vardır.
+
+
+
 //
-// `role` bilinçli seçilir: hata ve uyarı `alert` (ekran okuyucu sözünü keser),
-// bilgi ve başarı `status` (kibarca sıraya girer). Her şeye `alert` demek,
-// ekran okuyucu kullanıcısını sürekli böler.
+
+
+
 
 export type AlertTone = "info" | "success" | "waiting" | "correction" | "danger";
 
-const TONES: Record<AlertTone, { yuzey: string; kenar: string; ikon: string }> = {
-  info: { yuzey: "bg-info-soft", kenar: "border-info", ikon: "text-info" },
-  success: { yuzey: "bg-success-soft", kenar: "border-success", ikon: "text-success" },
-  waiting: { yuzey: "bg-waiting-soft", kenar: "border-waiting", ikon: "text-waiting" },
+const TONES: Record<AlertTone, { surface: string; borderClass: string; iconClass: string }> = {
+  info: { surface: "bg-info-soft", borderClass: "border-info", iconClass: "text-info" },
+  success: { surface: "bg-success-soft", borderClass: "border-success", iconClass: "text-success" },
+  waiting: { surface: "bg-waiting-soft", borderClass: "border-waiting", iconClass: "text-waiting" },
   correction: {
-    yuzey: "bg-correction-soft",
-    kenar: "border-correction",
-    ikon: "text-correction",
+    surface: "bg-correction-soft",
+    borderClass: "border-correction",
+    iconClass: "text-correction",
   },
-  danger: { yuzey: "bg-danger-soft", kenar: "border-danger", ikon: "text-danger" },
+  danger: { surface: "bg-danger-soft", borderClass: "border-danger", iconClass: "text-danger" },
 };
 
 function AlertIcon({ tone }: { tone: AlertTone }) {
-  const ortak = {
+  const shared = {
     width: 16,
     height: 16,
     viewBox: "0 0 16 16",
@@ -37,7 +40,7 @@ function AlertIcon({ tone }: { tone: AlertTone }) {
 
   if (tone === "success") {
     return (
-      <svg {...ortak}>
+      <svg {...shared}>
         <path d="M3.5 8.5 6.5 11.5 12.5 4.5" strokeLinecap="square" />
       </svg>
     );
@@ -45,7 +48,7 @@ function AlertIcon({ tone }: { tone: AlertTone }) {
 
   if (tone === "danger") {
     return (
-      <svg {...ortak}>
+      <svg {...shared}>
         <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="square" />
       </svg>
     );
@@ -53,7 +56,7 @@ function AlertIcon({ tone }: { tone: AlertTone }) {
 
   if (tone === "correction") {
     return (
-      <svg {...ortak}>
+      <svg {...shared}>
         <path d="M8 2 15 14H1L8 2Z" strokeLinejoin="miter" />
         <path d="M8 6.6v3M8 11.4v.5" strokeLinecap="square" />
       </svg>
@@ -62,7 +65,7 @@ function AlertIcon({ tone }: { tone: AlertTone }) {
 
   if (tone === "waiting") {
     return (
-      <svg {...ortak}>
+      <svg {...shared}>
         <circle cx="8" cy="8" r="6" />
         <path d="M8 4.6V8l2.4 1.6" strokeLinecap="square" />
       </svg>
@@ -70,7 +73,7 @@ function AlertIcon({ tone }: { tone: AlertTone }) {
   }
 
   return (
-    <svg {...ortak}>
+    <svg {...shared}>
       <path d="M8 7v5M8 4v.7" strokeLinecap="square" />
       <circle cx="8" cy="8" r="6.2" />
     </svg>
@@ -86,17 +89,17 @@ export function Alert({
   tone?: AlertTone;
   title?: string;
   children?: ReactNode;
-  /** Şeridin sağındaki tek eylem; varsa gerçekten çalışan bir şey olmalı. */
+
   action?: ReactNode;
 }) {
-  const stil = TONES[tone];
+  const style = TONES[tone];
 
   return (
     <div
       role={tone === "danger" || tone === "correction" ? "alert" : "status"}
-      className={`flex items-start gap-3 border-s-[3px] ${stil.kenar} ${stil.yuzey} px-3.5 py-3`}
+      className={`flex items-start gap-3 border-s-[3px] ${style.borderClass} ${style.surface} px-3.5 py-3`}
     >
-      <span className={`mt-px shrink-0 ${stil.ikon}`}>
+      <span className={`mt-px shrink-0 ${style.iconClass}`}>
         <AlertIcon tone={tone} />
       </span>
 
@@ -120,12 +123,7 @@ export function Alert({
   );
 }
 
-/**
- * Form sonucu. Hata varsa hata, yoksa başarı; ikisi de yoksa hiçbir şey.
- *
- * Hata şeridi `alert` rolüyle gelir ve odaklanabilir: form gönderiminde
- * hata çıktığında ekran okuyucu kullanıcısı sonucu duyar (§10).
- */
+/** Render a form result; empty results render nothing. */
 export function FormMessage({
   error,
   success,
@@ -133,9 +131,10 @@ export function FormMessage({
   error?: string | null;
   success?: string | null;
 }) {
+  const t = useTranslations();
   if (error) {
     return (
-      <Alert tone="danger" title="İşlem tamamlanamadı">
+      <Alert tone="danger" title={t("common.operationFailed")}>
         {error}
       </Alert>
     );

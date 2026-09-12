@@ -18,18 +18,15 @@ import {
 import { createActivity, createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Web push (§12.3, Görev 5.3b).
+// Web push (§12.3, Task 5.3b).
 //
-// Kritik davranış: **ölü abonelik düşürülür.** Tutulsaydı her turda boşuna
-// denenir, kuyruk hiç boşalmaz ve günlük hata mesajıyla dolardı.
+// Critical behavior: **dead subscription is dropped.** If retained, it would be tried
+// fruitlessly every round, the queue would never drain, and logs would fill with error messages.
 
 const NOW = new Date("2026-08-19T09:00:00.000Z");
-// Mühürleme sırrı **verilmez**: işleyici de uygulamanın gerçek sırrını
-// kullanıyor. Testin başka bir sırla mühürlemesi, gönderim testlerini
-// sessizce "anahtar yok" dalına düşürürdü.
 
 beforeEach(async () => {
-  faaliyetler.clear();
+  activities.clear();
   await resetDatabase();
 });
 
@@ -37,182 +34,180 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-// Bildirim gerçek bir faaliyete bağlanır: kuyruk satırı faaliyete yabancı
-// anahtarla bağlı (bulgu 3). Uydurma kimlik artık yazılamaz.
-const faaliyetler = new Map<string, string>();
+// Notifications bind to a real activity: queue row has a foreign key to activity (finding 3).
+const activities = new Map<string, string>();
 
-async function kisi(fullName = "Kişi") {
-  const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
+async function setupUser(fullName = "User") {
+  const unit = await createOrgUnit({ name: "Company", type: "Root" });
   const user = await createUser(unit.id, { fullName });
-  // Kişi kendi kaydını her zaman görür; buradaki testlerin konusu görünürlük
-  // değil, push gönderim davranışı.
-  const kayit = await createActivity(user, { approvalStatus: "APPROVED" });
-  faaliyetler.set(user.id, kayit.id);
+  // User always sees own record; focus here is push dispatch behavior, not visibility.
+  const activity = await createActivity(user, { approvalStatus: "APPROVED" });
+  activities.set(user.id, activity.id);
   return user;
 }
 
-/** Kişinin kendi kaydına ait bildirim yükü. */
-function yuk(userId: string) {
-  return { activityId: faaliyetler.get(userId), activityTitle: "Kayıt" };
+/** Notification payload belonging to user's own activity. */
+function buildPayload(userId: string) {
+  return { activityId: activities.get(userId), activityTitle: "Activity" };
 }
 
-async function anahtarKur(actorId: string) {
-  const sonuc = await generateVapidKeys(
+async function setupVapidKeys(actorId: string) {
+  const result = await generateVapidKeys(
     testDb,
-    { subject: "mailto:bt@ornek.test" },
+    { subject: "mailto:it@example.test" },
     actorId,
     NOW,
   );
-  if (!sonuc.ok) throw new Error(`kurulum: ${sonuc.message}`);
+  if (!result.ok) throw new Error(`setup: ${result.message}`);
 }
 
-function abonelik(n: number) {
+function createSubscription(n: number) {
   return {
-    endpoint: `https://push.ornek.test/abone-${n}`,
+    endpoint: `https://push.example.test/sub-${n}`,
     p256dh: "BExampleKeyMaterial-p256dh",
     auth: "ExampleAuthSecret",
   };
 }
 
-/** Verilen sonucu döndüren sahte taşıyıcı; çağrıları kaydeder. */
-function sahteTasiyici(
-  sonuclar: Record<string, PushSendOutcome>,
-): PushTransport & { cagrilar: string[] } {
-  const cagrilar: string[] = [];
+/** Fake push transport returning given outcome; records calls. */
+function fakePushTransport(
+  outcomes: Record<string, PushSendOutcome>,
+): PushTransport & { calls: string[] } {
+  const calls: string[] = [];
   return {
-    cagrilar,
+    calls,
     async send(endpoint) {
-      cagrilar.push(endpoint.endpoint);
-      return sonuclar[endpoint.endpoint] ?? { ok: true };
+      calls.push(endpoint.endpoint);
+      return outcomes[endpoint.endpoint] ?? { ok: true };
     },
   };
 }
 
-describe("VAPID anahtarları", () => {
-  it("üretilir ve özel anahtar mühürlü saklanır", async () => {
-    const me = await kisi("Yönetici");
-    await anahtarKur(me.id);
+describe("VAPID keys", () => {
+  it("generates and stores private key sealed", async () => {
+    const me = await setupUser("Admin");
+    await setupVapidKeys(me.id);
 
     const keys = await readVapidKeys(testDb);
     expect(keys).not.toBeNull();
     expect(keys?.publicKey.length).toBeGreaterThan(20);
 
-    // Ham özel anahtar veritabanında düz durmamalı.
-    const kayit = await testDb.systemSetting.findUniqueOrThrow({
+    // Raw private key must not sit plain in the database.
+    const row = await testDb.systemSetting.findUniqueOrThrow({
       where: { key: "vapid_private_key_sealed" },
     });
-    expect(kayit.value).not.toBe(keys?.privateKey);
+    expect(row.value).not.toBe(keys?.privateKey);
   });
 
-  it("yanlış sırla özel anahtar çözülemez", async () => {
-    const me = await kisi("Yönetici");
-    await anahtarKur(me.id);
+  it("cannot decrypt private key with incorrect secret", async () => {
+    const me = await setupUser("Admin");
+    await setupVapidKeys(me.id);
 
-    // Sessizce boş anahtarla göndermeye çalışmak yerine kanal kapanır.
-    expect(await readVapidKeys(testDb, "baska-bir-sir-32-karakterlik-metin!")).toBeNull();
+    // Channel closes rather than silently attempting to send with an empty key.
+    expect(await readVapidKeys(testDb, "another-secret-32-char-string!!")).toBeNull();
   });
 
-  it("mevcut çift kazara ezilmez", async () => {
-    const me = await kisi("Yönetici");
-    await anahtarKur(me.id);
-    const once = await readVapidKeys(testDb);
+  it("does not accidentally overwrite existing key pair", async () => {
+    const me = await setupUser("Admin");
+    await setupVapidKeys(me.id);
+    const before = await readVapidKeys(testDb);
 
-    const sonuc = await generateVapidKeys(
+    const result = await generateVapidKeys(
       testDb,
-      { subject: "mailto:bt@ornek.test" },
+      { subject: "mailto:it@example.test" },
       me.id,
       NOW,
     );
 
-    // Yenilemek bütün abonelikleri öldürür; açıkça istenmelidir.
-    expect(sonuc.ok).toBe(false);
-    expect((await readVapidKeys(testDb))?.publicKey).toBe(once?.publicKey);
+    // Refreshing kills all subscriptions; must be explicitly requested.
+    expect(result.ok).toBe(false);
+    expect((await readVapidKeys(testDb))?.publicKey).toBe(before?.publicKey);
   });
 
-  it("açıkça istenirse yenilenir", async () => {
-    const me = await kisi("Yönetici");
-    await anahtarKur(me.id);
-    const once = await readVapidKeys(testDb);
+  it("refreshes when explicitly requested", async () => {
+    const me = await setupUser("Admin");
+    await setupVapidKeys(me.id);
+    const before = await readVapidKeys(testDb);
 
-    const sonuc = await generateVapidKeys(
+    const result = await generateVapidKeys(
       testDb,
-      { subject: "mailto:bt@ornek.test", replace: true },
+      { subject: "mailto:it@example.test", replace: true },
       me.id,
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    expect((await readVapidKeys(testDb))?.publicKey).not.toBe(once?.publicKey);
+    expect(result.ok).toBe(true);
+    expect((await readVapidKeys(testDb))?.publicKey).not.toBe(before?.publicKey);
   });
 
-  it("geçersiz iletişim adresi reddedilir", async () => {
-    const me = await kisi("Yönetici");
+  it("rejects invalid contact address", async () => {
+    const me = await setupUser("Admin");
 
-    const sonuc = await generateVapidKeys(
+    const result = await generateVapidKeys(
       testDb,
-      { subject: "bt@ornek.test" },
+      { subject: "it@example.test" },
       me.id,
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 });
 
-describe("abonelik kaydı", () => {
-  it("aynı tarayıcı ikinci kez abone olunca yeni kayıt açılmaz", async () => {
-    const user = await kisi();
+describe("subscription registration", () => {
+  it("does not create a duplicate row when same browser subscribes again", async () => {
+    const user = await setupUser();
 
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
 
     expect(await countSubscriptions(testDb, user.id)).toBe(1);
   });
 
-  it("ortak tarayıcıda abonelik sahibi değişir", async () => {
-    const birinci = await kisi("Birinci");
-    const ikinci = await testDb.user.create({
+  it("transfers subscription ownership on shared browser", async () => {
+    const firstUser = await setupUser("First");
+    const secondUser = await testDb.user.create({
       data: {
-        fullName: "İkinci",
-        email: "ikinci@ornek.test",
-        orgUnitId: birinci.orgUnitId,
+        fullName: "Second",
+        email: "second@example.test",
+        orgUnitId: firstUser.orgUnitId,
       },
     });
 
-    await saveSubscription(testDb, birinci.id, abonelik(1), NOW);
-    await saveSubscription(testDb, ikinci.id, abonelik(1), NOW);
+    await saveSubscription(testDb, firstUser.id, createSubscription(1), NOW);
+    await saveSubscription(testDb, secondUser.id, createSubscription(1), NOW);
 
-    // Bildirimler eski kullanıcıya gitmeye devam etseydi kayıt sızıntısı olurdu.
-    expect(await countSubscriptions(testDb, birinci.id)).toBe(0);
-    expect(await countSubscriptions(testDb, ikinci.id)).toBe(1);
+    // If notifications kept going to previous user, data leakage would occur.
+    expect(await countSubscriptions(testDb, firstUser.id)).toBe(0);
+    expect(await countSubscriptions(testDb, secondUser.id)).toBe(1);
   });
 
-  it("başkasının aboneliği kaldırılamaz", async () => {
-    const sahibi = await kisi("Sahibi");
-    const baskasi = await testDb.user.create({
+  it("cannot remove someone else's subscription", async () => {
+    const owner = await setupUser("Owner");
+    const otherUser = await testDb.user.create({
       data: {
-        fullName: "Başkası",
-        email: "baskasi@ornek.test",
-        orgUnitId: sahibi.orgUnitId,
+        fullName: "Other",
+        email: "other@example.test",
+        orgUnitId: owner.orgUnitId,
       },
     });
-    await saveSubscription(testDb, sahibi.id, abonelik(1), NOW);
+    await saveSubscription(testDb, owner.id, createSubscription(1), NOW);
 
-    const sonuc = await removeSubscription(testDb, baskasi.id, abonelik(1).endpoint);
+    const result = await removeSubscription(testDb, otherUser.id, createSubscription(1).endpoint);
 
-    expect(sonuc).toBe(false);
-    expect(await countSubscriptions(testDb, sahibi.id)).toBe(1);
+    expect(result).toBe(false);
+    expect(await countSubscriptions(testDb, owner.id)).toBe(1);
   });
 });
 
-describe("kuyruğa yazma", () => {
-  it("aboneliği olmayana push satırı yazılmaz", async () => {
-    const user = await kisi();
+describe("enqueuing", () => {
+  it("does not enqueue push row for user without subscription", async () => {
+    const user = await setupUser();
 
     await enqueueNotification(testDb, {
       userId: user.id,
       eventType: NOTIFICATION_EVENTS.questionAsked,
-      payload: yuk(user.id),
+      payload: buildPayload(user.id),
       idempotencyKey: "question_asked:1",
       now: NOW,
     });
@@ -225,14 +220,14 @@ describe("kuyruğa yazma", () => {
     ).toBe(1);
   });
 
-  it("aboneliği olana iki kanal da yazılır", async () => {
-    const user = await kisi();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
+  it("enqueues both channels for subscribed user", async () => {
+    const user = await setupUser();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
 
     await enqueueNotification(testDb, {
       userId: user.id,
       eventType: NOTIFICATION_EVENTS.questionAsked,
-      payload: yuk(user.id),
+      payload: buildPayload(user.id),
       idempotencyKey: "question_asked:1",
       now: NOW,
     });
@@ -245,9 +240,9 @@ describe("kuyruğa yazma", () => {
     ).toBe(1);
   });
 
-  it("push'a değmeyen olayda yalnız e-posta yazılır", async () => {
-    const user = await kisi();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
+  it("only writes email for events not suitable for push", async () => {
+    const user = await setupUser();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
 
     await enqueueNotification(testDb, {
       userId: user.id,
@@ -257,184 +252,183 @@ describe("kuyruğa yazma", () => {
       now: NOW,
     });
 
-    // Parola sıfırlama bağlantısı postadadır; kilit ekranında işi yok.
+    // Password reset links belong in email, not on the lock screen.
     expect(
       await testDb.notificationQueue.count({ where: { channel: "PUSH" } }),
     ).toBe(0);
   });
 });
 
-describe("gönderim", () => {
-  async function hazirla() {
-    const user = await kisi();
-    await anahtarKur(user.id);
+describe("dispatching", () => {
+  async function setup() {
+    const user = await setupUser();
+    await setupVapidKeys(user.id);
     return user;
   }
 
-  it("anahtar kurulmadıysa hiç denenmez", async () => {
-    const user = await kisi();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
+  it("does not attempt if VAPID keys not configured", async () => {
+    const user = await setupUser();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
     await testDb.notificationQueue.create({
       data: {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.questionAsked,
         channel: "PUSH",
-        payload: yuk(user.id),
+        payload: buildPayload(user.id),
         idempotencyKey: "push:1",
       },
     });
 
-    const tasiyici = sahteTasiyici({});
-    const sonuc = await dispatchPushNotifications(testDb, tasiyici, {
+    const transport = fakePushTransport({});
+    const result = await dispatchPushNotifications(testDb, transport, {
       now: NOW,
-      baseUrl: "https://ornek.test",
+      baseUrl: "https://example.test",
     });
 
-    expect(tasiyici.cagrilar).toEqual([]);
-    expect(sonuc.sent).toBe(0);
+    expect(transport.calls).toEqual([]);
+    expect(result.sent).toBe(0);
   });
 
-  it("ölü abonelik (410) düşürülür", async () => {
-    const user = await hazirla();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
+  it("drops dead subscription (410 Gone)", async () => {
+    const user = await setup();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
     await testDb.notificationQueue.create({
       data: {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.questionAsked,
         channel: "PUSH",
-        payload: yuk(user.id),
+        payload: buildPayload(user.id),
         idempotencyKey: "push:1",
       },
     });
 
-    const tasiyici = sahteTasiyici({
-      [abonelik(1).endpoint]: { ok: false, gone: true },
+    const transport = fakePushTransport({
+      [createSubscription(1).endpoint]: { ok: false, gone: true },
     });
-    const sonuc = await dispatchPushNotifications(testDb, tasiyici, {
+    const result = await dispatchPushNotifications(testDb, transport, {
       now: NOW,
-      baseUrl: "https://ornek.test",
+      baseUrl: "https://example.test",
     });
 
-    // Tutulsaydı her turda boşuna denenirdi.
-    expect(sonuc.droppedSubscriptions).toBe(1);
+    expect(result.droppedSubscriptions).toBe(1);
     expect(await countSubscriptions(testDb, user.id)).toBe(0);
   });
 
-  it("bir cihaza gitmesi yeter", async () => {
-    const user = await hazirla();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
-    await saveSubscription(testDb, user.id, abonelik(2), NOW);
-    const kayit = await testDb.notificationQueue.create({
+  it("delivery to a single device is sufficient", async () => {
+    const user = await setup();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
+    await saveSubscription(testDb, user.id, createSubscription(2), NOW);
+    const queueItem = await testDb.notificationQueue.create({
       data: {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.approvalPending,
         channel: "PUSH",
-        payload: yuk(user.id),
+        payload: buildPayload(user.id),
         idempotencyKey: "push:1",
       },
     });
 
-    // Bir eski telefon ölü, biri sağlam.
-    const tasiyici = sahteTasiyici({
-      [abonelik(1).endpoint]: { ok: false, gone: true },
+    // One dead phone, one active phone.
+    const transport = fakePushTransport({
+      [createSubscription(1).endpoint]: { ok: false, gone: true },
     });
-    const sonuc = await dispatchPushNotifications(testDb, tasiyici, {
+    const result = await dispatchPushNotifications(testDb, transport, {
       now: NOW,
-      baseUrl: "https://ornek.test",
+      baseUrl: "https://example.test",
     });
 
-    expect(sonuc.delivered).toBe(1);
-    const guncel = await testDb.notificationQueue.findUniqueOrThrow({
-      where: { id: kayit.id },
+    expect(result.delivered).toBe(1);
+    const updated = await testDb.notificationQueue.findUniqueOrThrow({
+      where: { id: queueItem.id },
     });
-    expect(guncel.status).toBe("SENT");
+    expect(updated.status).toBe("SENT");
   });
 
-  it("geçici hatada kayıt bekler, deneme sayısı artar", async () => {
-    const user = await hazirla();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
-    const kayit = await testDb.notificationQueue.create({
+  it("retries and increments attempt count on transient error", async () => {
+    const user = await setup();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
+    const queueItem = await testDb.notificationQueue.create({
       data: {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.questionAsked,
         channel: "PUSH",
-        payload: yuk(user.id),
+        payload: buildPayload(user.id),
         idempotencyKey: "push:1",
       },
     });
 
-    const tasiyici = sahteTasiyici({
-      [abonelik(1).endpoint]: { ok: false, gone: false, message: "503" },
+    const transport = fakePushTransport({
+      [createSubscription(1).endpoint]: { ok: false, gone: false, message: "503" },
     });
-    await dispatchPushNotifications(testDb, tasiyici, {
+    await dispatchPushNotifications(testDb, transport, {
       now: NOW,
-      baseUrl: "https://ornek.test",
+      baseUrl: "https://example.test",
     });
 
-    const guncel = await testDb.notificationQueue.findUniqueOrThrow({
-      where: { id: kayit.id },
+    const updated = await testDb.notificationQueue.findUniqueOrThrow({
+      where: { id: queueItem.id },
     });
-    expect(guncel.status).toBe("PENDING");
-    expect(guncel.attemptCount).toBe(1);
-    // Abonelik düşürülmez: geçici hata kalıcı hata değildir.
+    expect(updated.status).toBe("PENDING");
+    expect(updated.attemptCount).toBe(1);
+    // Subscription is not dropped: transient error is not permanent error.
     expect(await countSubscriptions(testDb, user.id)).toBe(1);
   });
 
-  it("aboneliği kalmayan kayıt kuyrukta birikmez", async () => {
-    const user = await hazirla();
-    const kayit = await testDb.notificationQueue.create({
+  it("abandons queue item when user has no remaining subscriptions", async () => {
+    const user = await setup();
+    const queueItem = await testDb.notificationQueue.create({
       data: {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.questionAsked,
         channel: "PUSH",
-        payload: yuk(user.id),
+        payload: buildPayload(user.id),
         idempotencyKey: "push:1",
       },
     });
 
-    const sonuc = await dispatchPushNotifications(testDb, sahteTasiyici({}), {
+    const result = await dispatchPushNotifications(testDb, fakePushTransport({}), {
       now: NOW,
-      baseUrl: "https://ornek.test",
+      baseUrl: "https://example.test",
     });
 
-    expect(sonuc.givenUp).toBe(1);
-    const guncel = await testDb.notificationQueue.findUniqueOrThrow({
-      where: { id: kayit.id },
+    expect(result.givenUp).toBe(1);
+    const updated = await testDb.notificationQueue.findUniqueOrThrow({
+      where: { id: queueItem.id },
     });
-    expect(guncel.status).toBe("FAILED");
+    expect(updated.status).toBe("FAILED");
   });
 
-  it("e-posta kayıtlarına dokunulmaz", async () => {
-    const user = await hazirla();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
-    const eposta = await testDb.notificationQueue.create({
+  it("does not touch email queue items", async () => {
+    const user = await setup();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
+    const emailQueueItem = await testDb.notificationQueue.create({
       data: {
         userId: user.id,
         eventType: NOTIFICATION_EVENTS.questionAsked,
         channel: "EMAIL",
-        payload: yuk(user.id),
+        payload: buildPayload(user.id),
         idempotencyKey: "email:1",
       },
     });
 
-    await dispatchPushNotifications(testDb, sahteTasiyici({}), {
+    await dispatchPushNotifications(testDb, fakePushTransport({}), {
       now: NOW,
-      baseUrl: "https://ornek.test",
+      baseUrl: "https://example.test",
     });
 
-    // İki kanal bağımsız: push turu e-posta kuyruğunu tüketmemeli.
-    const guncel = await testDb.notificationQueue.findUniqueOrThrow({
-      where: { id: eposta.id },
+    // The two channels are independent: push loop must not consume email queue.
+    const updated = await testDb.notificationQueue.findUniqueOrThrow({
+      where: { id: emailQueueItem.id },
     });
-    expect(guncel.status).toBe("PENDING");
-    expect(guncel.attemptCount).toBe(0);
+    expect(updated.status).toBe("PENDING");
+    expect(updated.attemptCount).toBe(0);
   });
 
-  it("düşürülen abonelik gerçekten silinir", async () => {
-    const user = await hazirla();
-    await saveSubscription(testDb, user.id, abonelik(1), NOW);
+  it("dropped subscription is physically deleted", async () => {
+    const user = await setup();
+    await saveSubscription(testDb, user.id, createSubscription(1), NOW);
 
-    await dropSubscription(testDb, abonelik(1).endpoint);
+    await dropSubscription(testDb, createSubscription(1).endpoint);
 
     expect(await countSubscriptions(testDb, user.id)).toBe(0);
   });

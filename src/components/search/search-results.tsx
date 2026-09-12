@@ -1,16 +1,18 @@
 import Link from "next/link";
 
+import { getLocale } from "@/server/i18n/locale";
+import { getTranslations } from "@/server/i18n/server";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, EmptyState } from "@/components/ui/card";
 import { splitHighlights, type SearchHit } from "@/server/search/activities";
 import { formatDay, formatInstant } from "@/shared/format/date-time";
 
-// Arama sonuçları (§16.2). Özet düz metindir; işaretleme metin içinde taşınan
-// belirteçlerden bileşene çevrilir — `ts_headline` çıktısını HTML olarak
-// basmak, kullanıcının yazdığı metni çalıştırmak demekti.
 
-function Ozet({ snippet }: { snippet: string }) {
+
+
+
+function Snippet({ snippet }: { snippet: string }) {
   return (
     <p className="mt-1.5 text-[length:var(--text-sm)] leading-[var(--leading-relaxed)] text-muted">
       {splitHighlights(snippet).map((part, index) =>
@@ -29,32 +31,30 @@ function Ozet({ snippet }: { snippet: string }) {
   );
 }
 
-export function SearchResults({
+export async function SearchResults({
   hits,
   total,
   page,
   pageCount,
-  sayfaAdresi,
+  pageAddress,
   query,
 }: {
   hits: SearchHit[];
   total: number;
   page: number;
   pageCount: number;
-  /**
-   * Sayfa bağlantılarını üretir. Bileşen kendi adresini kuramaz: süzgeçleri
-   * yalnız sayfa bilir ve bileşen içinde kurulan adres onları düşürüyordu
-   * (Görev 11.3).
-   */
-  sayfaAdresi: (hedef: number) => string;
+
+  pageAddress: (page: number) => string;
   query: string;
 }) {
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
   if (query === "") {
     return (
       <Card>
         <EmptyState
-          title="Arama yapın"
-          description="Aramak istediğiniz kelimeyi yazın. Başlık ve açıklama içinde aranır."
+          title={t("screens.search.emptyTitle")}
+          description={t("screens.search.emptyDescription")}
         />
       </Card>
     );
@@ -64,8 +64,8 @@ export function SearchResults({
     return (
       <Card>
         <EmptyState
-          title={`"${query}" için sonuç bulunamadı`}
-          description="Farklı bir kelime deneyin. Yalnızca görebildiğiniz kayıtlar aranır."
+          title={t("screens.search.noResults", { query })}
+          description={t("screens.search.noResultsDescription")}
         />
       </Card>
     );
@@ -73,18 +73,18 @@ export function SearchResults({
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Kaç sonuç olduğu hep yazılır: liste sessizce kesilmiş gibi görünmesin. */}
+
       <p className="text-[length:var(--text-sm)] text-muted">
-        {total} sonuç · sayfa {page}/{pageCount}
+        {t("screens.search.resultsSummary", { total, page, pageCount })}
       </p>
 
       <ul className="flex flex-col gap-2">
         {hits.map((hit) => (
-          <li key={hit.id} data-test="arama-sonucu">
+          <li key={hit.id} data-test="search-result">
             <Card className="transition-colors hover:border-line-strong">
               <div className="px-4 py-3.5 sm:px-5">
                 <div className="flex flex-wrap items-baseline gap-2">
-                  {/* Sıra numarası (§3.1). */}
+
                   <span className="text-[length:var(--text-xs)] text-muted tabular">
                     #{hit.activityNo}
                   </span>
@@ -99,20 +99,20 @@ export function SearchResults({
                     {hit.title}
                   </Link>
                   {hit.approvalStatus === "CANCELLED" ? (
-                    <Badge>iptal</Badge>
+                    <Badge>{t("screens.search.cancelled")}</Badge>
                   ) : null}
                 </div>
 
                 <p className="mt-0.5 text-[length:var(--text-xs)] text-muted">
                   {hit.authorName}
                   {hit.authorTitle ? ` · ${hit.authorTitle}` : ""} ·{" "}
-                  {hit.authorUnitName} · {formatDay(hit.activityDate)} ·{" "}
+                  {hit.authorUnitName} · {formatDay(hit.activityDate, locale)} ·{" "}
                   <span className="text-faint">
-                    kaydedildi {formatInstant(hit.createdAt)}
+                    {t("screens.search.saved")} {formatInstant(hit.createdAt, locale)}
                   </span>
                 </p>
 
-                <Ozet snippet={hit.snippet} />
+                <Snippet snippet={hit.snippet} />
               </div>
             </Card>
           </li>
@@ -122,17 +122,17 @@ export function SearchResults({
       {pageCount > 1 ? (
         <nav className="flex items-center justify-end gap-2">
           {page > 1 ? (
-            <ButtonLink size="sm" href={sayfaAdresi(page - 1)}>
-              Önceki
+            <ButtonLink size="sm" href={pageAddress(page - 1)}>
+              {t("common.previous")}
             </ButtonLink>
           ) : null}
           {page < pageCount ? (
             <ButtonLink
               size="sm"
-              href={sayfaAdresi(page + 1)}
-              data-test="sonraki-sayfa"
+              href={pageAddress(page + 1)}
+              data-test="next-page"
             >
-              Sonraki
+              {t("common.next")}
             </ButtonLink>
           ) : null}
         </nav>

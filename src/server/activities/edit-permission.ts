@@ -4,9 +4,9 @@ import { readNumericSetting, SETTING_KEYS } from "@/server/settings/system-setti
 
 import { checkEditWindow } from "./edit-window";
 
-// Faaliyet düzenleme yetkisi (§5.5, §8.2). Liste, düzenleme ekranı ve yazma
-// eylemi aynı kararı kullanır; aksi hâlde buton görünen bir kayıt gönderimde
-// reddedilebilir ya da süresi dolmuş kayıt form açabilirdi.
+
+
+
 
 export type ActivityEditRefusal =
   | "window_closed"
@@ -28,7 +28,7 @@ export type EditPermissionDb = Pick<
   "systemSetting" | "readReceipt"
 >;
 
-/** Okuma sayımı zaten eldeyse ağ çağrısı yapmadan aynı kuralı uygular. */
+
 export function evaluateActivityEditPermission(
   activity: EditableActivityState,
   now: Date,
@@ -42,8 +42,8 @@ export function evaluateActivityEditPermission(
     return { allowed: false, reason: "not_editable" };
   }
 
-  // Müdür düzeltme istemişse bu kayıt özel olarak yazara geri döner; kısa
-  // pencereye bağlı değildir. Yazılan düzeltme yeniden onaya gönderilir.
+
+
   if (activity.approvalStatus === "CHANGES_REQUESTED") {
     return { allowed: true };
   }
@@ -62,7 +62,7 @@ export function evaluateActivityEditPermission(
   return { allowed: true };
 }
 
-/** Düzenleme kararının tek veritabanı okuma yolu. */
+
 export async function checkActivityEditPermission(
   db: EditPermissionDb,
   authorId: string,
@@ -94,10 +94,10 @@ export async function checkActivityEditPermission(
 
 export function editPermissionMessage(reason: ActivityEditRefusal): string {
   if (reason === "already_read") {
-    return "Faaliyet okundu; artık değiştirilemez. Gerekiyorsa yeni bir faaliyet yazın.";
+    return "The activity has been read and can no longer be changed. Write a new activity if necessary.";
   }
   if (reason === "window_closed") {
-    return "Düzeltme süresi doldu. Faaliyet kayıttan sonraki kısa süre içinde düzeltilebilir.";
+    return "The revision window has expired. An activity can only be revised for a short time after it is recorded.";
   }
-  return "Bu faaliyet şu anda düzenlenemez.";
+  return "This activity cannot be edited in its current state.";
 }

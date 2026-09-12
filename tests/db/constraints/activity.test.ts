@@ -12,19 +12,14 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-/**
- * Onay sürecindeki durumlar onaylayıcı ister (kısıt
- * `Activity_approver_required_in_approval`) ve düzeltme durumu gerekçe ister.
- * Bu yardımcı geçiş testleri için o alanları tamamlar; sınanan şey geçişin
- * kendisi, alanların varlığı değil.
- */
-/** Gerekçe alanları; kısıt "düzeltme istendi" ve "reddedildi"de zorunlu kılar. */
-async function gerekceAlanlari(status: ActivityApprovalStatus) {
+
+/** Reason fields; required by constraint on CHANGES_REQUESTED and REJECTED. */
+async function reasonFields(status: ActivityApprovalStatus) {
   if (status !== "CHANGES_REQUESTED" && status !== "REJECTED") return {};
 
   const reason = await testDb.approvalReason.upsert({
-    where: { kind_label: { kind: status, label: "Test gerekçesi" } },
-    create: { kind: status, label: "Test gerekçesi" },
+    where: { kind_label: { kind: status, label: "Test reason" } },
+    create: { kind: status, label: "Test reason" },
     update: {},
   });
 
@@ -34,22 +29,22 @@ async function gerekceAlanlari(status: ActivityApprovalStatus) {
 async function newActivity(status?: ActivityApprovalStatus) {
   const unit = await createOrgUnit();
   const user = await createUser(unit.id);
-  const onaylayan = await createUser(unit.id, { fullName: "Onaylayan" });
+  const approver = await createUser(unit.id, { fullName: "Approver" });
 
   return createActivity(
     user,
     status
       ? {
           approvalStatus: status,
-          approverId: onaylayan.id,
-          ...(await gerekceAlanlari(status)),
+          approverId: approver.id,
+          ...(await reasonFields(status)),
         }
       : {},
   );
 }
 
-describe("muhatap departman sayısı kısıtı", () => {
-  it("beş muhatap departman eklenebilir", async () => {
+describe("target department limit constraint", () => {
+  it("allows adding five target departments", async () => {
     const activity = await newActivity();
     const root = await testDb.orgUnit.findFirstOrThrow();
 
@@ -69,7 +64,7 @@ describe("muhatap departman sayısı kısıtı", () => {
     expect(count).toBe(5);
   });
 
-  it("altıncı muhatap departman eklenemez", async () => {
+  it("rejects sixth target department", async () => {
     const activity = await newActivity();
     const root = await testDb.orgUnit.findFirstOrThrow();
 
@@ -89,9 +84,8 @@ describe("muhatap departman sayısı kısıtı", () => {
   });
 });
 
-// §5.4'teki durum diyagramı. Geçerli olmayan her geçiş, uygulama kodu ne
-// yaparsa yapsın veritabanınca reddedilir.
-describe("onay durumu geçişleri", () => {
+// State diagram in §5.4. Database rejects any invalid status transition.
+describe("approval status transitions", () => {
   const allowed: [ActivityApprovalStatus, ActivityApprovalStatus][] = [
     ["DRAFT", "PENDING_APPROVAL"],
     ["PENDING_APPROVAL", "APPROVED"],
@@ -104,29 +98,27 @@ describe("onay durumu geçişleri", () => {
   ];
 
   const rejected: [ActivityApprovalStatus, ActivityApprovalStatus][] = [
-    // İptal geri alınamaz (§5.5).
+    // Cancellation is irreversible (§5.5)
     ["CANCELLED", "APPROVED"],
     ["CANCELLED", "DRAFT"],
-    // Yöneticisi bulunamayan faaliyet kendiliğinden onaylanmış sayılamaz (§4.4).
+    // Activities with missing managers cannot be auto-approved (§4.4)
     ["MANAGER_NOT_FOUND", "APPROVED"],
-    // Onaylanmış faaliyet onay akışına geri dönmez.
+    // Approved activity does not return to approval queue
     ["APPROVED", "PENDING_APPROVAL"],
     ["APPROVED", "CHANGES_REQUESTED"],
-    // Onay adımı atlanamaz.
+    // Cannot skip approval step
     ["PENDING_APPROVAL", "DRAFT"],
     ["CHANGES_REQUESTED", "APPROVED"],
   ];
 
-  it.each(allowed)("%s → %s geçişine izin verilir", async (from, to) => {
+  it.each(allowed)("allows transition %s → %s", async (from, to) => {
     const activity = await newActivity(from);
 
     const updated = await testDb.activity.update({
       where: { id: activity.id },
       data: {
         approvalStatus: to,
-        // Gerekçe yalnız "düzeltme istendi" ve "reddedildi" durumlarında
-        // bulunabilir; geçişle birlikte hedef duruma uydurulur.
-        ...(await gerekceAlanlari(to)),
+        ...(await reasonFields(to)),
         ...(to === "CHANGES_REQUESTED" || to === "REJECTED"
           ? {}
           : { approvalReasonId: null, approvalReasonKind: null }),
@@ -136,7 +128,7 @@ describe("onay durumu geçişleri", () => {
     expect(updated.approvalStatus).toBe(to);
   });
 
-  it.each(rejected)("%s → %s geçişi reddedilir", async (from, to) => {
+  it.each(rejected)("rejects transition %s → %s", async (from, to) => {
     const activity = await newActivity(from);
 
     await expect(
@@ -144,7 +136,7 @@ describe("onay durumu geçişleri", () => {
         where: { id: activity.id },
         data: {
           approvalStatus: to,
-          ...(await gerekceAlanlari(to)),
+          ...(await reasonFields(to)),
           ...(to === "CHANGES_REQUESTED" || to === "REJECTED"
             ? {}
             : { approvalReasonId: null, approvalReasonKind: null }),
@@ -153,14 +145,14 @@ describe("onay durumu geçişleri", () => {
     ).rejects.toThrow(/ACTIVITY_INVALID_STATUS_TRANSITION/);
   });
 
-  it("durum değişmeyen güncelleme engellenmez", async () => {
+  it("allows updates that do not change status", async () => {
     const activity = await newActivity("APPROVED");
 
     const updated = await testDb.activity.update({
       where: { id: activity.id },
-      data: { title: "Düzeltilmiş başlık" },
+      data: { title: "Updated title" },
     });
 
-    expect(updated.title).toBe("Düzeltilmiş başlık");
+    expect(updated.title).toBe("Updated title");
   });
 });

@@ -2,32 +2,37 @@ import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { AdminNav } from "@/components/shell/admin-nav";
 import { Page, PageHeader } from "@/components/ui/page";
 import { listAllReasons } from "@/server/approval-reasons/service";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { canManageOrganization } from "@/server/authz/admin";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
 
 import { ReasonAdmin } from "./reason-admin";
 
-// Onay kararı gerekçeleri (ürün sahibi kararı, 19.08.2026).
-//
-// Serbest metin raporlanamaz. Kategoriler burada tanımlanır; müdür karar
-// verirken bu listeden seçer.
 
-export const metadata = { title: "Onay gerekçeleri" };
+//
+
+
+
+export async function generateMetadata() {
+  const t = await getTranslations();
+  return { title: t("screens.approvalReasons.pageTitle") };
+}
 
 export default async function ApprovalReasonsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
 
   if (!canManageOrganization(user)) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Onay gerekçelerini yalnızca sistem yöneticisi tanımlayabilir."
+        message={t("screens.approvalReasons.permission")}
       />
     );
   }
@@ -38,9 +43,12 @@ export default async function ApprovalReasonsPage() {
     <AppShell user={await toShellUser(user)}>
       <Page>
         <PageHeader
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Onay gerekçeleri" }]}
-          title="Onay gerekçeleri"
-          description="Müdür bir faaliyet için düzeltme isterken ya da reddederken bu listeden seçer. Serbest açıklama isteğe bağlıdır; raporlanan kategoridir."
+          breadcrumbs={[
+            { label: t("screens.approvalReasons.dashboard"), href: "/" },
+            { label: t("screens.approvalReasons.pageTitle") },
+          ]}
+          title={t("screens.approvalReasons.pageTitle")}
+          description={t("screens.approvalReasons.pageDescription")}
         />
 
         <AdminNav isRoot={user.isRoot} />

@@ -3,8 +3,8 @@ import { prisma } from "@/server/db";
 import { readSessionCookie } from "./cookies";
 import { findActiveSession, touchSession } from "./session";
 
-// Sunucu bileşenlerinin ve eylemlerin "kim giriş yapmış" sorusunu sorduğu tek
-// yer. Görünürlük kararları buradan dönen kimlikle verilir (Görev 3.3).
+
+
 
 export interface CurrentUser {
   id: string;
@@ -12,23 +12,23 @@ export interface CurrentUser {
   email: string;
   orgUnitId: string;
   isSystemAdmin: boolean;
-  /** Organizasyon kapsamındaki toplu raporları görebilir mi? */
+
   canViewReports: boolean;
-  /** Skor ve takdir raporlarını görebilir mi? */
+  /** Can view score and appreciation reports? */
   canViewScoreReports: boolean;
-  /** Tek ve korunan ana sistem yöneticisi. */
+
   isRoot: boolean;
-  /** Birim yöneticisi mi (§4.4). Rol etiketi ve menü için gerekir. */
+
   isUnitManager: boolean;
-  /** Bu kişiden günlük faaliyet beklenir mi (§7.4 istisnası). */
+
   writesActivities: boolean;
-  /** E-posta bildirim tercihi (Görev 10.8); profil ekranında değiştirilir. */
+
   notificationMode: "INSTANT" | "DAILY_DIGEST" | "ACTION_ONLY";
-  /** Profil resminin uzantısı; hesap rozetinde kullanılır (Görev 11.5). */
+
   avatarExtension: string | null;
-  /** Faaliyetlere takdir verebilir mi (Görev 11.11). */
+
   canAppreciate: boolean;
-  /** İlk girişte kendi parolasını belirlemeli mi? */
+
   mustChangePassword: boolean;
 }
 
@@ -70,12 +70,12 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   };
 }
 
-/** Oturum zorunlu olan yerlerde kullanılır; yoksa hata fırlatır. */
+
 export async function requireCurrentUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
 
   if (!user) {
-    throw new Error("Oturum bulunamadı");
+    throw new Error("Session not found.");
   }
 
   return user;

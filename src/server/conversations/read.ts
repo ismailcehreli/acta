@@ -6,13 +6,13 @@ import {
 } from "@/server/authz/activity-repository";
 import { canViewActivity } from "@/server/authz/visibility";
 
-// Konuşmaların okunması (§9.4): faaliyeti görebilen **ara kademeler de**
-// konuşmaları görür — müdür, ekibi hakkında Genel Müdür'ün ne sorduğunu
+
+
 // bilmelidir.
 //
-// Yetki burada da doğrulanır. Önceden bu fonksiyon görüntüleyiciyi hiç
-// almıyordu ve yalnızca çağıran sayfanın ön kontrolüyle korunuyordu; kendi
-// başına yetkisiz bir okuma yoluydu (denetim 18.08.2026, bulgu 1).
+
+
+
 
 export type ConversationReadDb = Pick<PrismaClient, "conversation"> &
   ActivityRepositoryDb;
@@ -30,7 +30,7 @@ export interface ConversationView {
   status: "OPEN" | "CLOSED";
   askerId: string;
   askerName: string;
-  /** İş şu an kimde (§9.1). */
+
   responsibleId: string;
   responsibleName: string;
   openedAt: Date;
@@ -101,21 +101,13 @@ export interface OpenWorkItem {
   conversationId: string;
   activityId: string;
   activityTitle: string;
-  /** Sıra bu kullanıcıda mı, yoksa karşı taraftan cevap mı bekliyor (§9.4). */
+
   waitingOnMe: boolean;
   counterpartName: string;
   openedAt: Date;
 }
 
-/**
- * "Bana düşenler" listesi (§9.4): **soru cevaplanana kadar hem soranın hem
- * sorumlunun listesinde durur** — Excel'de eksik olan tam olarak buydu.
- * Önceden yalnızca sorumluluğu üstünde olanlar sayılıyordu, soran kendi açık
- * sorusunu takip edemiyordu (denetim 18.08.2026, bulgu 7).
- *
- * Liste faaliyet görünürlüğüyle daraltılır: kişi artık göremediği bir
- * faaliyetin konuşmasını burada da görmez (bulgu 1).
- */
+
 export async function listOpenWorkItems(
   db: ConversationReadDb,
   viewer: { id: string; isSystemAdmin: boolean },
@@ -124,9 +116,9 @@ export async function listOpenWorkItems(
   const rows = await db.conversation.findMany({
     where: {
       status: "OPEN",
-      // Taraflar **sabittir**: soran ve faaliyetin yazarı. `responsibleId` her
-      // mesajda el değiştirdiği için ona bakmak, sırası karşı tarafa geçen
-      // kişiyi kendi işinden düşürüyordu.
+
+
+
       OR: [
         { askerId: viewer.id },
         { responsibleId: viewer.id },
@@ -164,7 +156,7 @@ export async function listOpenWorkItems(
       activityId: row.activityId,
       activityTitle: row.activity.title,
       waitingOnMe: row.responsibleId === viewer.id,
-      // Karşı taraf da sabit rollerden okunur.
+
       counterpartName:
         row.askerId === viewer.id
           ? row.activity.author.fullName

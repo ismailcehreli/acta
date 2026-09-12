@@ -1,18 +1,21 @@
+"use client";
+
 import type {
   NoActivityDecisionRoute,
   NoActivityPeriodStatus,
 } from "@prisma/client";
 
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { useTranslations } from "@/components/i18n";
 
 export function absenceStatusLabel(status: NoActivityPeriodStatus): string {
   switch (status) {
     case "PENDING":
-      return "Onay bekliyor";
+      return "Awaiting approval";
     case "APPROVED":
-      return "Onaylandı";
+      return "Approved";
     case "REJECTED":
-      return "Reddedildi";
+      return "Rejected";
   }
 }
 
@@ -32,9 +35,17 @@ export function AbsenceStatusBadge({
 }: {
   status: NoActivityPeriodStatus;
 }) {
+  const t = useTranslations();
+  const labelKey =
+    status === "PENDING"
+      ? "screens.absence.statusAwaitingApproval"
+      : status === "APPROVED"
+        ? "screens.absence.statusApproved"
+        : "screens.absence.statusRejected";
+
   return (
     <Badge tone={absenceStatusTone(status)}>
-      {absenceStatusLabel(status)}
+      {t(labelKey)}
     </Badge>
   );
 }
@@ -44,13 +55,13 @@ export function absenceDecisionRouteLabel(
 ): string | null {
   switch (route) {
     case "DIRECT_ENTRY":
-      return "Doğrudan giriş";
+      return "Direct entry";
     case "DIRECT_MANAGER":
-      return "Departman yöneticisi";
+      return "Unit manager";
     case "DEPUTY":
-      return "Vekil yönetici";
+      return "Deputy manager";
     case "UPPER_MANAGER":
-      return "Üst yönetici";
+      return "Supervisor";
     default:
       return null;
   }

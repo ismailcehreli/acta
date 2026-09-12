@@ -10,8 +10,8 @@ export async function logoutAction(): Promise<void> {
   const token = await readSessionCookie();
 
   if (token) {
-    // Çerezi silmek yetmez: sunucudaki oturum da iptal edilir ki kopyalanmış
-    // bir belirteç çıkıştan sonra kullanılamasın.
+
+
     await revokeSession(prisma, token, new Date());
   }
 

@@ -5,16 +5,15 @@ import { AUDIT_ACTIONS, AUDIT_OBJECTS, recordAudit } from "@/server/audit/log";
 import { appSecret } from "@/server/auth/config";
 import { openSecret, sealSecret } from "@/server/crypto/secret-box";
 
-// Web push için VAPID anahtar çifti (§12.3, Görev 5.3b).
+// VAPID key pair for Web push (§12.3, Task 5.3b).
 //
-// Anahtar çifti **bir kez** üretilir ve sabit kalmak zorundadır: değişirse
-// tarayıcılardaki bütün abonelikler geçersizleşir ve herkesin izni yeniden
-// vermesi gerekir. Bu yüzden üretme işlemi ayrı bir eylemdir, uygulama
-// açılışında kendiliğinden olmaz.
+// The key pair is generated **once** and must remain stable: if changed,
+// all browser subscriptions become invalid and everyone must re-grant permission.
+// Therefore generation is a distinct action, not done automatically at startup.
 //
-// Özel anahtar SMTP parolasıyla aynı biçimde **mühürlü** saklanır: düz
-// yazılsaydı veritabanı yedeğini alan herkes şirketin adına bildirim
-// gönderebilirdi. Açık anahtar sır değildir; tarayıcıya verilir.
+// The private key is stored **sealed** in the same manner as the SMTP password:
+// if written in plaintext, anyone with a database backup could dispatch notifications.
+// The public key is not secret; it is sent to browsers.
 
 const SEAL_PURPOSE = "vapid-private-key";
 
@@ -32,18 +31,18 @@ export type VapidDb = Pick<
 export interface VapidKeys {
   publicKey: string;
   privateKey: string;
-  /** `mailto:` adresi; push servisleri sorun çıkınca buraya yazar. */
+  /** `mailto:` address; push services contact this on delivery issues. */
   subject: string;
 }
 
-/** Ekranda gösterilecek hâli; özel anahtar taşımaz. */
+/** UI representation; does not carry private key. */
 export interface VapidView {
   configured: boolean;
   publicKey: string;
   subject: string;
 }
 
-const DEFAULT_SUBJECT = "mailto:bt@ornek.test";
+const DEFAULT_SUBJECT = "mailto:it@example.test";
 
 async function readMap(db: VapidDb): Promise<Map<string, string>> {
   const rows = await db.systemSetting.findMany({
@@ -63,7 +62,7 @@ export async function readVapidView(db: VapidDb): Promise<VapidView> {
   };
 }
 
-/** Tarayıcıya verilecek açık anahtar; kurulu değilse `null`. */
+/** Public key given to browser; `null` if not configured. */
 export async function readVapidPublicKey(db: VapidDb): Promise<string | null> {
   const map = await readMap(db);
   const publicKey = map.get(KEYS.publicKey) ?? "";
@@ -72,9 +71,8 @@ export async function readVapidPublicKey(db: VapidDb): Promise<string | null> {
 }
 
 /**
- * Gönderim için tam anahtarlar. Kurulu değilse ya da özel anahtar
- * çözülemiyorsa `null` döner — sessizce bir varsayılana düşmek, bildirimin
- * gittiğini sanıp gitmemesi demek olurdu.
+ * Full keys for dispatching. Returns `null` if not configured or private key
+ * cannot be decrypted.
  */
 export async function readVapidKeys(
   db: VapidDb,
@@ -89,8 +87,8 @@ export async function readVapidKeys(
   const privateKey = openSecret(sealed, secret, SEAL_PURPOSE);
   if (privateKey === null) {
     console.error(
-      "[push] VAPID özel anahtarı çözülemedi (APP_SECRET değişmiş olabilir). " +
-        "Bildirim gönderilmiyor.",
+      "[push] Could not decrypt VAPID private key (APP_SECRET may have changed). " +
+        "Notifications are not sent.",
     );
     return null;
   }
@@ -104,27 +102,14 @@ export async function readVapidKeys(
 
 export type SaveVapidResult =
   | { ok: true; publicKey: string; replaced: boolean }
-  | { ok: false; message: string };
+  | { ok: false; error: "invalid_subject" | "keys_exist"; message: string };
 
 /**
- * Anahtar çifti üretir ve saklar.
- *
- * **Mevcut çift varsa üzerine yazmaz** — `replace` açıkça istenmelidir.
- * Kazara yenilemek bütün abonelikleri sessizce öldürürdü; kimse bildirim
- * almadığını da fark etmezdi.
- */
-/**
- * Yalnız iletişim adresini günceller; anahtarlara **dokunmaz**.
- *
- * Eskiden adres yalnız `generateVapidKeys` içinden yazılabiliyordu ve o
- * fonksiyon "zaten anahtar var" diye reddediyordu. Sonuç: kurulum
- * tamamlandıktan sonra adresi değiştirmenin tek yolu bütün abonelikleri
- * öldüren "yenile" seçeneğiydi (21.08.2026, ürün sahibi bildirdi). İki işlem
- * ayrıldı: adres değiştirmek zararsız, anahtar yenilemek yıkıcı.
+ * Updates only contact address; does not touch keys.
  */
 export type SaveSubjectResult =
   | { ok: true }
-  | { ok: false; message: string };
+  | { ok: false; error: "invalid_subject"; message: string };
 
 export async function saveVapidSubject(
   db: VapidDb,
@@ -132,19 +117,20 @@ export async function saveVapidSubject(
   actorId: string,
   now: Date = new Date(),
 ): Promise<SaveSubjectResult> {
-  const temiz = subject.trim();
-  if (!/^mailto:.+@.+\..+/.test(temiz)) {
+  const cleanSubject = subject.trim();
+  if (!/^mailto:.+@.+\..+/.test(cleanSubject)) {
     return {
       ok: false,
-      message: "İletişim adresi 'mailto:' ile başlamalı, örn. mailto:bt@sirket.com",
+      error: "invalid_subject",
+      message: "Contact address must start with 'mailto:', e.g. mailto:it@company.com",
     };
   }
 
   await db.$transaction(async (tx) => {
     await tx.systemSetting.upsert({
       where: { key: KEYS.subject },
-      update: { value: temiz },
-      create: { key: KEYS.subject, value: temiz, description: "Web push VAPID" },
+      update: { value: cleanSubject },
+      create: { key: KEYS.subject, value: cleanSubject, description: "Web push VAPID" },
     });
 
     await recordAudit(tx, {
@@ -170,25 +156,27 @@ export async function generateVapidKeys(
   if (!/^mailto:.+@.+\..+/.test(subject)) {
     return {
       ok: false,
-      message: "İletişim adresi 'mailto:' ile başlamalı, örn. mailto:bt@sirket.com",
+      error: "invalid_subject",
+      message: "Contact address must start with 'mailto:', e.g. mailto:it@company.com",
     };
   }
 
-  const mevcut = await readVapidView(db);
-  if (mevcut.configured && !options.replace) {
+  const existing = await readVapidView(db);
+  if (existing.configured && !options.replace) {
     return {
       ok: false,
+      error: "keys_exist",
       message:
-        "Zaten bir anahtar çifti var. Yenilemek mevcut bütün abonelikleri geçersiz kılar; onay kutusunu işaretleyin.",
+        "Key pair already exists. Refreshing invalidates all current subscriptions; check the confirmation box.",
     };
   }
 
-  const uretilen = webpush.generateVAPIDKeys();
-  const sealed = sealSecret(uretilen.privateKey, secret, SEAL_PURPOSE);
+  const generated = webpush.generateVAPIDKeys();
+  const sealed = sealSecret(generated.privateKey, secret, SEAL_PURPOSE);
 
   await db.$transaction(async (tx) => {
     for (const [key, value] of [
-      [KEYS.publicKey, uretilen.publicKey],
+      [KEYS.publicKey, generated.publicKey],
       [KEYS.privateKey, sealed],
       [KEYS.subject, subject],
     ] as const) {
@@ -199,17 +187,17 @@ export async function generateVapidKeys(
       });
     }
 
-    // Denetim izine **anahtar yazılmaz**; yalnız işlemin yapıldığı.
+    // Keys are not written to audit trail; only the fact that action occurred.
     await recordAudit(tx, {
       userId: actorId,
       objectType: AUDIT_OBJECTS.setting,
       objectId: "vapid",
-      action: mevcut.configured
+      action: existing.configured
         ? AUDIT_ACTIONS.pushKeysReplaced
         : AUDIT_ACTIONS.pushKeysCreated,
       now,
     });
   });
 
-  return { ok: true, publicKey: uretilen.publicKey, replaced: mevcut.configured };
+  return { ok: true, publicKey: generated.publicKey, replaced: existing.configured };
 }

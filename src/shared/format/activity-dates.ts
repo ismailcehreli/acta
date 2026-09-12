@@ -1,3 +1,5 @@
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n/config";
+
 import {
   companyDay,
   formatDay,
@@ -5,54 +7,56 @@ import {
   formatTime,
 } from "./date-time";
 
-// Faaliyetin **iki tarihi** (Görev 11.1).
-//
-// `activityDate` faaliyetin ait olduğu gündür ve saati yoktur — bir günün
-// saati olmaz. `createdAt` kaydın yazıldığı andır. Geçmişe dönük giriş açık
-// olduğu için (`retroactive_entry_days`) ikisi ayrışabilir: 19 Ağustos
-// tarihli bir kayıt 21 Ağustos'ta yazılmış olabilir. Okuyanın bunu görmesi
-// gerekir; aksi hâlde "bu iş ne zaman yapıldı" ile "bu kayıt ne zaman
-// tutuldu" soruları birbirine karışır.
-//
-// Mantık burada, bileşende değil: hangi durumda ne yazıldığı sınanabilir
-// olmalı ve aynı kural liste, detay ve arama ekranlarında aynı çalışmalı.
-
+/** The two dates shown for an activity and the rule used to display them. */
 export interface ActivityDateInput {
-  /** Faaliyetin ait olduğu gün (`date` kolonu). */
+  /** The date the activity belongs to (`date` column). */
   activityDate: Date;
-  /** Kaydın yazıldığı an (`timestamptz`). */
+  /** The instant when the record was written (`timestamptz`). */
   createdAt: Date;
-  /** Son değişiklik anı (`timestamptz`). */
+  /** The instant when the latest revision was written. */
   updatedAt: Date;
-  /** Son revizyonun numarası; ilk kayıt 1'dir. */
+  /** The latest revision number; the first record is revision 1. */
   revisionNo: number;
 }
 
+export interface ActivityDateLabels {
+  saved: string;
+  lastEdited: string;
+}
+
+const DEFAULT_LABELS: ActivityDateLabels = {
+  saved: "Saved",
+  lastEdited: "Last edited",
+};
+
 export interface ActivityDates {
-  /** Ana tarih: faaliyetin günü. */
+  /** The main activity date. */
   main: string;
-  /** "Kaydedildi: …" satırı. */
+  /** The saved-at line. */
   created: string;
-  /** "Son düzeltme: …" satırı; düzeltilmemiş kayıtta boş. */
+  /** The latest revision line, or null for the first revision. */
   revised: string | null;
 }
 
-export function describeActivityDates(input: ActivityDateInput): ActivityDates {
-  // "Aynı gün mü" sorusu **şirket saatiyle** sorulur: 21 Ağustos tarihli bir
-  // kayıt İstanbul'da 22 Ağustos 00:30'da yazılmış olabilir ve o zaman iki
-  // tarih gerçekten ayrıdır.
-  const yazimGunu = companyDay(input.createdAt);
-  const faaliyetGunu = input.activityDate.toISOString().slice(0, 10);
+export function describeActivityDates(
+  input: ActivityDateInput,
+  locale: Locale = DEFAULT_LOCALE,
+  labels: ActivityDateLabels = DEFAULT_LABELS,
+): ActivityDates {
+  // Compare the activity date with the company-local date of creation. A
+  // retroactive record may therefore need the full timestamp displayed.
+  const createdDay = companyDay(input.createdAt);
+  const activityDay = input.activityDate.toISOString().slice(0, 10);
 
   const created =
-    yazimGunu === faaliyetGunu
-      ? `Kaydedildi: ${formatTime(input.createdAt)}`
-      : `Kaydedildi: ${formatInstant(input.createdAt)}`;
+    createdDay === activityDay
+      ? `${labels.saved}: ${formatTime(input.createdAt, locale)}`
+      : `${labels.saved}: ${formatInstant(input.createdAt, locale)}`;
 
   const revised =
     input.revisionNo > 1
-      ? `Son düzeltme: ${formatInstant(input.updatedAt)} (rev. ${input.revisionNo})`
+      ? `${labels.lastEdited}: ${formatInstant(input.updatedAt, locale)} (rev. ${input.revisionNo})`
       : null;
 
-  return { main: formatDay(input.activityDate), created, revised };
+  return { main: formatDay(input.activityDate, locale), created, revised };
 }

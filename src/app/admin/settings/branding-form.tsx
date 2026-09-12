@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import type { Branding } from "@/server/settings/branding";
 import { FormMessage } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -12,16 +13,17 @@ import { FormActions, FormGrid } from "@/components/ui/page";
 import { removeLogoAction, saveBrandingAction } from "./actions";
 import { emptySettingsFormState } from "./form-state";
 
-// Kullanıcıya görünen uygulama adını ve görsel kimliğini düzenleme alanı.
+
 //
-// Logo yüklenmezse gezinme alanında sayfa başlığı yazılır.
+
 
 export function BrandingForm({ branding }: { branding: Branding }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     saveBrandingAction,
     emptySettingsFormState,
   );
-  const [silState, silAction, silPending] = useActionState(
+  const [deletionState, deleteAction, deletePending] = useActionState(
     async () => removeLogoAction(),
     emptySettingsFormState,
   );
@@ -29,16 +31,16 @@ export function BrandingForm({ branding }: { branding: Branding }) {
   return (
     <Card>
       <CardHeader
-        title="Görünüm ve sayfa metinleri"
-        description="Gezinme alanında görünen logo, tarayıcı sekmesindeki başlık ve her sayfanın altındaki şerit metni."
+        title={t("screens.settingsForms.branding.title")}
+        description={t("screens.settingsForms.branding.description")}
       />
       <CardBody>
         <form action={formAction} className="flex flex-col gap-5">
           <FormGrid>
             <Field
               htmlFor="pageTitle"
-              label="Sayfa başlığı"
-              hint="Tarayıcı sekmesinde görünür. Logonun alternatif metni de bundan gelir. Boş bırakılırsa varsayılan kullanılır."
+              label={t("screens.settingsForms.branding.pageTitle")}
+              hint={t("screens.settingsForms.branding.pageTitleHint")}
             >
               <Input id="pageTitle"
                 name="pageTitle"
@@ -49,8 +51,8 @@ export function BrandingForm({ branding }: { branding: Branding }) {
 
             <Field
               htmlFor="footerText"
-              label="Alt şerit metni"
-              hint="Her sayfanın altında görünen metin."
+              label={t("screens.settingsForms.branding.footerText")}
+              hint={t("screens.settingsForms.branding.footerHint")}
               className="sm:col-span-2"
             >
               <Input id="footerText"
@@ -61,8 +63,8 @@ export function BrandingForm({ branding }: { branding: Branding }) {
             </Field>
 
             <Field htmlFor="logo"
-              label="Logo"
-              hint="PNG, JPEG veya SVG · en fazla 512 KB · yüksekliği 40 piksele ölçeklenir"
+              label={t("screens.settingsForms.branding.logo")}
+              hint={t("screens.settingsForms.branding.logoHint")}
             >
               <Input id="logo"
                 name="logo"
@@ -75,12 +77,14 @@ export function BrandingForm({ branding }: { branding: Branding }) {
 
           {branding.logoUrl ? (
             <div className="flex items-center gap-3 rounded-(--radius-sm) border border-line bg-inset px-3 py-2">
-              <span className="text-xs font-medium text-muted">Şu anki logo</span>
+              <span className="text-xs font-medium text-muted">
+                {t("screens.settingsForms.branding.currentLogo")}
+              </span>
               <div className="flex h-8 w-40 items-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={branding.logoUrl}
-                  alt="Yüklenmiş logo"
+                  alt={t("screens.settingsForms.branding.uploadedLogoAlt")}
                   className="max-h-8 max-w-full object-contain object-left"
                 />
               </div>
@@ -89,26 +93,26 @@ export function BrandingForm({ branding }: { branding: Branding }) {
 
           <FormActions message={<FormMessage error={state.error} success={state.success} />}>
             <Button type="submit" variant="primary" disabled={pending}>
-              Kaydet
+              {t("screens.settingsForms.branding.save")}
             </Button>
           </FormActions>
         </form>
 
         {branding.logoUrl ? (
           <form
-            action={silAction}
+            action={deleteAction}
             className="mt-3"
             onSubmit={(event) => {
-              if (!window.confirm("Yüklenmiş logo kaldırılacak. Devam etmek istiyor musunuz?")) {
+              if (!window.confirm(t("screens.settingsForms.branding.removeLogoConfirm"))) {
                 event.preventDefault();
               }
             }}
           >
-            <Button type="submit" size="sm" disabled={silPending}>
-              Logoyu kaldır
+            <Button type="submit" size="sm" disabled={deletePending}>
+              {t("screens.settingsForms.branding.removeLogo")}
             </Button>
             <div className="mt-2">
-              <FormMessage error={silState.error} success={silState.success} />
+              <FormMessage error={deletionState.error} success={deletionState.success} />
             </div>
           </form>
         ) : null}

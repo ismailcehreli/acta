@@ -65,8 +65,8 @@ export interface NotificationsReport {
   failed: number;
   cancelled: number;
   successRate: number | null;
-  byChannel: { label: string; count: number }[];
-  byEvent: { label: string; count: number }[];
+  byChannel: { key: string; count: number }[];
+  byEvent: { key: string; count: number }[];
   units: {
     id: string;
     name: string;
@@ -102,7 +102,7 @@ export interface FeedbackReport {
   newCount: number;
   inReview: number;
   resolved: number;
-  byCategory: { label: string; count: number }[];
+  byCategory: { key: string; count: number }[];
   averageFirstReadHours: number | null;
   averageResolutionHours: number | null;
 }

@@ -15,18 +15,18 @@ const initialState: LoginFormState = { error: null };
 export function LoginForm({ rememberDays = 0 }: { rememberDays?: number }) {
   const t = useTranslations();
   const [state, formAction, pending] = useActionState(loginAction, initialState);
-  const hata = useRef<HTMLDivElement>(null);
+  const error = useRef<HTMLDivElement>(null);
 
-  // Hata çıkınca odak özete gider: klavye ve ekran okuyucu kullanıcısı
-  // sonucu duymadan formu yeniden doldurmaya çalışmasın (§10).
+
+
   useEffect(() => {
-    if (state.error) hata.current?.focus();
+    if (state.error) error.current?.focus();
   }, [state.error]);
 
   return (
     <form action={formAction} className="flex flex-col gap-5">
       {state.error ? (
-        <div id="giris-hatasi" ref={hata} tabIndex={-1}>
+        <div id="login-error" ref={error} tabIndex={-1}>
           <Alert tone="danger" title={t("auth.loginFailed")}>
             {state.error}
           </Alert>
@@ -55,11 +55,7 @@ export function LoginForm({ rememberDays = 0 }: { rememberDays?: number }) {
         />
       </Field>
 
-      {/* "Beni hatırla" yalnız oturumun **süresini** uzatır; başka hiçbir
-          güvenlik kuralını gevşetmez. Kaç gün olduğu ekranda yazıyor:
-          "hatırla" belirsiz bir söz, "30 gün" bir taahhüt. Sistem yöneticisi
-          süreyi 0 yaparsa kutu hiç çizilmez — ortak bilgisayarların
-          kullanıldığı yerlerde kapatılabilsin diye. */}
+
       {rememberDays > 0 ? (
         <Checkbox
           name="remember"

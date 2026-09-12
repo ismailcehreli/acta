@@ -32,11 +32,11 @@ import {
   type StoredFile,
 } from "./storage";
 
-// Dosya ekleri (§15.4). Dört kural birlikte çalışır:
-//   1. Saklama adı sunucuda üretilir; kullanıcının adı diske yazılmaz.
-//   2. Tür uzantıdan değil içerik imzasından doğrulanır.
-//   3. Dosyalar doğrudan servis edilmez; indirme görünürlükten geçer.
-//   4. Her dosyanın SHA-256 özeti saklanır.
+
+
+
+
+
 
 export type AttachmentDb = Pick<
   PrismaClient,
@@ -45,7 +45,7 @@ export type AttachmentDb = Pick<
 
 export type AttachmentError =
   | AttachmentRefusal
-  /** Depodaki dosya kayıtla uyuşmuyor (§15.4). */
+
   | "integrity_failed"
   | "activity_not_found"
   | "not_author"
@@ -58,26 +58,22 @@ export type AttachmentResult<T> =
 
 const MESSAGES: Record<AttachmentError, string> = {
   ...ATTACHMENT_MESSAGES,
-  activity_not_found: "Faaliyet bulunamadı.",
-  // Yetkisiz erişim, var olmayan kayıtla aynı cevabı alır (§18.4).
-  not_author: "Faaliyet bulunamadı.",
-  attachment_not_found: "Dosya bulunamadı.",
-  not_visible: "Dosya bulunamadı.",
-  // Kullanıcıya teknik ayrıntı verilmez ama "bulunamadı" da denmez: dosya
-  // duruyor, güvenilmiyor. BT sorumlusunun bakması gereken bir durumdur.
+  activity_not_found: "Activity not found.",
+
+  not_author: "Activity not found.",
+  attachment_not_found: "Attachment not found.",
+  not_visible: "Attachment not found.",
+
+
   integrity_failed:
-    "Dosya doğrulanamadı ve indirilemedi. BT sorumlusuna bildirin.",
+    "The file could not be validated or downloaded. Report this to IT support.",
 };
 
 function fail(error: AttachmentError): { ok: false; error: AttachmentError; message: string } {
   return { ok: false, error, message: MESSAGES[error] };
 }
 
-/**
- * Yürürlükteki ek sınırları. Yükleme kararını veren yol da, kullanıcıya
- * sınırı **söyleyen** form da bunu okur: iki yerde ayrı ayrı okunsaydı
- * ekranda yazan sayı ile reddin dayandığı sayı ayrışabilirdi.
- */
+
 export async function readAttachmentLimits(
   db: Pick<AttachmentDb, "systemSetting">,
 ): Promise<AttachmentLimits> {
@@ -100,7 +96,7 @@ export interface IncomingFile {
   content: Buffer;
 }
 
-/** İçeriği doğrulanmış, henüz diske yazılmamış ek. */
+
 export interface ValidatedAttachmentFile {
   originalName: string;
   mimeType: string;
@@ -109,7 +105,7 @@ export interface ValidatedAttachmentFile {
   sizeBytes: number;
 }
 
-/** Diskteki geçici/kalıcı saklama bilgisiyle birlikte doğrulanmış ek. */
+
 export interface StoredAttachmentFile extends ValidatedAttachmentFile {
   storedName: string;
   storagePath: string;
@@ -119,11 +115,7 @@ export type AttachmentValidationResult =
   | { ok: true; value: ValidatedAttachmentFile[] }
   | { ok: false; error: AttachmentRefusal; message: string };
 
-/**
- * Dosya içeriğini, boyutunu ve türünü ortak kurallardan doğrular. Disk yazımı
- * burada yapılmaz; çağıran transaction içinde sayımı ve sahiplik kontrolünü
- * yaptıktan sonra yazabilir.
- */
+
 export async function validateIncomingFiles(
   db: Pick<AttachmentDb, "systemSetting">,
   files: IncomingFile[],
@@ -139,7 +131,7 @@ export async function validateIncomingFiles(
       return { ok: false, error: sizeProblem, message: ATTACHMENT_MESSAGES[sizeProblem] };
     }
 
-    // Tür, dosyanın kendi içeriğinden okunur. Uzantı hiç dikkate alınmaz.
+
     const detected = await fileTypeFromBuffer(file.content);
     if (!detected || !isAllowedContentType(detected.mime)) {
       return {
@@ -161,7 +153,7 @@ export async function validateIncomingFiles(
   return { ok: true, value: validated };
 }
 
-/** Doğrulanmış içerikleri diske yazar; kısmi yazımı kendi içinde temizler. */
+
 export async function storeValidatedFiles(
   files: ValidatedAttachmentFile[],
 ): Promise<StoredAttachmentFile[]> {
@@ -180,16 +172,16 @@ export async function storeValidatedFiles(
   return stored;
 }
 
-/** Transaction geri alınırsa satırsız kalan dosyaları temizler. */
+
 export async function cleanupStoredFiles(files: StoredFile[]): Promise<void> {
   for (const file of files) {
     try {
       await deleteStoredFile(file.storagePath);
     } catch (error) {
-      // Asıl veritabanı hatası kaybolmasın; operasyon artığı sessizce de
-      // bırakılmasın.
+
+
       console.error(
-        "[ek dosyası] geçici dosya temizlenemedi",
+        "[attachment] temporary file could not be cleaned up",
         JSON.stringify({ storagePath: file.storagePath, error: String(error) }),
       );
     }
@@ -224,8 +216,8 @@ export async function attachFiles(
 ): Promise<AttachmentResult<Attachment[]>> {
   if (files.length === 0) return { ok: true, value: [] };
 
-  // Ek yükleme yalnızca faaliyeti yazana açıktır; sorgu baştan yazarla
-  // daraltılır, böylece başkasının kaydının varlığı öğrenilemez.
+
+
   const activity = await findActivityForAuthor(db, uploaderId, {
     where: { id: activityId },
     select: { id: true },
@@ -236,17 +228,17 @@ export async function attachFiles(
   const validated = await validateIncomingFiles(db, files);
   if (!validated.ok) return fail(validated.error);
 
-  // Dosyalar transaction içinde, faaliyet satırı kilitlenip adet kontrolü
-  // yapıldıktan sonra yazılır. Transaction düşerse dışarıda satırsız kalan
-  // dosyalar temizlenir; kayıtlı bir faaliyetin eki silinmez.
+
+
+
   let stored: StoredAttachmentFile[] = [];
 
   try {
     const created = await db.$transaction(async (tx) => {
-      // **Sayım kilit altında yapılır** (denetim 21.08.2026, bulgu 8).
-      // Kilitsiz kurguda dört eki olan faaliyete iki istek aynı anda birer
-      // dosya yükleyebiliyordu: ikisi de "mevcut 4" görüyor, ikisi de kabul
-      // ediliyor ve faaliyet altı eke çıkıyordu.
+
+
+
+
       await lockActivityForMaintenance(tx, activityId);
 
       const existingCount = await attachmentMaintenanceReader(tx).count({ where: { activityId } });
@@ -255,17 +247,17 @@ export async function attachFiles(
       if (countProblem) throw new AttachmentLimitError(countProblem);
 
       stored = await storeValidatedFiles(validated.value);
-      const satirlar: Attachment[] = [];
+      const rows: Attachment[] = [];
 
       for (const file of stored) {
-        satirlar.push(
+        rows.push(
           await tx.attachment.create({
             data: activityAttachmentData(activityId, uploaderId, file, now),
           }),
         );
       }
 
-      return satirlar;
+      return rows;
     });
 
     return { ok: true, value: created };
@@ -274,8 +266,8 @@ export async function attachFiles(
 
     if (error instanceof AttachmentLimitError) return fail(error.refusal);
 
-    // Veritabanı tetikleyicisi de aynı sınırı koruyor; uygulama katmanı
-    // atlansa bile devreye girer.
+
+    // This maps the database guard even if the application check is bypassed.
     if (hasDatabaseSentinel(error, "ATTACHMENT_LIMIT_EXCEEDED")) {
       return fail("too_many");
     }
@@ -284,7 +276,7 @@ export async function attachFiles(
   }
 }
 
-/** Sınır ihlalini işlemden dışarı taşıyan iç hata. */
+
 class AttachmentLimitError extends Error {
   constructor(readonly refusal: AttachmentRefusal) {
     super(refusal);
@@ -298,11 +290,7 @@ export interface DownloadableAttachment {
   content: Buffer;
 }
 
-/**
- * İndirme yolu. **Faaliyeti görme yetkisi olmayan, ekini de indiremez**
- * (§15.4). Faaliyet iptal edilse bile dosya silinmez; erişim faaliyetin
- * durumunu izler (iptal edilmiş faaliyeti görebilen ekini de görebilir).
- */
+
 export async function loadAttachmentForDownload(
   db: AttachmentDb,
   viewer: { id: string; isSystemAdmin: boolean },
@@ -314,19 +302,19 @@ export async function loadAttachmentForDownload(
 
   const content = await readStoredFile(attachment.storagePath);
 
-  // **Bütünlük indirme anında doğrulanır** (§15.4, denetim 21.08.2026,
-  // bulgu 9). Yüklemede hesaplanan SHA-256 veritabanında duruyordu ama hiçbir
-  // karar vermiyordu: depo bozulsa ya da dosya sunucu tarafında değiştirilse
-  // kullanıcıya değiştirilmiş baytlar aynen veriliyordu.
+
+
+
+
   //
-  // Uyuşmazlıkta dosya **verilmez**. Sessizce vermek, kurumsal hafızaya
-  // güvenilmez bir belge sokmak demektir.
+
+
   if (
     content.byteLength !== attachment.sizeBytes ||
     sha256Of(content) !== attachment.sha256
   ) {
     console.error(
-      "[ek dosyası] bütünlük doğrulanamadı",
+      "[attachment] integrity validation failed",
       JSON.stringify({ attachmentId, storagePath: attachment.storagePath }),
     );
     return fail("integrity_failed");

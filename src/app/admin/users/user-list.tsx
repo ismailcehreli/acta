@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useLocale, useTranslations } from "@/components/i18n";
 
 import type { ManagedUser } from "@/server/users/list";
 import { formatInstantShort } from "@/shared/format/date-time";
@@ -8,48 +11,59 @@ import { ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, EmptyState } from "@/components/ui/card";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/table";
 
-// Kullanıcı listesi yalnızca keşif ve yönlendirme ekranıdır. Düzenleme,
-// parola ve aktiflik işlemleri tek kullanıcı detayına taşınır; böylece bir
-// satır açıldığında bütün tablo aşağı doğru büyümez.
 
-function roleBadges(user: ManagedUser) {
-  const roller = [
-    user.isRoot ? "ana sistem yöneticisi" : null,
-    user.isUnitManager ? "birim yöneticisi" : null,
-    user.isSystemAdmin && !user.isRoot ? "sistem yöneticisi" : null,
-    !user.writesActivities ? "faaliyet yazmaz" : null,
+
+
+
+function roleBadges(user: ManagedUser, t: ReturnType<typeof useTranslations>) {
+  const roleLabels = [
+    user.isRoot ? t("screens.users.primarySystemAdministrator") : null,
+    user.isUnitManager ? t("screens.users.unitManager") : null,
+    user.isSystemAdmin && !user.isRoot ? t("screens.users.systemAdministrator") : null,
+    !user.writesActivities ? t("screens.users.doesNotWriteActivities") : null,
   ].filter(Boolean) as string[];
 
-  if (roller.length === 0) {
+  if (roleLabels.length === 0) {
     return <span className="text-muted">—</span>;
   }
 
   return (
     <span className="flex flex-wrap gap-1">
-      {roller.map((rol) => (
+      {roleLabels.map((label) => (
         <Badge
-          key={rol}
+          key={label}
           tone={
-            rol === "ana sistem yöneticisi" || rol === "sistem yöneticisi"
+            label === t("screens.users.primarySystemAdministrator") ||
+            label === t("screens.users.systemAdministrator")
               ? "primary"
               : "neutral"
           }
         >
-          {rol}
+          {label}
         </Badge>
       ))}
     </span>
   );
 }
 
-function UserRow({ user, returnTo }: { user: ManagedUser; returnTo: string }) {
-  const detailHref = `/admin/users/${user.id}?${new URLSearchParams({ donus: returnTo }).toString()}`;
+function UserRow({
+  user,
+  returnTo,
+  t,
+  locale,
+}: {
+  user: ManagedUser;
+  returnTo: string;
+  t: ReturnType<typeof useTranslations>;
+  locale: ReturnType<typeof useLocale>;
+}) {
+  const detailHref = `/admin/users/${user.id}?${new URLSearchParams({ returnTo }).toString()}`;
 
   return (
-    <TR data-test="kullanici-satiri">
+    <TR data-test="user-row">
       <TD>
         <Link href={detailHref} className="group flex items-center gap-2">
-          <Avatar user={user} size={32} />
+          <Avatar user={user} size={32} locale={locale} />
           <span className="min-w-0">
             <span className="block font-medium text-ink group-hover:text-primary group-hover:underline">
               {user.fullName}
@@ -62,27 +76,27 @@ function UserRow({ user, returnTo }: { user: ManagedUser; returnTo: string }) {
         </Link>
       </TD>
       <TD>{user.orgUnitName}</TD>
-      <TD>{roleBadges(user)}</TD>
+      <TD>{roleBadges(user, t)}</TD>
       <TD>
         <span
           className="flex flex-col gap-1"
-          data-durum={user.isActive ? "aktif" : "pasif"}
+          data-status={user.isActive ? "active" : "inactive"}
         >
-          {user.isActive ? (
-            <Badge tone="success">aktif</Badge>
+            {user.isActive ? (
+            <Badge tone="success">{t("screens.users.active")}</Badge>
           ) : (
-            <Badge tone="neutral">pasif</Badge>
+            <Badge tone="neutral">{t("screens.users.inactive")}</Badge>
           )}
           <span className="text-xs text-muted">
             {user.lastLoginAt
-              ? `Son giriş ${formatInstantShort(user.lastLoginAt)}`
-              : "Henüz giriş yapmadı"}
+              ? t("screens.users.lastSignInAt", { date: formatInstantShort(user.lastLoginAt, locale) })
+              : t("screens.users.neverSignedIn")}
           </span>
         </span>
       </TD>
       <TD align="right">
         <ButtonLink href={detailHref} size="sm">
-          Detayı aç
+          {t("screens.users.openDetails")}
         </ButtonLink>
       </TD>
     </TR>
@@ -94,33 +108,35 @@ export function UserList({
   returnTo = "/admin/users",
 }: {
   users: ManagedUser[];
-  /** Liste filtrelerini detaydan geri dönerken korumak için. */
+  /** Preserve list filters when returning from the detail view. */
   returnTo?: string;
 }) {
+  const t = useTranslations();
+  const locale = useLocale();
   return (
     <Card>
       <CardHeader
-        title="Kullanıcı listesi"
-        description="Bir hesabın ayarlarını değiştirmek için satırdaki detayı açın."
+        title={t("screens.users.listTitle")}
+        description={t("screens.users.listDescription")}
       />
 
       {users.length === 0 ? (
-        <EmptyState title="Bu ölçütlere uyan kullanıcı yok." />
+        <EmptyState title={t("screens.users.noMatches")} />
       ) : (
         <CardBody className="p-0">
-          <Table label="Kullanıcı listesi tablosu">
+          <Table label={t("screens.users.listTable")}>
             <THead>
               <TR>
-                <TH>Kullanıcı</TH>
-                <TH>Birim</TH>
-                <TH>Roller</TH>
-                <TH>Durum / son giriş</TH>
-                <TH align="right">İşlem</TH>
+                <TH>{t("screens.users.user")}</TH>
+                <TH>{t("screens.users.unit")}</TH>
+                <TH>{t("screens.users.roles")}</TH>
+                <TH>{t("screens.users.statusLastSignIn")}</TH>
+                <TH align="right">{t("screens.users.actions")}</TH>
               </TR>
             </THead>
             <TBody>
               {users.map((user) => (
-                <UserRow key={user.id} user={user} returnTo={returnTo} />
+                <UserRow key={user.id} user={user} returnTo={returnTo} t={t} locale={locale} />
               ))}
             </TBody>
           </Table>

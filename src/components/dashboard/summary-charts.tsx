@@ -1,33 +1,27 @@
+"use client";
+
 import Link from "next/link";
 
+import { useLocale, useTranslations } from "@/components/i18n/provider";
 import type { DepartmentSummaryRow } from "@/server/dashboard/department-summary";
 import type { StatusSlice, TrendSummary } from "@/server/dashboard/charts";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { formatNumber } from "@/shared/format/locale";
 
 import { DistributionBars, type DistributionRow } from "./distribution-bars";
 import { TrendChart } from "./trend-chart";
 
-// Ana ekranın görsel özeti.
-//
-// Üç soru, üç görsel:
-//   1. Son iki hafta kaç kayıt girildi? (sütun grafiği)
-//   2. Hangi departman ne kadar yazdı? (oran çubukları)
-//   3. Kayıtlar hangi aşamada? (oran çubukları)
-//
-// Hepsi sunucuda hesaplanıyor ve kapsam süzgecinden geçiyor: bir çubuğun
-// yüksekliği de bilgidir, göremediğin kayıt ona eklenemez.
 
-const DURUM_ADLARI: Record<StatusSlice["status"], string> = {
-  APPROVED: "Onaylandı",
-  PENDING_APPROVAL: "Onay bekliyor",
-  CHANGES_REQUESTED: "Düzeltme istendi",
-  REJECTED: "Uygun bulunmadı",
-  CANCELLED: "İptal edildi",
-  MANAGER_NOT_FOUND: "Yönetici bulunamadı",
-  DRAFT: "Taslak",
-};
+//
 
-const DURUM_TONLARI: Record<
+
+
+
+//
+
+
+
+const STATUS_TONES: Record<
   StatusSlice["status"],
   DistributionRow["tone"]
 > = {
@@ -40,12 +34,12 @@ const DURUM_TONLARI: Record<
   DRAFT: undefined,
 };
 
-/** Durumu akış süzgecine çeviren anahtar; yalnız süzülebilenler. */
-const DURUM_FILTRE: Partial<Record<StatusSlice["status"], string>> = {
-  PENDING_APPROVAL: "onay",
-  CHANGES_REQUESTED: "duzeltme",
-  REJECTED: "reddedilen",
-  CANCELLED: "iptal",
+
+const STATUS_FILTER: Partial<Record<StatusSlice["status"], string>> = {
+  PENDING_APPROVAL: "approval",
+  CHANGES_REQUESTED: "changesRequested",
+  REJECTED: "rejected",
+  CANCELLED: "cancelled",
 };
 
 export function SummaryCharts({
@@ -53,40 +47,47 @@ export function SummaryCharts({
   departments,
   statuses,
   period,
-  donemEtiketi,
+  periodLabel,
 }: {
   trend: TrendSummary;
   departments: DepartmentSummaryRow[];
   statuses: StatusSlice[];
   period: string;
-  donemEtiketi: string;
+  periodLabel: string;
 }) {
-  // Departman özeti eskiden ayrı bir tabloydu; dağılım çubuklarına taşındı.
-  // Kişi sayısı ve bugünkü katılım bilgisi kaybolmasın diye satır ipucunda
-  // duruyor — çubuk oranı gösterir, ipucu bağlamı.
-  const cokDepartman = departments.length > 1;
+  const locale = useLocale();
+  const t = useTranslations();
+  const manyDepartments = departments.length > 1;
 
-  const departmanSatirlari: DistributionRow[] = departments.map((row) => ({
+  const departmentRows: DistributionRow[] = departments.map((row) => ({
     key: row.orgUnitId,
     label: `${row.depth > 0 ? `${"· ".repeat(row.depth)} ` : ""}${row.name}`,
     count: row.activityCount,
     hint: [
       row.isRollup
-        ? `${row.people} kişi · alt birimler dahil`
-        : `${row.people} kişi`,
+        ? t("dashboard.peopleWithChildUnits", {
+            count: formatNumber(row.people, locale),
+          })
+        : t("dashboard.peopleCount", {
+            count: formatNumber(row.people, locale),
+          }),
       row.pendingApproval > 0
-        ? `${row.pendingApproval} onay bekliyor`
+        ? t("dashboard.awaitingApprovalCount", {
+            count: formatNumber(row.pendingApproval, locale),
+          })
         : null,
       row.participation
-        ? `bugün ${row.participation.wrote}/${row.participation.expected} yazdı`
+        ? t("dashboard.enteredToday", {
+            wrote: formatNumber(row.participation.wrote, locale),
+            expected: formatNumber(row.participation.expected, locale),
+          })
         : null,
     ]
       .filter(Boolean)
       .join(" · "),
     tone: "primary" as const,
-    // Toplam satırları alt birimleri de kapsar. Akış filtresi tek birimi
-    // gösterdiği için böyle bir satırı bağlamak kullanıcıyı eksik listeye
-    // götürürdü; doğrudan birim satırları ise güvenle açılabilir.
+    // Rollup rows include child units. Linking one to a single-unit feed would
+    // hide part of the total, while direct unit rows can be opened safely.
     href: row.isRollup
       ? undefined
       : `/feed?${new URLSearchParams({
@@ -95,16 +96,16 @@ export function SummaryCharts({
         }).toString()}`,
   }));
 
-  const durumSatirlari: DistributionRow[] = statuses.map((dilim) => {
-    const filtre = DURUM_FILTRE[dilim.status];
+  const statusRows: DistributionRow[] = statuses.map((statusSlice) => {
+    const filterKey = STATUS_FILTER[statusSlice.status];
 
     return {
-      key: dilim.status,
-      label: DURUM_ADLARI[dilim.status] ?? dilim.status,
-      count: dilim.count,
-      tone: DURUM_TONLARI[dilim.status],
-      href: filtre
-        ? `/feed?${new URLSearchParams({ period, durum: filtre }).toString()}`
+      key: statusSlice.status,
+      label: t(`activityStatus.${statusSlice.status}`),
+      count: statusSlice.count,
+      tone: STATUS_TONES[statusSlice.status],
+      href: filterKey
+        ? `/feed?${new URLSearchParams({ period, status: filterKey }).toString()}`
         : `/feed?${new URLSearchParams({ period }).toString()}`,
     };
   });
@@ -113,41 +114,40 @@ export function SummaryCharts({
     <div className="grid gap-(--spacing-block) lg:grid-cols-2">
       <Card className="min-w-0 lg:col-span-2">
         <CardHeader
-          title="Günlük kayıt sayısı"
-          description="Gri sütunlar hafta sonudur."
+          title={t("dashboard.dailyRecordCount")}
+          description={t("dashboard.weekendBars")}
         />
         <CardBody>
           <TrendChart trend={trend} />
         </CardBody>
       </Card>
 
-      {/* Tek departmanlı yöneticide dağılım yok: tek çubuk %100 gösterir ve
-          hiçbir şey söylemez. Blok o zaman hiç çizilmiyor ve durum kartı
-          satırın tamamını alıyor. */}
-      {cokDepartman ? (
-        <Card className="min-w-0" data-test="departman-ozeti">
+      {/* A single-department manager does not get a distribution chart: one bar
+          at 100% says nothing. The status card then spans the full row. */}
+      {manyDepartments ? (
+        <Card className="min-w-0" data-test="department-summary">
           <CardHeader
-            title="Hangi departman ne kadar yazdı"
-            description={`${donemEtiketi}. Doğrudan birim satırına tıklayarak o birimin akışını açın.`}
+            title={t("dashboard.recordsByDepartment")}
+            description={t("dashboard.selectUnitRow", { period: periodLabel })}
           />
           <CardBody>
             <DistributionBars
-              rows={departmanSatirlari}
-              emptyText="Bu aralıkta hiçbir departmanda kayıt yok."
+              rows={departmentRows}
+              emptyText={t("dashboard.noDepartmentRecordsInPeriod")}
             />
           </CardBody>
         </Card>
       ) : null}
 
-      <Card className={cokDepartman ? "min-w-0" : "min-w-0 lg:col-span-2"}>
+      <Card className={manyDepartments ? "min-w-0" : "min-w-0 lg:col-span-2"}>
         <CardHeader
-          title="Kayıtlar hangi aşamada"
-          description={`${donemEtiketi} yazılanlar.`}
+          title={t("dashboard.recordStatus")}
+          description={t("dashboard.activitiesEnteredDuring", { period: periodLabel })}
         />
         <CardBody>
           <DistributionBars
-            rows={durumSatirlari}
-            emptyText="Bu aralıkta kayıt yok."
+            rows={statusRows}
+            emptyText={t("dashboard.noRecordsInPeriod")}
           />
         </CardBody>
       </Card>
@@ -156,11 +156,10 @@ export function SummaryCharts({
 }
 
 /**
- * Ana ekrandaki kısa akış önizlemesi; tamamı ayrı sayfada.
+ * Short dashboard feed preview; the complete feed is on a separate page.
  *
- * Başlık **kapsamın adıdır** ("Departmanım", "Tüm şirket"): kullanıcı bu beş
- * satırın kimin kayıtları olduğunu bilmeli. Kapsam adı olmadan liste, "son
- * kayıtlar" diye adsız bir yığına dönüşür.
+ * The title is the scope name ("My department", "Entire company"): users need
+ * to know whose records these five rows contain.
  */
 export function FeedPreview({
   children,
@@ -170,23 +169,26 @@ export function FeedPreview({
   label,
 }: {
   children: React.ReactNode;
-  /** Önizlemede kaç kayıt gösterildiği; metin bu sayıdan beslenir. */
+  /** Number of records shown in the preview; the description uses this count. */
   previewCount: number;
   href: string;
   count: number;
   label: string;
 }) {
+  const t = useTranslations();
   return (
     <Card>
       <CardHeader
         title={label}
-        description={`En son gelen ${previewCount} kayıt.`}
+        description={t("dashboard.mostRecentRecords", { count: previewCount })}
         action={
           <Link
             href={href}
             className="text-[length:var(--text-sm)] text-primary underline-offset-4 hover:underline"
           >
-            {count > 0 ? `Tüm akışı gör (${count})` : "Tüm akışı gör"}
+            {count > 0
+              ? t("dashboard.viewFullFeedCount", { count })
+              : t("dashboard.viewFullFeed")}
           </Link>
         }
       />

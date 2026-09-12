@@ -1,255 +1,241 @@
 import { redirect } from "next/navigation";
 
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import {
+  countDeputyPeriods,
   listCoveredPeriods,
   listDeputyDecisions,
-  countDeputyPeriods,
   listDeputyPeriods,
-  type DeputyPeriodFilters,
   type DeputyPeriod,
+  type DeputyPeriodFilters,
 } from "@/server/absence/deputy-read";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { prisma } from "@/server/db";
+import { getLocale } from "@/server/i18n/locale";
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, EmptyState } from "@/components/ui/card";
 import { Page, PageHeader } from "@/components/ui/page";
 import { RecordItem, RecordList } from "@/components/ui/table";
-
-import { KararListesi } from "./decision-list";
-import { formatDay } from "@/shared/format/date-time";
-import { resolvePageSize } from "@/server/preferences/page-size";
 import { FilterBar } from "@/components/filters/filter-bar";
 import { Pagination } from "@/components/ui/pagination";
+import { resolvePageSize } from "@/server/preferences/page-size";
 import { buildQueryAddress } from "@/shared/filters/query-address";
+import { formatDay } from "@/shared/format/date-time";
+import type { Locale } from "@/shared/i18n";
 
-// Vekâlet (§4.5, ürün sahibi kararı 21.08.2026).
-//
-// Sayfa **iki yüzle** çalışır ve ikisi de aynı veriden beslenir:
-//
-//   · **Vekile:** hangi dönemlerde kimin yerine baktım, ne karar verdim.
-//   · **Dönen yöneticiye:** yokluğumda kim baktı, ne karar verdi.
-//
-// Vekâletle verilen kararlar denetim izinden okunuyor; iz değişmez ve
-// **kimin adına** karar verildiğini de taşıyor.
+import { DecisionList } from "./decision-list";
 
-export const metadata = { title: "Vekâlet" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.deputy.pageTitle");
+}
 
-function araMetni(start: Date, end: Date): string {
-  return `${formatDay(start)} – ${formatDay(end)}`;
+type Translator = Awaited<ReturnType<typeof getTranslations>>;
+
+function periodLabel(
+  start: Date,
+  end: Date,
+  locale: Parameters<typeof formatDay>[1],
+): string {
+  return `${formatDay(start, locale)} – ${formatDay(end, locale)}`;
 }
 
 export default async function DeputyPage({
   searchParams,
 }: {
-  searchParams: Promise<{ kisi?: string; sayfa?: string; boyut?: string }>;
+  searchParams: Promise<{ person?: string; page?: string; pageSize?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
   const params = await searchParams;
   const now = new Date();
+  const filters: DeputyPeriodFilters = { personId: params.person || undefined };
+  const pageSize = await resolvePageSize(params.pageSize);
+  const requested = Number.parseInt(params.page ?? "1", 10);
+  const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-  const filters: DeputyPeriodFilters = { personId: params.kisi || undefined };
-  const SAYFA_BOYU = await resolvePageSize(params.boyut);
-  const istenen = Number.parseInt(params.sayfa ?? "1", 10);
-  const sayfa = Number.isFinite(istenen) && istenen > 0 ? istenen : 1;
+  // Decisions are calculated from the complete delegation set; pagination
+  // only applies to the period cards shown below.
+  const [myDelegations, coveredByOthers, shellUser, totalPeriods] = await Promise.all([
+    listDeputyPeriods(prisma, user.id, now),
+    listCoveredPeriods(prisma, user.id),
+    toShellUser(user),
+    countDeputyPeriods(prisma, user.id, filters),
+  ]);
 
-  // İki ayrı okuma, çünkü iki ayrı soruya cevap veriyorlar:
-  //
-  //   `vekaletEttiklerim` — kararların hesaplandığı **tam** küme. Süzgeç ya da
-  //   sayfa buraya girerse, ikinci sayfadaki bir dönemin kararları hiç
-  //   yüklenmez ve "o dönemde ne yaptım" sorusu cevapsız kalır (§4.5).
-  //
-  //   `listelenen` — kartta gösterilen, süzgeçli ve sayfalı küme.
-  const [vekaletEttiklerim, yerimeBakanlar, shellUser, toplamDonem] =
-    await Promise.all([
-      listDeputyPeriods(prisma, user.id, now),
-      listCoveredPeriods(prisma, user.id),
-      toShellUser(user),
-      countDeputyPeriods(prisma, user.id, filters),
-    ]);
-
-  const sayfaSayisi = Math.max(1, Math.ceil(toplamDonem / SAYFA_BOYU));
-  const gecerliSayfa = Math.min(sayfa, sayfaSayisi);
-
-  const listelenen = await listDeputyPeriods(prisma, user.id, now, filters, {
-    limit: SAYFA_BOYU,
-    skip: (gecerliSayfa - 1) * SAYFA_BOYU,
+  const pageCount = Math.max(1, Math.ceil(totalPeriods / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const listedPeriods = await listDeputyPeriods(prisma, user.id, now, filters, {
+    limit: pageSize,
+    skip: (currentPage - 1) * pageSize,
   });
 
-  const adres = (ek: Record<string, string> = {}) =>
+  const address = (attachment: Record<string, string> = {}) =>
     buildQueryAddress(
       "/deputy",
-      { kisi: params.kisi, boyut: String(SAYFA_BOYU) },
-      ek,
+      { person: params.person, pageSize: String(pageSize) },
+      attachment,
     );
 
-  // Süzgeç seçenekleri kendi vekâlet geçmişinden gelir: başka kimsenin adı
-  // burada görünmez.
-  const kisiler = [
-    ...new Map(
-      vekaletEttiklerim.map((d) => [d.personId, d.personName]),
-    ).entries(),
-  ].map(([id, ad]) => ({ value: id, label: ad }));
+  const people = [
+    ...new Map(myDelegations.map((period) => [period.personId, period.personName])).entries(),
+  ].map(([id, name]) => ({ value: id, label: name }));
 
-  // Kararlar **bütün** dönemler için yüklenir, yalnız aktif olanlar için
-  // değil (denetim 21.08.2026, bulgu 15). Geçmiş dönemde yalnız bir
-  // sayı görünüyordu; oysa §4.5'in bütün gerekçesi, vekilin aylar sonra
-  // "o dönemde ne yaptım" sorusuna cevap verebilmesi.
-  const kararlar = await Promise.all(
-    vekaletEttiklerim.map(async (donem) => ({
-      donem,
-      kararlar: await listDeputyDecisions(
+  const decisions = await Promise.all(
+    myDelegations.map(async (period) => ({
+      period,
+      decisions: await listDeputyDecisions(
         prisma,
         {
-          personId: donem.personId,
+          personId: period.personId,
           deputyId: user.id,
-          startDate: donem.startDate,
-          endDate: donem.endDate,
+          startDate: period.startDate,
+          endDate: period.endDate,
         },
         user.id,
       ),
     })),
   );
 
-  // Dönen yönetici de yokluğunda ne olduğunu **liste hâlinde** görür (§4.5).
-  // Önceden yalnız bir sayı vardı; "yokluğumda ne oldu" sorusunun cevabı
-  // sayı değildir (denetim 21.08.2026, bulgu 15).
-  const yerimeBakanlarKararlari = await Promise.all(
-    yerimeBakanlar.map(async (donem) => ({
-      donem,
-      kararlar: await listDeputyDecisions(
+  const coveredDecisions = await Promise.all(
+    coveredByOthers.map(async (period) => ({
+      period,
+      decisions: await listDeputyDecisions(
         prisma,
         {
           personId: user.id,
-          deputyId: donem.personId,
-          startDate: donem.startDate,
-          endDate: donem.endDate,
+          deputyId: period.personId,
+          startDate: period.startDate,
+          endDate: period.endDate,
         },
         user.id,
       ),
     })),
   );
 
-  const aktif = vekaletEttiklerim.filter((donem) => donem.active);
-  const aktifKararlar = kararlar.filter(({ donem }) => donem.active);
-  // Biten dönemler katlanmış gelir: vekil çoğunlukla "şu an ne yaptım" diye
-  // bakar, geçmişe ise arayarak iner.
-  const gecmisKararlar = kararlar.filter(
-    ({ donem, kararlar: liste }) => !donem.active && liste.length > 0,
+  const activeDelegations = myDelegations.filter((period) => period.active);
+  const activeDecisions = decisions.filter(({ period }) => period.active);
+  const historyDecisions = decisions.filter(
+    ({ period, decisions: list }) => !period.active && list.length > 0,
   );
 
   return (
     <AppShell user={shellUser}>
-      <Page>
+      <Page marker="delegations">
         <PageHeader
-          marker="Vekâlet"
-          title="Vekâlet"
-          description="Bir yönetici izne çıktığında yerine bakan kişi, o süre boyunca onun departmanını görür ve kararlarını verebilir. Süre bitince yeni kayıtlar kapanır; o döneme ait olanları ve verdiği kararları görmeye devam eder — ileride o dönemle ilgili bir soru gelirse cevaplayabilsin diye."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Vekâlet" }]}
+          title={t("screens.deputy.pageTitle")}
+          description={t("screens.deputy.pageDescription")}
+          breadcrumbs={[
+            { label: t("screens.deputy.dashboard"), href: "/" },
+            { label: t("screens.deputy.pageTitle") },
+          ]}
         />
 
-        {aktif.length > 0 ? (
+        {activeDelegations.length > 0 ? (
           <div
-            data-test="aktif-vekalet"
+            data-test="active-delegation"
             className="border-y border-primary-line bg-primary-soft px-4 py-3.5 sm:px-5"
           >
-            <p className="section-label text-primary">Şu an vekâlet ediyorsunuz</p>
+            <p className="section-label text-primary">{t("screens.deputy.activeLabel")}</p>
             <ul className="mt-1.5 flex flex-col gap-1">
-              {aktif.map((donem) => (
-                <li key={donem.id} className="text-[length:var(--text-sm)] text-ink">
-                  <strong className="font-semibold">{donem.personName}</strong> —{" "}
-                  {donem.personUnitName} · {araMetni(donem.startDate, donem.endDate)}
+              {activeDelegations.map((period) => (
+                <li key={period.id} className="text-[length:var(--text-sm)] text-ink">
+                  <strong className="font-semibold">{period.personName}</strong> —{" "}
+                  {period.personUnitName} · {periodLabel(period.startDate, period.endDate, locale)}
                 </li>
               ))}
             </ul>
           </div>
         ) : null}
 
-        {aktifKararlar.map(({ donem, kararlar }) => (
-          <Card key={`aktif-${donem.id}`}>
+        {activeDecisions.map(({ period, decisions: list }) => (
+          <Card key={`active-${period.id}`}>
             <CardHeader
-              title={`${donem.personName} adına verdiğiniz kararlar`}
-              description="Bu dönemde sizin verdiğiniz onay, düzeltme ve ret kararları."
+              title={t("screens.deputy.decisionsFor", { person: period.personName })}
+              description={t("screens.deputy.decisionsDescription")}
             />
-            <KararListesi kararlar={kararlar} />
+            <DecisionList decisions={list} t={t} locale={locale} />
           </Card>
         ))}
 
         <Card>
           <CardHeader
-            title="Vekâlet ettiğim dönemler"
-            description="Geçmiş dönemler dahil. Kapsam kapansa da o dönemin kayıtlarını ve verdiğiniz kararları görmeye devam edersiniz."
+            title={t("screens.deputy.periodsTitle")}
+            description={t("screens.deputy.periodsDescription")}
           />
           <FilterBar
             action="/deputy"
             clearHref="/deputy"
-            filtered={Boolean(params.kisi)}
-            pageSize={SAYFA_BOYU}
+            filtered={Boolean(params.person)}
+            pageSize={pageSize}
             fields={[
               {
-                name: "kisi",
-                label: "Yerine baktığım kişi",
-                value: params.kisi ?? "",
+                name: "person",
+                label: t("screens.deputy.personCovered"),
+                value: params.person ?? "",
                 width: "w-56",
-                options: [{ value: "", label: "Herkes" }, ...kisiler],
+                options: [{ value: "", label: t("screens.followUps.everyone") }, ...people],
               },
             ]}
           />
 
-          <DonemListesi
-            donemler={listelenen}
-            bosluk={
-              params.kisi
-                ? "Süzgece uyan dönem yok."
-                : "Henüz kimseye vekâlet etmediniz."
+          <PeriodList
+            periods={listedPeriods}
+            emptyDescription={
+              params.person ? t("screens.deputy.noMatch") : t("screens.deputy.noneCovered")
             }
+            t={t}
+            locale={locale}
           />
 
           <Pagination
-            page={gecerliSayfa}
-            pageCount={sayfaSayisi}
-            hrefFor={(hedef) =>
-              hedef === 1 ? adres() : adres({ sayfa: String(hedef) })
+            page={currentPage}
+            pageCount={pageCount}
+            hrefFor={(targetPage) =>
+              targetPage === 1 ? address() : address({ page: String(targetPage) })
             }
           />
         </Card>
 
-        {gecmisKararlar.map(({ donem, kararlar: liste }) => (
-          <Card key={`gecmis-${donem.id}`}>
-            <details data-test="gecmis-kararlar">
+        {historyDecisions.map(({ period, decisions: list }) => (
+          <Card key={`history-${period.id}`}>
+            <details data-test="historical-delegation-decisions">
               <summary className="cursor-pointer list-none px-5 py-4 text-[length:var(--text-sm)] font-medium text-ink">
-                {donem.personName} adına verdiğiniz kararlar ·{" "}
-                {araMetni(donem.startDate, donem.endDate)}
+                {t("screens.deputy.decisionsFor", { person: period.personName })} ·{" "}
+                {periodLabel(period.startDate, period.endDate, locale)}
               </summary>
-              <KararListesi kararlar={liste} />
+              <DecisionList decisions={list} t={t} locale={locale} />
             </details>
           </Card>
         ))}
 
         <Card>
           <CardHeader
-            title="Yokluğumda yerime bakanlar"
-            description="Siz izinliyken kim baktı ve kaç karar verdi."
+            title={t("screens.deputy.myDeputies")}
+            description={t("screens.deputy.myDeputiesDescription")}
           />
-          <DonemListesi
-            donemler={yerimeBakanlar}
-            bosluk="İzin döneminiz için vekil tanımlanmamış."
+          <PeriodList
+            periods={coveredByOthers}
+            emptyDescription={t("screens.deputy.noDeputy")}
+            t={t}
+            locale={locale}
           />
         </Card>
 
-        {yerimeBakanlarKararlari
-          .filter(({ kararlar: liste }) => liste.length > 0)
-          .map(({ donem, kararlar: liste }) => (
-            <Card key={`yerime-${donem.id}`}>
-              <details data-test="yerime-bakan-kararlari">
+        {coveredDecisions
+          .filter(({ decisions: list }) => list.length > 0)
+          .map(({ period, decisions: list }) => (
+            <Card key={`covered-${period.id}`}>
+              <details data-test="covered-delegation-decisions">
                 <summary className="cursor-pointer list-none px-5 py-4 text-[length:var(--text-sm)] font-medium text-ink">
-                  {donem.personName} sizin adınıza ·{" "}
-                  {araMetni(donem.startDate, donem.endDate)}
+                  {t("screens.deputy.coveredFor", { person: period.personName })} ·{" "}
+                  {periodLabel(period.startDate, period.endDate, locale)}
                 </summary>
-                <KararListesi kararlar={liste} />
+              <DecisionList decisions={list} t={t} locale={locale} />
               </details>
             </Card>
           ))}
@@ -258,40 +244,41 @@ export default async function DeputyPage({
   );
 }
 
-function DonemListesi({
-  donemler,
-  bosluk,
+function PeriodList({
+  periods,
+  emptyDescription,
+  t,
+  locale,
 }: {
-  donemler: DeputyPeriod[];
-  bosluk: string;
+  periods: DeputyPeriod[];
+  emptyDescription: string;
+  t: Translator;
+  locale: Locale;
 }) {
-  if (donemler.length === 0) {
-    return <EmptyState title="Kayıt yok" description={bosluk} />;
+  if (periods.length === 0) {
+    return <EmptyState title={t("screens.deputy.noRecords")} description={emptyDescription} />;
   }
 
   return (
     <RecordList>
-      {donemler.map((donem) => (
-        <RecordItem key={donem.id} data-test="vekalet-donemi" className="sm:px-5">
+      {periods.map((period) => (
+        <RecordItem key={period.id} data-test="delegation-period" className="sm:px-5">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <span className="font-medium text-ink">{donem.personName}</span>
+              <span className="font-medium text-ink">{period.personName}</span>
               <span className="text-[length:var(--text-sm)] text-muted">
-                {donem.personUnitName}
+                {period.personUnitName}
               </span>
-              {donem.active ? <Badge tone="primary">Sürüyor</Badge> : null}
+              {period.active ? <Badge tone="primary">{t("screens.deputy.ongoing")}</Badge> : null}
             </p>
             <span className="text-[length:var(--text-sm)] text-muted">
-              <span className="tabular font-semibold text-ink">
-                {donem.decisionCount}
-              </span>{" "}
-              karar
+              {t("screens.deputy.decisionCount", { count: period.decisionCount })}
             </span>
           </div>
 
           <p className="mt-1 text-[length:var(--text-xs)] text-faint">
-            {araMetni(donem.startDate, donem.endDate)}
-            {donem.note ? ` · ${donem.note}` : ""}
+            {periodLabel(period.startDate, period.endDate, locale)}
+            {period.note ? ` · ${period.note}` : ""}
           </p>
         </RecordItem>
       ))}

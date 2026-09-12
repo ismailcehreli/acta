@@ -1,37 +1,35 @@
 import { z } from "zod";
 
-// Organizasyon ağacı girdileri (§4). Aynı şema hem formda hem sunucuda çalışır.
+// Organization-tree input (§4), shared by the form and server.
 
 export const orgUnitNameSchema = z
   .string()
   .trim()
-  .min(2, "Birim adı en az 2 karakter olmalı")
-  .max(150, "Birim adı en fazla 150 karakter olabilir");
+  .min(2, "Unit name must be at least 2 characters")
+  .max(150, "Unit name must be 150 characters or fewer");
 
-/** Kademe etiketi serbest metindir: kademeler koda gömülmez (İlke 1). */
+/** Organization-unit type is free text; levels are not hard-coded (Principle 1). */
 export const orgUnitTypeSchema = z
   .string()
   .trim()
-  .min(2, "Kademe adı en az 2 karakter olmalı")
-  .max(50, "Kademe adı en fazla 50 karakter olabilir");
+  .min(2, "Unit type must be at least 2 characters")
+  .max(50, "Unit type must be 50 characters or fewer");
 
 export const createOrgUnitSchema = z.object({
   name: orgUnitNameSchema,
   type: orgUnitTypeSchema,
-  /** Boş bırakılırsa kök birim oluşturulur; ağaçta yalnızca bir kök olabilir. */
+  /** Omit to create the root unit; the tree may have only one root. */
   parentId: z.string().uuid().nullable().default(null),
   sortOrder: z.number().int().min(0).max(9999).default(0),
-  // Davranış bayrakları (§4.3). Sürüm 1'de yalnızca veride durur.
+  // Behavior flags (§4.3) are stored as data in version 1.
   requiresApproval: z.boolean().default(false),
   autoFlowsUp: z.boolean().default(true),
   attentionGroupId: z.string().trim().max(100).nullable().default(null),
 });
 
 /**
- * Birim düzenleme (§4.3). Sistem yöneticisi birimin **kimliğini ve
- * davranışını** düzeltebilir; yeri (`parentId`) ve aktifliği ayrı işlemlerdir
- * — taşıma ağacın bütünlük kurallarını, pasifleştirme ise §16.6'yı ilgilendirir
- * ve ikisi de kendi kontrollerine sahiptir.
+ * Unit editing (§4.3). A system administrator can edit a unit's identity and
+ * behavior; its location and active state use separate operations.
  */
 export const updateOrgUnitSchema = z.object({
   id: z.string().uuid(),
@@ -46,11 +44,9 @@ export const moveOrgUnitSchema = z.object({
   id: z.string().uuid(),
   newParentId: z.string().uuid(),
   /**
-   * Kullanıcının onayladığı mesai penceresi önizlemesinin imzası.
-   *
-   * Taşıma birimin devraldığı pencereyi değiştiriyorsa (tasarım Paket H)
-   * sunucu bu imzayı **yeniden hesaplayıp** karşılaştırıyor: araya giren bir
-   * takvim değişikliği, kullanıcının okuyup onayladığı cümleyi yanlış kılardı.
+   * Signature of the work-window preview confirmed by the user. The server
+   * recomputes it before moving a unit so a concurrent calendar change cannot
+   * invalidate the text the user confirmed.
    */
   confirmedCalendarSignature: z.string().max(200).optional(),
 });

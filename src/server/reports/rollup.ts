@@ -9,7 +9,7 @@ export interface RollupOptions<T> {
   merge: (target: T, source: T) => void;
 }
 
-/** Organizasyon ağacını kökten aşağı yürüyüp sayaçları üst birimlere taşır. */
+
 export function rollupByOrgUnit<T>(
   units: readonly OrgUnitTreeNode[],
   rootId: string,

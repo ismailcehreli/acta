@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, Select, Textarea } from "@/components/ui/form";
@@ -13,64 +14,70 @@ import {
   requestChangesAction,
 } from "./approval-actions";
 
-// Onay paneli (§5.4). Yalnız **aktif onaylayıcıya** ve yalnız karar bekleyen
-// kayıtta gösterilir; yetkinin kendisi sunucuda ayrıca doğrulanır.
+
+
 //
-// Üç karar üç ayrı formdur: tek forma üç düğme koyup hangisine basıldığını
-// gizli alandan okumak, yanlış düğmeye basmayı sessiz bir hataya çevirirdi.
+
+
 //
-// Gerekçe **kategori olarak** seçilir; serbest açıklama isteğe bağlıdır.
-// Herkesin kendi cümlesini yazdığı bir yığın raporlanamaz (ürün sahibi
-// kararı, 19.08.2026).
+
+
+
 
 export interface ReasonOption {
   id: string;
   label: string;
 }
 
-/** Kategori + isteğe bağlı açıklama; iki kararda da aynı düzen. */
+
 function DecisionForm({
   activityId,
-  adi,
+  name,
   reasons,
   action,
-  pending,
-  gerekceEtiketi,
-  ipucu,
-  dugme,
-  bekleyen,
+  isPending,
+  pendingLabel,
+  reasonLabel,
+  hint,
+  buttonLabel,
+  selectLabel,
+  noteLabel,
+  noteHint,
+  noReasonMessage,
 }: {
   activityId: string;
-  adi: string;
+  name: string;
   reasons: ReasonOption[];
   action: (formData: FormData) => void;
-  pending: boolean;
-  gerekceEtiketi: string;
-  ipucu: string;
-  dugme: string;
-  bekleyen: string;
+  isPending: boolean;
+  reasonLabel: string;
+  hint: string;
+  buttonLabel: string;
+  pendingLabel: string;
+  selectLabel: string;
+  noteLabel: string;
+  noteHint: string;
+  noReasonMessage: React.ReactNode;
 }) {
-  const secimId = `${adi}-gerekce-${activityId}`;
-  const notId = `${adi}-aciklama-${activityId}`;
+  const selectId = `${name}-reason-${activityId}`;
+  const noteId = `${name}-note-${activityId}`;
 
   if (reasons.length === 0) {
     return (
       <Alert tone="correction">
-        Bu karar için tanımlı gerekçe yok. Sistem yöneticisi
-        &nbsp;<span className="font-medium">Yönetim → Onay gerekçeleri</span>
-        &nbsp;ekranından tanımlamalı.
+        {noReasonMessage}
       </Alert>
     );
   }
 
   return (
-    <form action={action} className="flex flex-col gap-3" data-test={`${adi}-formu`}>
+    <form action={action} className="flex flex-col gap-3" data-test={`${name}-form`}>
       <input type="hidden" name="id" value={activityId} />
 
-      <Field htmlFor={secimId} label={gerekceEtiketi} hint={ipucu} required>
-        <Select id={secimId} name="reasonId" required defaultValue="">
+      <Field htmlFor={selectId} label={reasonLabel} hint={hint} required>
+        <Select id={selectId} name="reasonId" required defaultValue="">
           <option value="" disabled>
-            Seçiniz…
+            {selectLabel}
           </option>
           {reasons.map((reason) => (
             <option key={reason.id} value={reason.id}>
@@ -81,16 +88,16 @@ function DecisionForm({
       </Field>
 
       <Field
-        htmlFor={notId}
-        label="Açıklama (isteğe bağlı)"
-        hint="Yazan kişi bunu ekranında görür."
+        htmlFor={noteId}
+        label={noteLabel}
+        hint={noteHint}
       >
-        <Textarea id={notId} name="note" rows={3} maxLength={1000} />
+        <Textarea id={noteId} name="note" rows={3} maxLength={1000} />
       </Field>
 
       <div>
-        <Button type="submit" variant="danger" disabled={pending}>
-          {pending ? bekleyen : dugme}
+        <Button type="submit" variant="danger" disabled={isPending}>
+          {isPending ? pendingLabel : buttonLabel}
         </Button>
       </div>
     </form>
@@ -104,34 +111,35 @@ export function ApprovalPanel({
   rejectReasons,
 }: {
   activityId: string;
-  /** Düzeltme istenmiş kayıtta onaylanacak bir şey yoktur; yalnız ret kalır. */
+  /** A record with requested changes has no approval action; rejection remains available. */
   canApprove: boolean;
   changesReasons: ReasonOption[];
   rejectReasons: ReasonOption[];
 }) {
-  const [acik, setAcik] = useState<"yok" | "duzeltme" | "ret">("yok");
+  const t = useTranslations();
+  const [open, setOpen] = useState<"none" | "changes" | "reject">("none");
 
-  const [onayDurumu, onayAction, onayPending] = useActionState(
+  const [approvalStatus, approvalAction, approvalPending] = useActionState(
     approveActivityAction,
     emptyActivityFormState,
   );
-  const [duzeltmeDurumu, duzeltmeAction, duzeltmePending] = useActionState(
+  const [changesStatus, changesAction, changesPending] = useActionState(
     requestChangesAction,
     emptyActivityFormState,
   );
-  const [retDurumu, retAction, retPending] = useActionState(
+  const [rejectStatus, rejectAction, rejectPending] = useActionState(
     rejectActivityAction,
     emptyActivityFormState,
   );
 
   return (
-    <div className="flex flex-col gap-3" data-test="onay-paneli">
+      <div className="flex flex-col gap-3" data-test="approval-panel">
       <div className="flex flex-wrap items-center gap-2">
         {canApprove ? (
-          <form action={onayAction}>
+          <form action={approvalAction}>
             <input type="hidden" name="id" value={activityId} />
-            <Button type="submit" variant="primary" disabled={onayPending}>
-              {onayPending ? "Onaylanıyor…" : "Onayla"}
+            <Button type="submit" variant="primary" disabled={approvalPending}>
+              {approvalPending ? t("approvals.approving") : t("approvals.approveSingle")}
             </Button>
           </form>
         ) : null}
@@ -139,55 +147,75 @@ export function ApprovalPanel({
         {canApprove ? (
           <Button
             type="button"
-            onClick={() => setAcik((o) => (o === "duzeltme" ? "yok" : "duzeltme"))}
-            aria-expanded={acik === "duzeltme"}
+            onClick={() => setOpen((o) => (o === "changes" ? "none" : "changes"))}
+            aria-expanded={open === "changes"}
           >
-            {acik === "duzeltme" ? "Vazgeç" : "Düzeltme iste"}
+            {open === "changes"
+              ? t("common.cancel")
+              : t("approvals.requestChanges")}
           </Button>
         ) : null}
 
         <Button
           type="button"
-          onClick={() => setAcik((o) => (o === "ret" ? "yok" : "ret"))}
-          aria-expanded={acik === "ret"}
+          onClick={() => setOpen((o) => (o === "reject" ? "none" : "reject"))}
+          aria-expanded={open === "reject"}
         >
-          {acik === "ret" ? "Vazgeç" : "Reddet"}
+          {open === "reject" ? t("common.cancel") : t("approvals.reject")}
         </Button>
       </div>
 
-      {acik === "duzeltme" ? (
+      {open === "changes" ? (
         <DecisionForm
           activityId={activityId}
-          adi="duzeltme"
+          name="changes"
           reasons={changesReasons}
-          action={duzeltmeAction}
-          pending={duzeltmePending}
-          gerekceEtiketi="Düzeltme gerekçesi"
-          ipucu="Yazan kişi bunu görür ve kaydı düzeltip yeniden gönderir."
-          dugme="Düzeltme iste"
-          bekleyen="Gönderiliyor…"
+          action={changesAction}
+          isPending={changesPending}
+          reasonLabel={t("approvals.changesReason")}
+          hint={t("approvals.changesHint")}
+          buttonLabel={t("approvals.requestChanges")}
+          pendingLabel={t("approvals.requestingChanges")}
+          selectLabel={t("approvals.selectReason")}
+          noteLabel={t("approvals.noteOptional")}
+          noteHint={t("approvals.noteHint")}
+          noReasonMessage={
+            <>
+              {t("approvals.noReasonDefined")} {" "}
+              <span className="font-medium">{t("approvals.approvalReasonsLink")}</span>.
+            </>
+          }
         />
       ) : null}
 
-      {acik === "ret" ? (
+      {open === "reject" ? (
         <DecisionForm
           activityId={activityId}
-          adi="ret"
+          name="reject"
           reasons={rejectReasons}
-          action={retAction}
-          pending={retPending}
-          gerekceEtiketi="Ret gerekçesi"
-          ipucu="Kayıt kapanır ve yukarı akmaz. Silinmez; yazan ve siz görmeye devam edersiniz."
-          dugme="Reddet"
-          bekleyen="Reddediliyor…"
+          action={rejectAction}
+          isPending={rejectPending}
+          reasonLabel={t("approvals.rejectReason")}
+          hint={t("approvals.rejectHint")}
+          buttonLabel={t("approvals.reject")}
+          pendingLabel={t("approvals.rejecting")}
+          selectLabel={t("approvals.selectReason")}
+          noteLabel={t("approvals.noteOptional")}
+          noteHint={t("approvals.noteHint")}
+          noReasonMessage={
+            <>
+              {t("approvals.noReasonDefined")} {" "}
+              <span className="font-medium">{t("approvals.approvalReasonsLink")}</span>.
+            </>
+          }
         />
       ) : null}
 
-      {onayDurumu.error ? <Alert tone="danger">{onayDurumu.error}</Alert> : null}
-      {duzeltmeDurumu.error ? (
-        <Alert tone="danger">{duzeltmeDurumu.error}</Alert>
+      {approvalStatus.error ? <Alert tone="danger">{approvalStatus.error}</Alert> : null}
+      {changesStatus.error ? (
+        <Alert tone="danger">{changesStatus.error}</Alert>
       ) : null}
-      {retDurumu.error ? <Alert tone="danger">{retDurumu.error}</Alert> : null}
+      {rejectStatus.error ? <Alert tone="danger">{rejectStatus.error}</Alert> : null}
     </div>
   );
 }

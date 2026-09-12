@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { renderLine } from "@/server/notifications/templates";
+import { createTranslator, DEFAULT_LOCALE } from "@/shared/i18n";
 import {
   dropSubscription,
   listSubscriptions,
@@ -8,19 +9,19 @@ import {
 import { isExhausted, isRetryDue, MAX_ATTEMPTS } from "@/server/notifications/schedule";
 import { readVapidKeys } from "@/server/settings/vapid";
 import {
-  gorunurlugeGoreAyir,
+  partitionRowsByVisibility,
   type VisibleRowsDb,
 } from "@/server/notifications/visible-rows";
 
-// Push kanalının kuyruk işleyicisi (§12.3, Görev 5.3b).
+
 //
-// E-posta işleyicisiyle **aynı kuyruğu** kullanır, ayrı kanal değeriyle.
-// Birleştirme yoktur: push zaten kısa ve anlıktır, birleştirilmiş bir bildirim
-// "3 yeni olay" deyip kimseye ne olduğunu söylemezdi.
+
+
+
 //
-// **İçerik taşınmaz** (§12.3): bildirimde başlık ve kaydın adresi vardır,
-// açıklama yoktur. Kilit ekranında görünen bir metin, telefonu eline alan
-// herkesin okuyabileceği bir metindir.
+
+
+
 
 export interface PushMessage {
   title: string;
@@ -36,7 +37,7 @@ export interface PushEndpoint {
 
 export type PushSendOutcome =
   | { ok: true }
-  /** Abonelik kalıcı olarak yok; kayıt düşürülür. */
+
   | { ok: false; gone: true }
   | { ok: false; gone: false; message: string };
 
@@ -59,13 +60,13 @@ export interface PushDispatchResult {
   delivered: number;
   failed: number;
   givenUp: number;
-  /** Kalıcı hata yüzünden düşürülen abonelik sayısı. */
+
   droppedSubscriptions: number;
-  /** Alıcı ilgili kaydı artık göremediği için gönderilmeyen kayıt sayısı. */
+
   cancelled: number;
 }
 
-const BOS: PushDispatchResult = {
+const EMPTY_RESULT: PushDispatchResult = {
   sent: 0,
   delivered: 0,
   failed: 0,
@@ -83,9 +84,9 @@ export async function dispatchPushNotifications(
 
   const keys = await readVapidKeys(db);
   if (!keys) {
-    // Anahtar yoksa push kurulmamıştır. Kuyruğa hiç yazılmaması gerekir; yine
-    // de yazılmışsa burada durulur ve kayıtlar bekler.
-    return BOS;
+
+
+    return EMPTY_RESULT;
   }
 
   const pending = await db.notificationQueue.findMany({
@@ -103,118 +104,119 @@ export async function dispatchPushNotifications(
     },
   });
 
-  const sonuc: PushDispatchResult = { ...BOS };
+  const result: PushDispatchResult = { ...EMPTY_RESULT };
 
   for (const item of pending) {
     if (!isRetryDue(item, now)) continue;
 
-    // Görünürlük gönderim anında yeniden sorulur (bulgu 3). Titreşimle
-    // gelen bildirim de faaliyetin başlığını taşıyor; alıcı o kaydı artık
-    // göremiyorsa gönderilmez.
-    const { dusenler } = await gorunurlugeGoreAyir(
+
+
+
+    const { dropped } = await partitionRowsByVisibility(
       db,
       { id: item.userId, isSystemAdmin: false },
       [item],
       now,
     );
 
-    if (dusenler.length > 0) {
+    if (dropped.length > 0) {
       await db.notificationQueue.update({
         where: { id: item.id },
         data: {
           status: "CANCELLED",
           lastAttemptAt: now,
-          lastError: "Alıcı ilgili kaydı artık göremiyor.",
+          lastError: "The recipient can no longer see the related activity.",
         },
       });
-      sonuc.cancelled += 1;
+      result.cancelled += 1;
       continue;
     }
 
-    const abonelikler = await listSubscriptions(db, item.userId);
+    const subscriptions = await listSubscriptions(db, item.userId);
 
-    if (abonelikler.length === 0) {
-      // Aboneliği olmayan kişiye push gönderilemez. Bu bir hata değildir:
-      // kişi izni geri çekmiş olabilir. Kayıt bekletilmez, kapatılır — aksi
-      // hâlde kuyrukta sonsuza kadar birikirdi.
+    if (subscriptions.length === 0) {
+
+
+      // Otherwise it would remain in the queue forever.
       await db.notificationQueue.update({
         where: { id: item.id },
         data: {
           status: "FAILED",
           attemptCount: MAX_ATTEMPTS,
           lastAttemptAt: now,
-          lastError: "Kişinin push aboneliği yok.",
+          lastError: "The person has no push subscription.",
         },
       });
-      sonuc.givenUp += 1;
+      result.givenUp += 1;
       continue;
     }
 
-    const satir = renderLine(item.eventType, item.payload);
+    const row = renderLine(item.eventType, item.payload);
     const message: PushMessage = {
-      title: "Faaliyet Raporlama",
-      body: satir.summary,
-      url: `${baseUrl}${satir.path}`,
+      title: createTranslator(DEFAULT_LOCALE)("notifications.pushTitle"),
+      body: row.summary,
+      url: `${baseUrl}${row.path}`,
     };
 
-    let herhangiBiriGitti = false;
-    let sonHata = "";
+    let deliveredToAnyDevice = false;
+    let lastError = "";
 
-    for (const abonelik of abonelikler) {
-      const cikti = await transport.send(abonelik, message, keys);
-      sonuc.sent += 1;
+    for (const subscription of subscriptions) {
+      const outcome = await transport.send(subscription, message, keys);
+      result.sent += 1;
 
-      if (cikti.ok) {
-        herhangiBiriGitti = true;
+      if (outcome.ok) {
+        deliveredToAnyDevice = true;
         await db.pushSubscription.updateMany({
-          where: { endpoint: abonelik.endpoint },
+          where: { endpoint: subscription.endpoint },
           data: { lastSentAt: now, failureCount: 0 },
         });
         continue;
       }
 
-      if (cikti.gone) {
-        // Tarayıcı aboneliği silmiş; tutmak her turda boşuna denemek olurdu.
-        await dropSubscription(db, abonelik.endpoint);
-        sonuc.droppedSubscriptions += 1;
+      if (outcome.gone) {
+        // The browser removed the subscription; retrying it would waste every
+        // future cycle.
+        await dropSubscription(db, subscription.endpoint);
+        result.droppedSubscriptions += 1;
         continue;
       }
 
-      sonHata = cikti.message;
+      lastError = outcome.message;
       await db.pushSubscription.updateMany({
-        where: { endpoint: abonelik.endpoint },
+        where: { endpoint: subscription.endpoint },
         data: { failureCount: { increment: 1 } },
       });
     }
 
-    if (herhangiBiriGitti) {
-      // **Bir cihaza gitmesi yeter.** Hepsini beklemek, kapalı bir eski
-      // telefonu yüzünden bildirimi tekrar tekrar göndermek olurdu.
+    if (deliveredToAnyDevice) {
+      // **One device is enough.** Waiting for every device would resend the
+      // notification because of one old, inactive phone.
       await db.notificationQueue.update({
         where: { id: item.id },
         data: { status: "SENT", sentAt: now, lastAttemptAt: now, lastError: null },
       });
-      sonuc.delivered += 1;
+      result.delivered += 1;
       continue;
     }
 
-    const deneme = item.attemptCount + 1;
-    const tukendi = isExhausted(deneme) || sonHata === "";
+    const attemptCount = item.attemptCount + 1;
+    const exhausted = isExhausted(attemptCount) || lastError === "";
 
     await db.notificationQueue.update({
       where: { id: item.id },
       data: {
-        status: tukendi ? "FAILED" : "PENDING",
-        attemptCount: deneme,
+        status: exhausted ? "FAILED" : "PENDING",
+        attemptCount,
         lastAttemptAt: now,
         lastError:
-          sonHata === "" ? "Bütün abonelikler geçersizdi." : sonHata.slice(0, 500),
+          lastError === "" ? "All subscriptions were invalid." : lastError.slice(0, 500),
       },
     });
 
-    if (tukendi) sonuc.givenUp += 1;
-    else sonuc.failed += 1;
+    if (exhausted) result.givenUp += 1;
+    else result.failed += 1;
   }
 
-  return sonuc;
+  return result;
 }

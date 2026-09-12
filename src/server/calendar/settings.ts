@@ -2,22 +2,22 @@ import type { PrismaClient } from "@prisma/client";
 
 import { AUDIT_ACTIONS, AUDIT_OBJECTS, recordAudit } from "@/server/audit/log";
 
-import { MESAI_PENCERESI_KILIDI } from "./unit-calendar";
+import { WORK_WINDOW_LOCK_KEY } from "./unit-calendar";
 
 import { toDateValue } from "@/server/activities/date-rules";
 import type { HolidayInput, WorkCalendarInput } from "@/shared/schemas/calendar";
 
-// Çalışma takvimi yönetimi (§12.1, §16.5). Takvim şirket genelinde tek
-// kayıttır; veritabanı da bunu zorlar (`WorkCalendar_singleton`, id = 1).
 
-/** Yalnız okuma yapan yollar için; işleyici denetim kaydı yazmaz. */
+
+
+
 export type CalendarReadDb = Pick<PrismaClient, "workCalendar" | "holiday">;
 
-/** Yazma yolları denetim kaydı da bırakır (§15.2). */
+
 export type CalendarDb = CalendarReadDb &
   Pick<PrismaClient, "auditLog" | "$transaction" | "$executeRaw">;
 
-/** Kayıt yoksa kullanılan başlangıç değerleri: hafta içi 08:30–17:30. */
+
 export const DEFAULT_WORK_CALENDAR: WorkCalendarInput = {
   workingDays: [1, 2, 3, 4, 5],
   workStartMinute: 8 * 60 + 30,
@@ -45,11 +45,11 @@ export async function saveWorkCalendar(
 ): Promise<WorkCalendarInput> {
   const workingDays = [...new Set(input.workingDays)].sort((a, b) => a - b);
 
-  // Şirket varsayılanı da devralınan pencerenin kaynağı olabiliyor: birim
-  // taşımanın onayladığı değeri bu yazı da değiştirebilir, o yüzden aynı
-  // kilide katılıyor (P4-1).
+
+
+
   const row = await db.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${MESAI_PENCERESI_KILIDI}))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${WORK_WINDOW_LOCK_KEY}))`;
 
     return tx.workCalendar.upsert({
       where: { id: 1 },
@@ -92,7 +92,7 @@ export interface HolidayView {
   description: string;
 }
 
-/** Belirtilen yılın tatilleri; yıl verilmezse tamamı. */
+/** Holidays for the specified year, or all holidays when no year is given. */
 export async function listHolidays(
   db: CalendarReadDb,
   year?: number,
@@ -133,7 +133,7 @@ export async function addHoliday(
     return {
       ok: false,
       error: "already_exists",
-      message: "Bu tarih zaten tatil olarak tanımlı.",
+      message: "This date is already defined as a holiday.",
     };
   }
 
@@ -160,9 +160,9 @@ export async function addHoliday(
 }
 
 /**
- * Tatil kaydını kaldırır. Tatil bir iş kaydı değil, yapılandırmadır: yanlış
- * girilen bir tarih düzeltilebilmeli (§16.6'daki silme yasağı faaliyet,
- * kullanıcı ve birim içindir; veritabanı da bu tabloda silmeyi engellemez).
+ * Removes a holiday record. A holiday is configuration, not a work record, so
+ * an incorrectly entered date must be correctable (the §16.6 deletion ban
+ * applies to activities, users, and units; the database permits this delete).
  */
 export async function removeHoliday(
   db: CalendarDb,
@@ -170,11 +170,11 @@ export async function removeHoliday(
   actorId: string | null = null,
   now: Date = new Date(),
 ): Promise<boolean> {
-  const silinen = await db.holiday.deleteMany({
+  const deleted = await db.holiday.deleteMany({
     where: { date: toDateValue(date) },
   });
 
-  if (silinen.count === 0) return false;
+  if (deleted.count === 0) return false;
 
   await recordAudit(db, {
     userId: actorId,

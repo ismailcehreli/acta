@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { getTranslations } from "@/server/i18n/server";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 
@@ -11,38 +12,39 @@ interface ManagerSummaryItem {
   count: number;
 }
 
-/** Yönetici ve üst yöneticinin ana ekrandaki kısa iş özeti. */
-export function ManagerSummaryBlock({
+
+export async function ManagerSummaryBlock({
   pendingAbsence,
   newFeedback,
 }: {
   pendingAbsence: number | null;
   newFeedback: number | null;
 }) {
+  const t = await getTranslations();
   const items: ManagerSummaryItem[] = [];
 
   if (pendingAbsence !== null) {
     items.push({
-      label: "Onay bekleyen izin",
+      label: t("dashboard.leaveAwaitingApproval"),
       description:
         pendingAbsence > 0
-          ? "Kararınızı bekleyen izin talepleri var."
-          : "Kararınızı bekleyen izin talebi yok.",
-      action: "İzinleri aç",
-      href: "/team/absence?durum=bekliyor",
+          ? t("dashboard.leaveWaitingForDecision")
+          : t("dashboard.noLeaveWaitingForDecision"),
+      action: t("dashboard.openLeave"),
+      href: "/team/absence?status=pending",
       count: pendingAbsence,
     });
   }
 
   if (newFeedback !== null) {
     items.push({
-      label: "Yeni geri bildirim",
+      label: t("dashboard.newFeedback"),
       description:
         newFeedback > 0
-          ? "Okuyup durumunu güncellemeniz gereken kayıtlar var."
-          : "Yeni geri bildirim bulunmuyor.",
-      action: "Geri bildirimleri aç",
-      href: "/feedback?sekme=yonetim",
+          ? t("dashboard.feedbackNeedsAttention")
+          : t("dashboard.noNewFeedback"),
+      action: t("dashboard.openFeedback"),
+      href: "/feedback?tab=management",
       count: newFeedback,
     });
   }
@@ -50,10 +52,10 @@ export function ManagerSummaryBlock({
   if (items.length === 0) return null;
 
   return (
-    <Card id="yonetici-isleri" data-test="yonetici-isleri">
+    <Card id="manager-work" data-test="manager-work">
       <CardHeader
-        title="Yönetici işleri"
-        description="Doğrudan ilgilenmeniz gereken izin ve geri bildirimler."
+        title={t("dashboard.managerWork")}
+        description={t("dashboard.managerWorkDescription")}
       />
       <CardBody className="grid gap-3 sm:grid-cols-2">
         {items.map((item) => (

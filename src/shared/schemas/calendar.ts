@@ -2,71 +2,71 @@ import { z } from "zod";
 
 import { isCalendarDay } from "./iso-date";
 
-// Çalışma takvimi ve tatil girdileri (§12.1). Takvim **şirket genelinde tek
-// tanımdır**; vardiya, geceye taşan mesai ve kişi bazlı takvim v3'te kaldırıldı.
+// Work-calendar and holiday input (§12.1). The calendar has one company-wide
+// definition; shifts and person-specific calendars are not part of this model.
 
-/** ISO gün numarası: 1 = Pazartesi … 7 = Pazar. */
+/** ISO weekday number: 1 = Monday … 7 = Sunday. */
 export const isoWeekdaySchema = z.coerce.number().int().min(1).max(7);
 
 export const workCalendarSchema = z
   .object({
     workingDays: z
       .array(isoWeekdaySchema)
-      .min(1, "En az bir çalışma günü seçilmeli")
+      .min(1, "Select at least one working day")
       .max(7)
       .refine((days) => new Set(days).size === days.length, {
-        message: "Aynı gün iki kez seçilemez",
+        message: "A working day cannot be selected more than once",
       }),
-    // Gün başından itibaren dakika; yerel saat (Europe/Istanbul).
+    // Minutes since midnight in the company time zone (Europe/Istanbul).
     workStartMinute: z.coerce.number().int().min(0).max(24 * 60 - 1),
     workEndMinute: z.coerce.number().int().min(1).max(24 * 60),
   })
   .refine((value) => value.workEndMinute > value.workStartMinute, {
-    message: "Mesai bitişi başlangıçtan sonra olmalı",
+    message: "Workday end must be after workday start",
     path: ["workEndMinute"],
   });
 
 export const holidayDateSchema = z
   .string()
-  .refine(isCalendarDay, "Tarih GG.AA.YYYY biçiminde seçilmeli");
+  .refine(isCalendarDay, "Choose a date in DD.MM.YYYY format");
 
 export const holidaySchema = z.object({
   date: holidayDateSchema,
   description: z
     .string()
     .trim()
-    .min(1, "Tatil açıklaması zorunludur")
-    .max(150, "Açıklama en fazla 150 karakter olabilir"),
+    .min(1, "Holiday description is required")
+    .max(150, "Description must be 150 characters or fewer"),
 });
 
 export type WorkCalendarInput = z.infer<typeof workCalendarSchema>;
 export type HolidayInput = z.infer<typeof holidaySchema>;
 
-/** Dakika değerini "HH:MM" biçiminde gösterir. */
+/** Formats a minute value as `HH:MM`. */
 export function minuteToTime(minute: number): string {
-  const saat = Math.floor(minute / 60);
-  const dakika = minute % 60;
-  return `${String(saat).padStart(2, "0")}:${String(dakika).padStart(2, "0")}`;
+  const hour = Math.floor(minute / 60);
+  const remainder = minute % 60;
+  return `${String(hour).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
 
-/** "HH:MM" metnini gün başından itibaren dakikaya çevirir. */
+/** Converts an `HH:MM` value to minutes since midnight. */
 export function timeToMinute(value: string): number | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;
 
-  const saat = Number(match[1]);
-  const dakika = Number(match[2]);
-  if (saat > 24 || dakika > 59) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 24 || minute > 59) return null;
 
-  return saat * 60 + dakika;
+  return hour * 60 + minute;
 }
 
 export const WEEKDAY_NAMES: Record<number, string> = {
-  1: "Pazartesi",
-  2: "Salı",
-  3: "Çarşamba",
-  4: "Perşembe",
-  5: "Cuma",
-  6: "Cumartesi",
-  7: "Pazar",
+  1: "Monday",
+  2: "Tuesday",
+  3: "Wednesday",
+  4: "Thursday",
+  5: "Friday",
+  6: "Saturday",
+  7: "Sunday",
 };

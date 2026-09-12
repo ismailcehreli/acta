@@ -10,20 +10,12 @@ import {
 } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// TREND GRAFİĞİ ŞİRKET TAKVİMİNE BAĞLI (denetim 21.08.2026, bulgu 13).
+// TREND CHART DEPENDS ON COMPANY WORK CALENDAR (audit 2026-08-21, finding 13).
 //
-// `activityTrend` "çalışma günü" tanımını koda gömülü bir cumartesi-pazar
-// kontrolünden alıyordu. Şirketin kendi takvimini (§12.1) hiç okumuyordu:
-// cumartesi çalışan bir yerde ortalama yanlış çıkıyor, hafta içine denk gelen
-// resmî tatil "kayıt girilmemiş çalışma günü" olarak sayılıyordu.
-//
-// Bulgunun asıl dersi şu: bu yol için **hiç test yoktu.** Denetim
-// `haftaSonu()` fonksiyonunu her gün için `false` döndürecek şekilde bozdu
-// ve mevcut 30
-// dashboard testinin tamamı yine geçti. "Test var" ile "üretim yolu korunuyor"
-// aynı şey değil.
+// `activityTrend` was taking working day definitions from hardcoded Saturday-Sunday logic,
+// without reading the company's work calendar (§12.1).
 
-const NOW = new Date("2026-08-22T12:00:00.000Z"); // Cumartesi
+const NOW = new Date("2026-08-22T12:00:00.000Z"); // Saturday
 
 beforeEach(async () => {
   await resetDatabase();
@@ -33,14 +25,14 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sahne() {
-  const kok = await createOrgUnit({ name: "Acta HQ" });
-  const kisi = await createUser(kok.id, { email: "kisi@ornek.test" });
-  return { kok, kisi };
+async function setup() {
+  const root = await createOrgUnit({ name: "Acta HQ" });
+  const user = await createUser(root.id, { email: "user@example.test" });
+  return { root, user };
 }
 
-/** Şirket takvimini kurar; kayıt yoksa hafta içi varsayılanı işler. */
-async function takvimKur(workingDays: number[]) {
+/** Sets up company work calendar; falls back to weekday defaults if empty. */
+async function setupCalendar(workingDays: number[]) {
   await testDb.workCalendar.upsert({
     where: { id: 1 },
     create: { id: 1, workingDays, workStartMinute: 8 * 60, workEndMinute: 17 * 60 },
@@ -52,98 +44,95 @@ function viewer(id: string) {
   return { id, isSystemAdmin: false };
 }
 
-describe("çalışma günü tanımı ayardan gelir", () => {
-  it("cumartesi çalışan şirkette cumartesi ortalamaya girer", async () => {
-    const { kisi } = await sahne();
-    // Yalnız cumartesi çalışılıyor.
-    await takvimKur([6]);
+describe("working day definition comes from settings", () => {
+  it("includes Saturday in average when company works on Saturday", async () => {
+    const { user } = await setup();
+    // Only Saturday is a workday.
+    await setupCalendar([6]);
 
-    await createActivity(kisi, {
+    await createActivity(user, {
       approvalStatus: "APPROVED",
-      activityDate: new Date("2026-08-22T00:00:00.000Z"), // Cumartesi
+      activityDate: new Date("2026-08-22T00:00:00.000Z"), // Saturday
     });
 
-    const trend = await activityTrend(testDb, viewer(kisi.id), [], 2, NOW);
+    const trend = await activityTrend(testDb, viewer(user.id), [], 2, NOW);
 
     expect(trend.total).toBe(1);
-    // Sabit hafta sonu varsayımıyla bu 0 çıkıyordu: cumartesi "çalışma günü
-    // değil" sayıldığı için payda boş kalıyordu.
     expect(trend.workdayAverage).toBe(1);
   });
 
-  it("hafta içine denk gelen resmî tatil çalışma günü sayılmaz", async () => {
-    const { kisi } = await sahne();
-    await takvimKur([1, 2, 3, 4, 5]);
+  it("official holiday falling on weekday is not counted as working day", async () => {
+    const { user } = await setup();
+    await setupCalendar([1, 2, 3, 4, 5]);
 
-    // 20 Ağustos 2026 Perşembe; tatil ilan ediliyor.
+    // August 20, 2026 Thursday; marked as holiday.
     await testDb.holiday.create({
-      data: { date: new Date("2026-08-20T00:00:00.000Z"), description: "Tatil" },
+      data: { date: new Date("2026-08-20T00:00:00.000Z"), description: "Holiday" },
     });
 
-    // 19 Ağustos Çarşamba'ya bir kayıt; 20 Ağustos boş.
-    await createActivity(kisi, {
+    // Activity on Wednesday August 19; August 20 is empty.
+    await createActivity(user, {
       approvalStatus: "APPROVED",
       activityDate: new Date("2026-08-19T00:00:00.000Z"),
     });
 
     const trend = await activityTrend(
       testDb,
-      viewer(kisi.id),
+      viewer(user.id),
       [],
       4,
-      new Date("2026-08-21T12:00:00.000Z"), // Cuma
+      new Date("2026-08-21T12:00:00.000Z"), // Friday
     );
 
-    // 18, 19, 20, 21 → tatil olan 20 çıkınca üç çalışma günü kalır ve
-    // yalnız biri boş değildir.
+    // 18, 19, 20, 21 -> excluding holiday 20 leaves 3 workdays, only 1 of which has records.
     expect(trend.emptyWorkdays).toBe(2);
   });
 
-  it("takvim kaydı yoksa hafta içi varsayılanı işler", async () => {
-    const { kisi } = await sahne();
+  it("falls back to weekday defaults when no calendar record exists", async () => {
+    const { user } = await setup();
 
-    await createActivity(kisi, {
+    await createActivity(user, {
       approvalStatus: "APPROVED",
-      activityDate: new Date("2026-08-21T00:00:00.000Z"), // Cuma
+      activityDate: new Date("2026-08-21T00:00:00.000Z"), // Friday
     });
 
     const trend = await activityTrend(
       testDb,
-      viewer(kisi.id),
+      viewer(user.id),
       [],
       2,
-      new Date("2026-08-22T12:00:00.000Z"), // Cumartesi
+      new Date("2026-08-22T12:00:00.000Z"), // Saturday
     );
 
-    // 21 Cuma (çalışma günü) + 22 Cumartesi (değil) → payda 1.
+    // 21 Friday (workday) + 22 Saturday (non-workday) -> denominator 1.
     expect(trend.workdayAverage).toBe(1);
   });
 });
 
-describe("grafik görünürlük kapsamının dışına taşmaz", () => {
-  it("başkasının kaydı toplama girmez", async () => {
-    const kok = await createOrgUnit({ name: "Acta HQ" });
-    const bir = await createUser(kok.id, { email: "bir@ornek.test" });
-    const iki = await createUser(kok.id, { email: "iki@ornek.test" });
+describe("chart does not leak beyond visibility scope", () => {
+  it("does not include another user's activity in total", async () => {
+    const root = await createOrgUnit({ name: "Acta HQ" });
+    const user1 = await createUser(root.id, { email: "one@example.test" });
+    const user2 = await createUser(root.id, { email: "two@example.test" });
 
-    await createActivity(iki, {
+    await createActivity(user2, {
       approvalStatus: "APPROVED",
       activityDate: new Date("2026-08-21T00:00:00.000Z"),
     });
 
-    const trend = await activityTrend(testDb, viewer(bir.id), [], 3, NOW);
+    const trend = await activityTrend(testDb, viewer(user1.id), [], 3, NOW);
 
-    // Bir çubuğun yüksekliği bile bilgidir: akran kaydı sayıya eklenemez.
+    // Bar height is information: peer records cannot be included in tally.
     expect(trend.total).toBe(0);
   });
 
-  it("yönetim grafikleri yöneticinin kendi kaydını saymaz", async () => {
-    const kok = await createOrgUnit({ name: "Acta HQ" });
-    const manager = await createUser(kok.id, {
-      email: "manager@ornek.test",
+  it("management charts exclude manager's own activities", async () => {
+    const root = await createOrgUnit({ name: "Acta HQ" });
+    const manager = await createUser(root.id, {
+      email: "manager@example.test",
       isUnitManager: true,
     });
-    const worker = await createUser(kok.id, { email: "worker@ornek.test" });
+    const worker = await createUser(root.id, { email: "worker@example.test" });
 
     await createActivity(manager, {
       approvalStatus: "APPROVED",
@@ -176,39 +165,36 @@ describe("grafik görünürlük kapsamının dışına taşmaz", () => {
   });
 });
 
-describe("iptal ve ret eğilim çizgisine girmez (karar 03.09.2026)", () => {
-  it("iptal ve reddedilen kayıt eğilimde sayılmaz, durum dağılımında görünür", async () => {
-    // İki grafiğin iki ayrı sorusu var: eğilim "ne kadar iş yapıldı" diyor,
-    // dağılım "kayıtlar hangi durumda" diyor. İkincisinden iptal ve reddi
-    // çıkarmak, grafiği kendi sorusuna cevap veremez hâle getirirdi.
-    const kok = await createOrgUnit({ name: "Acta HQ" });
-    const mudur = await createUser(kok.id, {
-      email: "mudur@ornek.test",
+describe("cancellation and rejection excluded from trend line (decision 2026-09-03)", () => {
+  it("cancelled and rejected records not counted in trend, but appear in distribution", async () => {
+    const root = await createOrgUnit({ name: "Acta HQ" });
+    const manager = await createUser(root.id, {
+      email: "manager@example.test",
       isUnitManager: true,
     });
-    const kisi = await createUser(kok.id, { email: "kayit@ornek.test" });
-    const gun = new Date("2026-08-21T00:00:00.000Z");
-    const gerekce = await createApprovalReason("REJECTED");
+    const user = await createUser(root.id, { email: "record@example.test" });
+    const day = new Date("2026-08-21T00:00:00.000Z");
+    const reason = await createApprovalReason("REJECTED");
 
-    await createActivity(kisi, { approvalStatus: "APPROVED", activityDate: gun });
-    await createActivity(kisi, { approvalStatus: "CANCELLED", activityDate: gun });
-    await createActivity(kisi, {
+    await createActivity(user, { approvalStatus: "APPROVED", activityDate: day });
+    await createActivity(user, { approvalStatus: "CANCELLED", activityDate: day });
+    await createActivity(user, {
       approvalStatus: "REJECTED",
-      activityDate: gun,
-      approverId: mudur.id,
-      approvalReasonId: gerekce.id,
+      activityDate: day,
+      approverId: manager.id,
+      approvalReasonId: reason.id,
       approvalReasonKind: "REJECTED",
     });
 
-    const trend = await activityTrend(testDb, viewer(kisi.id), [], 3, NOW);
+    const trend = await activityTrend(testDb, viewer(user.id), [], 3, NOW);
     const statuses = await statusDistribution(
       testDb,
-      viewer(kisi.id),
+      viewer(user.id),
       [],
       new Date("2026-08-17T00:00:00.000Z"),
     );
 
     expect(trend.total).toBe(1);
-    expect(statuses.reduce((toplam, dilim) => toplam + dilim.count, 0)).toBe(3);
+    expect(statuses.reduce((sum, slice) => sum + slice.count, 0)).toBe(3);
   });
 });

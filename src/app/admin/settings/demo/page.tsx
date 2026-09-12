@@ -1,22 +1,26 @@
 import { redirect } from "next/navigation";
 
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { canManageOrganization } from "@/server/authz/admin";
 import { demoDataPresent } from "@/server/demo/purge";
 import { listLegacyDemoOriginCandidates } from "@/server/demo/origin";
 import { prisma } from "@/server/db";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import { DemoForm } from "../demo-form";
 import { SettingsChrome } from "../settings-chrome";
 
-export const metadata = { title: "Örnek veri" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.settingsPage.details.demoTitle");
+}
 
 export default async function DemoSettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
   if (!canManageOrganization(user)) {
-    return <YetkiUyarisi user={user} mesaj="Bu ayarı yalnızca sistem yöneticisi değiştirebilir." />;
+    return <PermissionWarning user={user} message={t("screens.settingsPage.permission")} />;
   }
 
   const [installed, legacyOriginCandidates] = await Promise.all([
@@ -28,8 +32,8 @@ export default async function DemoSettingsPage() {
     <SettingsChrome
       user={user}
       section="demo"
-      title="Örnek veri"
-      description="Sistemi tanımak için anlaşılır bir örnek şirket, kullanıcılar ve iş kayıtları kurun."
+      title={t("screens.settingsPage.details.demoTitle")}
+      description={t("screens.settingsPage.details.demoDescription")}
     >
       <DemoForm installed={installed} legacyOriginCandidates={legacyOriginCandidates} />
     </SettingsChrome>

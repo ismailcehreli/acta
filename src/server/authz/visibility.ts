@@ -5,33 +5,26 @@ import { companyDay, toDateValue } from "@/server/activities/date-rules";
 import { allDeputyPeriods } from "./deputy";
 import type { ActivityApprovalStatus, PrismaClient } from "@prisma/client";
 
-
-// GÖRÜNÜRLÜK KATMANI (§8) — bu dosya sistemin en tehlikeli hata yüzeyidir.
-// Buradaki bir hata hiçbir ekranda görünmez, sessizce veri sızdırır. Sızıntı
-// toleransı sıfırdır (§18.4).
+// VISIBILITY LAYER (§8) — this file is the most critical surface of the system.
+// Any logic error here would silently leak data without throwing errors. Zero tolerance for leaks (§18.4).
 //
-// **Her okuma yolu buradan geçer:** liste, detay, arama, ek indirme ve ileride
-// raporlar. Bir okuma yolu kendi filtresini yazıyorsa, o yol yanlıştır.
+// Every read path must pass through here: list, detail, search, attachment download, and reports.
+// Any read path constructing its own filter is prohibited.
 //
-// Temel kural (§8.1): kişi, organizasyon ağacında **kendi altında kalan**
-// kullanıcıların **onaylanmış** faaliyetlerini görür. Kendi birimindeki diğer
-// kullanıcılar buna dahil değildir — yalnızca birim yöneticisi kendi birimini
-// görür, çünkü §4.4'e göre onların yöneticisidir. İki akran birbirini görmez.
-// Kişi kendi faaliyetlerini her durumda görür.
+// Core rule (§8.1): A user can see approved activities of users below them in the organization tree.
+// Peers in the same unit are not visible to each other; only unit managers can see their unit's activities.
+// Users can always see their own activities regardless of approval status.
 
 /**
- * Görünürlük seviyesi.
- * - `none`: kayıt hiç gösterilmez, varlığı bile bildirilmez.
- * - `metadata`: yalnızca yönlendirme için gereken üst veri (yazar, tarih,
- *   başlık). Açıklama ve ekler **yoktur** (§8.2 sistem yöneticisi istisnası).
- * - `full`: içerik dahil.
+ * Visibility level:
+ * - `none`: Record is not returned or acknowledged.
+ * - `metadata`: Only routing metadata (author, date, title). Description and attachments excluded (§8.2 sysadmin exception).
+ * - `full`: Full access including content.
  */
 export type VisibilityLevel = "none" | "metadata" | "full";
 
 export type VisibilityDb = Pick<
   PrismaClient,
-  // `noActivityPeriod`: vekâlet kapsamı buradan okunuyor (§4.5). Görünürlük
-  // artık yalnız ağaca değil, aktif vekâlet dönemlerine de bakıyor.
   | "user"
   | "orgUnit"
   | "activity"
@@ -42,7 +35,7 @@ export type VisibilityDb = Pick<
 
 export interface Viewer {
   id: string;
-  /** İşlevsel yetki; ağaçtan gelmeyen içerik erişimi vermez (§15.1). */
+  /** Functional permission; does not grant content access not permitted by hierarchy (§15.1). */
   isSystemAdmin: boolean;
 }
 
@@ -70,12 +63,8 @@ export interface ReportScope {
 }
 
 /**
- * Toplu raporların tek kapsam kapısı.
- *
- * Raporlar tek tek faaliyet göstermez; buna rağmen kişi ve birim sayıları
- * çalışma düzeni hakkında bilgi taşıdığı için normal faaliyet görünürlüğünden
- * bağımsız bir yetki olarak korunur. Yetki verildikten sonra kapsam, aktif
- * kullanıcının bağlı olduğu birimden aşağı doğru çözülür.
+ * Single scope resolver for aggregated reports.
+ * Scope is resolved downward starting from the viewer's organizational unit.
  */
 export async function visibleReportScope(
   db: VisibilityDb,
@@ -114,11 +103,6 @@ export async function visibleReportScope(
   if (units.length === 0) return null;
 
   const unitIds = units.map((unit) => unit.id);
-  // Pasifleştirilmiş kullanıcıların geçmiş faaliyetleri, izinleri ve skorları
-  // raporlarda kaybolmamalı. Birim ağacı aktif olduğu sürece tarihsel toplamın
-  // korunması raporun anlamlı kalmasını sağlar. Hesabı pasif olan kişi yine de
-  // yeni işlem üretemez; burada yalnızca zaten var olan kayıtların sahibi
-  // olarak kapsama alınır.
   const people = await db.user.findMany({
     where: { orgUnitId: { in: unitIds } },
     select: { id: true, orgUnitId: true },
@@ -137,81 +121,47 @@ export async function visibleReportScope(
 }
 
 export interface ActivityForVisibility {
-  /**
-   * Kaydın kimliği.
-   *
-   * Onaylayıcı yetkisi **kayda yazılmış listeden** okunuyor; kimlik onun
-   * için gerekli. Eskiden burada kimlik yoktu ve onaylayıcı ağaçtan canlı
-   * çözülüyordu — liste tarafı ise donmuş listeye bakıyordu. Ağaç
-   * değiştiğinde ikisi ayrışıyordu ve **sızıntı yönünde**: birime sonradan
-   * atanan bir müdür, kendisine hiç düşmemiş bir kaydın detayını
-   * açabiliyordu (21.08.2026'da denklik testiyle yakalandı).
-   */
   id: string;
   authorId: string;
   approvalStatus: ActivityApprovalStatus;
 }
 
-/** Üst zincirin görebildiği durumlar (§8.2). */
+/** Statuses visible to upper hierarchy chain (§8.2). */
 const CHAIN_VISIBLE_STATUSES: ActivityApprovalStatus[] = ["APPROVED", "CANCELLED"];
 
 /**
- * Aktif onaylayıcının görebildiği durumlar (§8.2 matrisi).
- *
- * Yalnız bu iki durum: onay süreci bitince kayıt zaten `APPROVED` olur ve
- * herkes gibi zincir kuralından görünür. Onaylayıcıya kalıcı bir ayrıcalık
- * verilmez — gördüğü şey, **kendi önünde duran iş**tir.
+ * Statuses visible to active approver (§8.2 matrix).
  */
 const APPROVER_VISIBLE_STATUSES: ActivityApprovalStatus[] = [
   "PENDING_APPROVAL",
   "CHANGES_REQUESTED",
-  // Reddettiği kaydı görmeye devam eder: kararının arkasında durabilmesi ve
-  // yazan itiraz ettiğinde neye baktığını hatırlayabilmesi için. Üst zincire
-  // ise **hiç** akmaz — süzgecin bütün amacı bu.
   "REJECTED",
 ];
 
 /**
- * Tek bir faaliyet için görünürlük kararı (§8.2 matrisi).
- *
- * **Liste süzgecinin kendisini kullanır.** Eskiden kural burada ikinci kez,
- * elle yazılıydı; iki gösterim 21.08.2026'da iki ayrı biçimde ayrıştı:
- *
- *   · aynı birimde iki yönetici olunca kayıt listede görünüyor ama detayı
- *     açılmıyordu,
- *   · onaylayıcı burada ağaçtan canlı çözülüyordu, listede ise kayda
- *     donmuş listeden — **sızıntı yönünde** bir fark.
- *
- * Şimdi kural tek yerde: aynı `where` alınıyor ve "bu kayıt o kümede mi"
- * diye soruluyor. İki tarafın ayrışması artık yapısal olarak mümkün değil.
- * Denklik testi yine duruyor — birileri ikisini tekrar ayırmaya kalkarsa
- * yakalasın diye.
- *
- * Rol, ağaçtan gelmeyen bir erişim **eklemez**; yalnızca "yönetici
- * bulunamadı" kayıtlarında müdahale için üst veri açar ve o yüzey ayrı bir
- * sorgudan beslenir (`listInterventionQueue`).
+ * Visibility decision for a single activity.
+ * Re-uses the list filter (`visibleActivityWhere`) to ensure structural parity.
  */
 export async function canViewActivity(
   db: VisibilityDb,
   viewer: Viewer,
   activity: ActivityForVisibility,
-  /** Önceden hesaplanmış astlar; aynı istekte tekrar sorgulanmasın diye. */
   precomputedSubordinates?: string[],
   now: Date = new Date(),
 ): Promise<VisibilityLevel> {
-  const kapsam = await visibleActivityWhere(
+  const scope = await visibleActivityWhere(
     db,
     viewer,
     precomputedSubordinates,
     now,
   );
 
-  const gorunur = await db.activity.findFirst({
-    where: { AND: [{ id: activity.id }, kapsam] },
+  const visible = await db.activity.findFirst({
+    where: { AND: [{ id: activity.id }, scope] },
     select: { id: true },
   });
 
-  if (gorunur) return "full";
+  if (visible) return "full";
 
   if (viewer.isSystemAdmin && activity.approvalStatus === "MANAGER_NOT_FOUND") {
     return "metadata";
@@ -221,11 +171,8 @@ export async function canViewActivity(
 }
 
 /**
- * Kişinin altındaki kullanıcıların kimlikleri.
- *
- * Yalnızca birim yöneticisinin astı vardır (§4.4): yönetici olmayan kişinin
- * kendi birimindeki akranları bile kapsamına girmez. Alt ağaç özyinelemeli
- * sorguyla çözülür (§16.6).
+ * Returns IDs of users subordinate to the viewer in the organization hierarchy.
+ * Only unit managers have subordinates (§4.4).
  */
 export async function subordinateUserIds(
   db: VisibilityDb,
@@ -256,51 +203,30 @@ export async function subordinateUserIds(
 }
 
 /**
- * Vekâletten doğan görünürlük koşulları.
- *
- * Her vekâlet dönemi **tarihle sınırlı bir pencere** açar: o birimin, o tarih
- * aralığına ait kayıtları. Pencere süresiz kalır — vekâlet bittikten aylar
- * sonra o döneme dair bir soru gelirse vekil cevap verebilmeli (ürün sahibi
- * kararı, 21.08.2026).
- *
- * **Pencere dışına taşmaz.** Vekil, vekâlet ettiği birimin daha eski
- * kayıtlarını hiçbir zaman görmez: bir haftalık izin, yılların arşivine kapı
- * açmamalı. Kapsamı düz bir "ast listesi" olarak eklemek bunu ifade edemezdi;
- * tarih koşulu her pencereye ayrı ayrı bağlanıyor.
- *
- * Aktif dönemde ayrıca **onay kuyruğu** açılır ve o tarihsizdir: devralınan
- * kuyrukta vekâletten önce yazılmış kayıtlar olabilir ve vekil tam da onları
- * karara bağlamak için oradadır.
+ * Visibility clauses arising from deputy periods.
  */
 async function deputyClauses(
   db: VisibilityDb,
   viewerId: string,
   now: Date,
 ): Promise<Prisma.ActivityWhereInput[]> {
-  const donemler = await allDeputyPeriods(db, viewerId);
-  if (donemler.length === 0) return [];
+  const periods = await allDeputyPeriods(db, viewerId);
+  if (periods.length === 0) return [];
 
-  // Aynı kişiye birden çok kez vekâlet edilmiş olabilir; alt ağaç sorgusu
-  // kişi başına bir kez koşar.
-  const kapsamlar = new Map<string, string[]>();
-  for (const donem of donemler) {
-    if (kapsamlar.has(donem.personId)) continue;
+  const scopes = new Map<string, string[]>();
+  for (const period of periods) {
+    if (scopes.has(period.personId)) continue;
 
-    const astlar = await subordinateUserIds(db, donem.personId);
-    // Vekâlet edilen kişinin **kendi** kayıtları da pencereye girer.
-    kapsamlar.set(donem.personId, [donem.personId, ...astlar]);
+    const subordinates = await subordinateUserIds(db, period.personId);
+    scopes.set(period.personId, [period.personId, ...subordinates]);
   }
 
-  const clauses: Prisma.ActivityWhereInput[] = donemler.map((donem) => ({
-    authorId: { in: kapsamlar.get(donem.personId) ?? [] },
-    activityDate: { gte: donem.startDate, lte: donem.endDate },
+  const clauses: Prisma.ActivityWhereInput[] = periods.map((period) => ({
+    authorId: { in: scopes.get(period.personId) ?? [] },
+    activityDate: { gte: period.startDate, lte: period.endDate },
     approvalStatus: { in: CHAIN_VISIBLE_STATUSES },
   }));
 
-  // Aktif vekâletin açtığı onay kuyruğu. Tek sorguda ifade ediliyor:
-  // "önce vekâletleri oku, sonra o kimliklerle ara" iki ayrı okuma demekti ve
-  // arada vekâlet değişirse ikinci sorgu artık geçersiz bir listeyle çalışırdı
-  // (denetim 21.08.2026, bulgu 2).
   clauses.push({
     ...approvalQueueWhere(viewerId, now),
     approvalStatus: { in: APPROVER_VISIBLE_STATUSES },
@@ -310,31 +236,19 @@ async function deputyClauses(
 }
 
 /**
- * "Onayı bana düşen kayıtlar" koşulu — kendi adıma ya da vekâleten.
- *
- * **Tek sorgudur ve bilerek öyledir.** Vekâlet kimliklerini önce okuyup sonra
- * `in: [...]` ile aramak iki ayrı okumadır; arada vekâlet iptal edilirse
- * ikinci sorgu artık var olmayan bir yetkiyle çalışır ve yetkisiz kişiye
- * içerik döndürür. İç içe ilişki süzgeci tek bir SQL cümlesine indiği için
- * böyle bir aralık kalmaz.
- *
- * Onay kuyruğunu okuyan **bütün** yollar (iş kuyruğu, onay ekranı, gruplu
- * onay) buradan geçer; her birinin kendi süzgecini yazması, birinin diğerinden
- * sessizce ayrışması demekti.
+ * Filter for activities awaiting the viewer's approval (directly or as deputy).
  */
 export function approvalQueueWhere(
   viewerId: string,
   now: Date = new Date(),
 ): Prisma.ActivityWhereInput {
-  const bugun = toDateValue(companyDay(now));
+  const today = toDateValue(companyDay(now));
 
   return {
     eligibleApprovers: {
       some: {
         OR: [
           { userId: viewerId },
-          // Vekâlet: onaylayıcının, bu tarihleri kapsayan ve **iptal
-          // edilmemiş** bir döneminde vekili benim.
           {
             user: {
               noActivityPeriods: {
@@ -342,8 +256,8 @@ export function approvalQueueWhere(
                   deputyId: viewerId,
                   cancelledAt: null,
                   status: "APPROVED",
-                  startDate: { lte: bugun },
-                  endDate: { gte: bugun },
+                  startDate: { lte: today },
+                  endDate: { gte: today },
                 },
               },
             },
@@ -355,14 +269,11 @@ export function approvalQueueWhere(
 }
 
 /**
- * Liste, arama ve sayım sorgularının kullanacağı filtre. Kapsam dışındaki hiçbir
- * kayıt bu filtreden geçemez; çağıran kendi `where` koşulunu bununla
- * **birleştirir**, yerine koymaz.
+ * Visibility filter for Prisma queries (list, search, count).
  */
 export async function visibleActivityWhere(
   db: VisibilityDb,
   viewer: Viewer,
-  /** Önceden hesaplanmış kapsam; aynı istekte tekrar tekrar sorgulanmasın diye. */
   precomputedSubordinates?: string[],
   now: Date = new Date(),
 ): Promise<Prisma.ActivityWhereInput> {
@@ -371,24 +282,7 @@ export async function visibleActivityWhere(
 
   const clauses: Prisma.ActivityWhereInput[] = [
     { authorId: viewer.id },
-    // **Kararını verdiğin kayıt sana görünür kalır** (21.08.2026).
-    //
-    // `approverId` karardan sonra kararı veren kişiyi taşıyor. Onayladığı
-    // kaydı bir daha göremeyen kişi, verdiği kararın arkasında duramaz;
-    // vekâleti biten bir vekile kalan tek görünürlük de budur.
-    //
-    // **Yalnız karar, katılım değil.** İlk denemede "cevap yazdığın kayıt"
-    // da eklenmişti; §4.6 ile çatıştı: başka dala taşınan biri, bir zamanlar
-    // soru sorduğu için erişimini süresiz koruyordu ve mevcut test bunu
-    // yakaladı. Karar vermek ile konuşmaya katılmak aynı ağırlıkta değil —
-    // biri hesap verilecek bir eylem, diğeri bir mesaj.
     { approverId: viewer.id },
-    // Uygun onaylayıcılar listesi (§8.2). Onaylayıcı **kayda yazılıdır**; her
-    // listede §4.4'ü yeniden çözmek hem pahalı olurdu hem de ağaç değişince
-    // akıştaki işi sessizce başkasına devretmek anlamına gelirdi.
-    //
-    // Tek sütun yerine liste: bir birimde birden fazla müdür olabilir ve
-    // kayıt hepsinin önünde durur (20.08.2026 kararı).
     {
       eligibleApprovers: { some: { userId: viewer.id } },
       approvalStatus: { in: APPROVER_VISIBLE_STATUSES },
@@ -408,18 +302,7 @@ export async function visibleActivityWhere(
 }
 
 /**
- * Aynı kuralın SQL karşılığı. Tam metin araması Prisma'nın filtresiyle
- * ifade edilemiyor (Türkçe sözlük ve `title || ' ' || description` üzerindeki
- * GIN indeksi) ve arama, görünürlük süzgecini **sorgunun içinde** taşımak
- * zorunda: önce metinle eşleşenleri bulup sonra daraltmak, kullanıcının
- * göremediği kayıtların aday listesini doldurmasına ve kendi sonuçlarının
- * sessizce dışarıda kalmasına yol açardı.
- *
- * Kural yine tek yerde: iki gösterim de aynı dosyada, aynı sabitlerden
- * besleniyor ve `visible-sql-denklik.test.ts` ikisinin **aynı kümeyi**
- * döndürdüğünü rastgele senaryolarda doğruluyor.
- *
- * `alias` çağıran sorgudaki tablo takma adıdır.
+ * SQL representation of the visibility filter for full-text search.
  */
 export async function visibleActivitySql(
   db: VisibilityDb,
@@ -430,22 +313,16 @@ export async function visibleActivitySql(
 ): Promise<Prisma.Sql> {
   const subordinates =
     precomputedSubordinates ?? (await subordinateUserIds(db, viewer.id));
-  const vekaletDonemleri = await allDeputyPeriods(db, viewer.id);
-  const bugun = toDateValue(companyDay(now));
+  const deputyPeriodsList = await allDeputyPeriods(db, viewer.id);
+  const today = toDateValue(companyDay(now));
 
-  // Takma ad koddan gelir, kullanıcıdan değil; yine de kısıtlanır ki bu
-  // fonksiyon ileride yanlışlıkla dış girdiyle çağrılmasın.
   if (!/^[a-z][a-z0-9_]*$/.test(alias)) {
-    throw new Error(`Geçersiz tablo takma adı: ${alias}`);
+    throw new Error(`Invalid table alias: ${alias}`);
   }
 
   const own = Prisma.sql`${Prisma.raw(`"${alias}"."authorId"`)} = ${viewer.id}`;
+  const decided = Prisma.sql`${Prisma.raw(`"${alias}"."approverId"`)} = ${viewer.id}`;
 
-  // Prisma tarafındaki "kararını verdiğin kayıt" kuralının ikizi.
-  const dokundugu = Prisma.sql`${Prisma.raw(`"${alias}"."approverId"`)} = ${viewer.id}`;
-
-  // Prisma tarafındaki `eligibleApprovers: { some: … }` ile **aynı** küme.
-  // Denklik `visible-sql-denklik.test.ts` ile rastgele senaryolarda sınanıyor.
   const approver = Prisma.sql`(
     EXISTS (
       SELECT 1 FROM "ActivityApprover" aa
@@ -455,13 +332,7 @@ export async function visibleActivitySql(
     AND ${Prisma.raw(`"${alias}"."approvalStatus"`)}::text = ANY(${APPROVER_VISIBLE_STATUSES}::text[])
   )`;
 
-  // Vekâlet süresince: vekâlet edilenin onayına düşmüş kayıtlar. Tarihsiz —
-  // devralınan kuyrukta vekâletten önce yazılmış kayıtlar olabilir.
-  //
-  // Vekâlet **sorgunun içinde** çözülür, önceden okunan bir kimlik listesiyle
-  // değil (denetim 21.08.2026, bulgu 2). Prisma tarafındaki
-  // `approvalQueueWhere` ile aynı küme.
-  const vekilKuyrugu = Prisma.sql`(
+  const deputyQueue = Prisma.sql`(
     EXISTS (
       SELECT 1 FROM "ActivityApprover" aa
       WHERE aa."activityId" = ${Prisma.raw(`"${alias}"."id"`)}
@@ -471,29 +342,27 @@ export async function visibleActivitySql(
             AND p."deputyId" = ${viewer.id}
             AND p."cancelledAt" IS NULL
             AND p."status" = 'APPROVED'
-            AND p."startDate" <= ${bugun}
-            AND p."endDate" >= ${bugun}
+            AND p."startDate" <= ${today}
+            AND p."endDate" >= ${today}
         )
     )
     AND ${Prisma.raw(`"${alias}"."approvalStatus"`)}::text = ANY(${APPROVER_VISIBLE_STATUSES}::text[])
   )`;
 
-  // Her vekâlet dönemi, o birimin **o tarih aralığına ait** kayıtlarını açar
-  // ve pencere süresiz kalır. Prisma tarafındaki `deputyClauses` ile aynı.
-  const vekilPencereleri: Prisma.Sql[] = [];
-  const pencereKapsamlari = new Map<string, string[]>();
+  const deputyWindows: Prisma.Sql[] = [];
+  const windowScopes = new Map<string, string[]>();
 
-  for (const donem of vekaletDonemleri) {
-    let kapsam = pencereKapsamlari.get(donem.personId);
-    if (!kapsam) {
-      kapsam = [donem.personId, ...(await subordinateUserIds(db, donem.personId))];
-      pencereKapsamlari.set(donem.personId, kapsam);
+  for (const period of deputyPeriodsList) {
+    let scope = windowScopes.get(period.personId);
+    if (!scope) {
+      scope = [period.personId, ...(await subordinateUserIds(db, period.personId))];
+      windowScopes.set(period.personId, scope);
     }
 
-    vekilPencereleri.push(Prisma.sql`(
-      ${Prisma.raw(`"${alias}"."authorId"`)} = ANY(${kapsam}::text[])
-      AND ${Prisma.raw(`"${alias}"."activityDate"`)} >= ${donem.startDate}
-      AND ${Prisma.raw(`"${alias}"."activityDate"`)} <= ${donem.endDate}
+    deputyWindows.push(Prisma.sql`(
+      ${Prisma.raw(`"${alias}"."authorId"`)} = ANY(${scope}::text[])
+      AND ${Prisma.raw(`"${alias}"."activityDate"`)} >= ${period.startDate}
+      AND ${Prisma.raw(`"${alias}"."activityDate"`)} <= ${period.endDate}
       AND ${Prisma.raw(`"${alias}"."approvalStatus"`)}::text = ANY(${CHAIN_VISIBLE_STATUSES}::text[])
     )`);
   }
@@ -506,24 +375,20 @@ export async function visibleActivitySql(
           AND ${Prisma.raw(`"${alias}"."approvalStatus"`)}::text = ANY(${CHAIN_VISIBLE_STATUSES}::text[])
         )`;
 
-  // Parçalar `OR` ile birleşir. Prisma tarafındaki `clauses` dizisiyle
-  // **aynı sırada ve aynı sayıda** olmalı; denklik testi bunu doğruluyor.
-  const parcalar = [
+  const parts = [
     own,
-    dokundugu,
+    decided,
     approver,
-    ...vekilPencereleri,
-    vekilKuyrugu,
+    ...deputyWindows,
+    deputyQueue,
     chain,
-  ].filter((parca): parca is Prisma.Sql => parca !== null);
+  ].filter((part): part is Prisma.Sql => part !== null);
 
-  return Prisma.sql`(${Prisma.join(parcalar, " OR ")})`;
+  return Prisma.sql`(${Prisma.join(parts, " OR ")})`;
 }
 
 /**
- * Sistem yöneticisinin müdahale kuyruğundaki tek kayıt biçimi (§8.2).
- * Açıklama ve ekler burada **yoktur** ve eklenemez: tip, sızıntıyı derleme
- * zamanında engeller.
+ * Intervention queue item for system admins (§8.2).
  */
 export interface InterventionItem {
   id: string;
@@ -536,11 +401,7 @@ export interface InterventionItem {
 export type InterventionDb = Pick<PrismaClient, "activity">;
 
 /**
- * "Yönetici bulunamadı" kayıtları — yalnızca yönlendirme için gereken üst veri.
- *
- * Ham bir `where` döndürmek yeterli değildi: çağıran istediği alanı
- * seçebildiği için "yalnız üst veri" kuralı sorgu katmanında zorlanmıyordu
- * (denetim 18.08.2026, bulgu 2). Projeksiyon artık burada sabit.
+ * MANAGER_NOT_FOUND activities — metadata only for routing interventions.
  */
 export async function listInterventionQueue(
   db: InterventionDb,

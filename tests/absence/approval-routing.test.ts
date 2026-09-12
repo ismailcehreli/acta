@@ -24,42 +24,42 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const kok = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const genelMudurluk = await createOrgUnit({
-    name: "Genel Müdürlük",
-    parentId: kok.id,
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
+  const executive = await createOrgUnit({
+    name: "Executive Management",
+    parentId: root.id,
   });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: genelMudurluk.id });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: genelMudurluk.id });
+  const tooling = await createOrgUnit({ name: "Tooling", parentId: executive.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: executive.id });
 
-  const genelMudur = await createUser(genelMudurluk.id, {
-    fullName: "Genel Müdür",
+  const ceo = await createUser(executive.id, {
+    fullName: "Chief Executive",
     isUnitManager: true,
   });
-  const kaliphaneMuduru = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const toolingManager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const planlamaMuduru = await createUser(planlama.id, {
-    fullName: "Planlama Müdürü",
+  const planningManager = await createUser(planning.id, {
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
-  const calisan = await createUser(kaliphane.id, { fullName: "Kalıphane Çalışanı" });
+  const employee = await createUser(tooling.id, { fullName: "Tooling Employee" });
 
-  return { genelMudur, kaliphaneMuduru, planlamaMuduru, calisan };
+  return { ceo, toolingManager, planningManager, employee };
 }
 
-async function yoneticiIzniKur(
-  genelMudurId: string,
-  kaliphaneMuduruId: string,
+async function setupManagerLeave(
+  ceoId: string,
+  toolingManagerId: string,
   deputyId?: string,
 ) {
   const result = await markNoActivityPeriod(
     testDb,
-    genelMudurId,
+    ceoId,
     {
-      userId: kaliphaneMuduruId,
+      userId: toolingManagerId,
       startDate: "2026-08-20",
       endDate: "2026-08-27",
       ...(deputyId ? { deputyId } : {}),
@@ -67,28 +67,28 @@ async function yoneticiIzniKur(
     NOW,
   );
 
-  if (!result.ok) throw new Error(`Yönetici izni kurulamadı: ${result.message}`);
+  if (!result.ok) throw new Error(`Manager leave setup failed: ${result.message}`);
   return result;
 }
 
-describe("izin karar yolu", () => {
-  it("aktif yöneticiyi doğrudan yetkili yapar, üst yöneticiyi yetkisiz bırakır", async () => {
-    const { genelMudur, kaliphaneMuduru, calisan } = await sirket();
+describe("absence decision routing", () => {
+  it("authorizes direct active manager and disallows upper manager", async () => {
+    const { ceo, toolingManager, employee } = await setupCompany();
 
-    const approvers = await resolveAbsenceApproversForUser(testDb, calisan.id, NOW);
-    expect(approvers).toEqual([{ id: kaliphaneMuduru.id, route: "DIRECT_MANAGER" }]);
+    const approvers = await resolveAbsenceApproversForUser(testDb, employee.id, NOW);
+    expect(approvers).toEqual([{ id: toolingManager.id, route: "DIRECT_MANAGER" }]);
 
     const request = await markOwnNoActivityPeriod(
       testDb,
-      calisan.id,
+      employee.id,
       { startDate: "2026-09-01", endDate: "2026-09-03" },
       NOW,
     );
-    if (!request.ok) throw new Error("Talep kurulamadı");
+    if (!request.ok) throw new Error("Request creation failed");
 
     const upperDecision = await decideNoActivityPeriod(
       testDb,
-      genelMudur.id,
+      ceo.id,
       request.id,
       "APPROVED",
       "",
@@ -99,7 +99,7 @@ describe("izin karar yolu", () => {
 
     const directDecision = await decideNoActivityPeriod(
       testDb,
-      kaliphaneMuduru.id,
+      toolingManager.id,
       request.id,
       "APPROVED",
       "",
@@ -108,24 +108,24 @@ describe("izin karar yolu", () => {
     expect(directDecision.ok).toBe(true);
   });
 
-  it("izinli yöneticinin aktif vekiline geçer ve listede vekilin kararı görünür", async () => {
-    const { genelMudur, kaliphaneMuduru, planlamaMuduru, calisan } = await sirket();
-    await yoneticiIzniKur(genelMudur.id, kaliphaneMuduru.id, planlamaMuduru.id);
+  it("routes to active deputy when manager is on leave", async () => {
+    const { ceo, toolingManager, planningManager, employee } = await setupCompany();
+    await setupManagerLeave(ceo.id, toolingManager.id, planningManager.id);
 
-    const approvers = await resolveAbsenceApproversForUser(testDb, calisan.id, NOW);
-    expect(approvers).toEqual([{ id: planlamaMuduru.id, route: "DEPUTY" }]);
+    const approvers = await resolveAbsenceApproversForUser(testDb, employee.id, NOW);
+    expect(approvers).toEqual([{ id: planningManager.id, route: "DEPUTY" }]);
 
     const request = await markOwnNoActivityPeriod(
       testDb,
-      calisan.id,
+      employee.id,
       { startDate: "2026-09-01", endDate: "2026-09-03" },
       NOW,
     );
-    if (!request.ok) throw new Error("Talep kurulamadı");
+    if (!request.ok) throw new Error("Request creation failed");
 
     const notification = await testDb.notificationQueue.findFirst({
       where: {
-        userId: planlamaMuduru.id,
+        userId: planningManager.id,
         eventType: NOTIFICATION_EVENTS.absenceRequestSubmitted,
       },
     });
@@ -133,7 +133,7 @@ describe("izin karar yolu", () => {
 
     const decision = await decideNoActivityPeriod(
       testDb,
-      planlamaMuduru.id,
+      planningManager.id,
       request.id,
       "APPROVED",
       "",
@@ -143,37 +143,37 @@ describe("izin karar yolu", () => {
 
     const list = await listTeamAbsences(
       testDb,
-      planlamaMuduru.id,
+      planningManager.id,
       undefined,
-      { userId: calisan.id },
+      { userId: employee.id },
       { now: NOW },
     );
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({
-      userName: "Kalıphane Çalışanı",
-      decidedByName: "Planlama Müdürü",
+      userName: "Tooling Employee",
+      decidedByName: "Planning Manager",
       decisionRoute: "DEPUTY",
     });
   });
 
-  it("vekâlet yoksa ilk aktif üst yöneticiye geçer", async () => {
-    const { genelMudur, kaliphaneMuduru, planlamaMuduru, calisan } = await sirket();
-    await yoneticiIzniKur(genelMudur.id, kaliphaneMuduru.id);
+  it("escalates to first active upper manager when no deputy is assigned", async () => {
+    const { ceo, toolingManager, planningManager, employee } = await setupCompany();
+    await setupManagerLeave(ceo.id, toolingManager.id);
 
-    const approvers = await resolveAbsenceApproversForUser(testDb, calisan.id, NOW);
-    expect(approvers).toEqual([{ id: genelMudur.id, route: "UPPER_MANAGER" }]);
+    const approvers = await resolveAbsenceApproversForUser(testDb, employee.id, NOW);
+    expect(approvers).toEqual([{ id: ceo.id, route: "UPPER_MANAGER" }]);
 
     const request = await markOwnNoActivityPeriod(
       testDb,
-      calisan.id,
+      employee.id,
       { startDate: "2026-09-01", endDate: "2026-09-03" },
       NOW,
     );
-    if (!request.ok) throw new Error("Talep kurulamadı");
+    if (!request.ok) throw new Error("Request creation failed");
 
     const deputyDecision = await decideNoActivityPeriod(
       testDb,
-      planlamaMuduru.id,
+      planningManager.id,
       request.id,
       "APPROVED",
       "",
@@ -183,19 +183,19 @@ describe("izin karar yolu", () => {
 
     const upperDecision = await decideNoActivityPeriod(
       testDb,
-      genelMudur.id,
+      ceo.id,
       request.id,
       "REJECTED",
-      "Tarihleri yeniden kontrol edin.",
+      "Please re-check the selected dates.",
       NOW,
     );
     expect(upperDecision.ok).toBe(true);
 
     const list = await listTeamAbsences(
       testDb,
-      genelMudur.id,
+      ceo.id,
       undefined,
-      { userId: calisan.id },
+      { userId: employee.id },
       { now: NOW },
     );
     expect(list).toHaveLength(1);

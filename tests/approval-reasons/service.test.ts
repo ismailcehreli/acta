@@ -12,10 +12,10 @@ import { AUDIT_ACTIONS } from "@/server/audit/log";
 import { createApprovalReason, createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Onay kararı gerekçe kataloğu (ürün sahibi kararı, 19.08.2026).
+// Approval decision reason catalog (product owner decision, 2026-08-19).
 //
-// Serbest metin raporlanamaz; kategoriler sistem yöneticisinde. Silme yok,
-// pasifleştirme var (§16.6) — geçmiş kararlar gerekçesini korur.
+// Free text cannot be reported on; categories are managed by system admin.
+// No physical deletion, only deactivation (§16.6) — past decisions preserve their reason.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -26,177 +26,175 @@ afterAll(async () => {
 });
 
 async function admin() {
-  const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  return createUser(unit.id, { fullName: "Sistem Yöneticisi", isSystemAdmin: true });
+  const unit = await createOrgUnit({ name: "Company", type: "Root" });
+  return createUser(unit.id, { fullName: "System Admin", isSystemAdmin: true });
 }
 
-describe("katalog yönetimi", () => {
-  it("gerekçe eklenir ve denetim izine yazılır", async () => {
+describe("catalog management", () => {
+  it("creates reason and writes audit log", async () => {
     const me = await admin();
 
-    const sonuc = await createReason(
+    const result = await createReason(
       testDb,
-      { kind: "REJECTED", label: "Mükerrer kayıt", sortOrder: 20 },
+      { kind: "REJECTED", label: "Duplicate entry", sortOrder: 20 },
       me.id,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.reason.label).toBe("Mükerrer kayıt");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.reason.label).toBe("Duplicate entry");
 
-    const iz = await testDb.auditLog.findFirst({
+    const log = await testDb.auditLog.findFirst({
       where: {
-        objectId: sonuc.reason.id,
+        objectId: result.reason.id,
         action: AUDIT_ACTIONS.approvalReasonCreated,
       },
     });
-    expect(iz).not.toBeNull();
+    expect(log).not.toBeNull();
   });
 
-  it("aynı türde aynı ad iki kez eklenemez", async () => {
+  it("cannot add identical label under same kind twice", async () => {
     const me = await admin();
-    await createReason(testDb, { kind: "REJECTED", label: "Mükerrer", sortOrder: 0 }, me.id);
+    await createReason(testDb, { kind: "REJECTED", label: "Duplicate", sortOrder: 0 }, me.id);
 
-    const sonuc = await createReason(
+    const result = await createReason(
       testDb,
-      { kind: "REJECTED", label: "Mükerrer", sortOrder: 0 },
+      { kind: "REJECTED", label: "Duplicate", sortOrder: 0 },
       me.id,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("duplicate_label");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("duplicate_label");
   });
 
-  it("aynı ad farklı türde kullanılabilir", async () => {
+  it("permits same label under different kind", async () => {
     const me = await admin();
-    await createReason(testDb, { kind: "REJECTED", label: "Diğer", sortOrder: 0 }, me.id);
+    await createReason(testDb, { kind: "REJECTED", label: "Other", sortOrder: 0 }, me.id);
 
-    const sonuc = await createReason(
+    const result = await createReason(
       testDb,
-      { kind: "CHANGES_REQUESTED", label: "Diğer", sortOrder: 0 },
+      { kind: "CHANGES_REQUESTED", label: "Other", sortOrder: 0 },
       me.id,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
-  it("ad ve sıra düzeltilir; eski hâl denetim izinde kalır", async () => {
+  it("updates label and sort order; old version preserved in audit log", async () => {
     const me = await admin();
-    const gerekce = await createApprovalReason("REJECTED", "Yanlş yazım");
+    const reason = await createApprovalReason("REJECTED", "Misspelling");
 
-    const sonuc = await updateReason(
+    const result = await updateReason(
       testDb,
-      { id: gerekce.id, label: "Yanlış yazım", sortOrder: 5 },
+      { id: reason.id, label: "Corrected spelling", sortOrder: 5 },
       me.id,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.reason.label).toBe("Yanlış yazım");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.reason.label).toBe("Corrected spelling");
 
-    const iz = await testDb.auditLog.findFirstOrThrow({
-      where: { objectId: gerekce.id, action: AUDIT_ACTIONS.approvalReasonUpdated },
+    const log = await testDb.auditLog.findFirstOrThrow({
+      where: { objectId: reason.id, action: AUDIT_ACTIONS.approvalReasonUpdated },
     });
-    // Etiket değişince geçmiş kayıtların gerekçesi de değişir; ize eski hâl
-    // yazılmasaydı bu değişiklik izlenemez olurdu.
-    expect(JSON.stringify(iz.detail)).toContain("Yanlş yazım");
+    // When label changes past records reflect it; logging prior state enables auditability.
+    expect(JSON.stringify(log.detail)).toContain("Misspelling");
   });
 });
 
-describe("pasifleştirme", () => {
-  it("pasif gerekçe karar ekranında görünmez ama katalogda durur", async () => {
+describe("deactivation", () => {
+  it("deactivated reason is hidden in decision modal but preserved in catalog", async () => {
     const me = await admin();
-    const kalan = await createApprovalReason("REJECTED", "Kalan");
-    const kalkan = await createApprovalReason("REJECTED", "Kalkan");
+    const remaining = await createApprovalReason("REJECTED", "Remaining");
+    const deactivated = await createApprovalReason("REJECTED", "Deactivated");
 
-    await setReasonActive(testDb, kalkan.id, false, me.id);
+    await setReasonActive(testDb, deactivated.id, false, me.id);
 
-    const aktifler = await listActiveReasons(testDb, "REJECTED");
-    expect(aktifler.map((r) => r.id)).toEqual([kalan.id]);
+    const activeReasons = await listActiveReasons(testDb, "REJECTED");
+    expect(activeReasons.map((r) => r.id)).toEqual([remaining.id]);
 
-    // Silinmedi (§16.6).
+    // Not deleted (§16.6).
     expect((await listAllReasons(testDb)).length).toBe(2);
   });
 
-  it("son aktif gerekçe pasifleştirilemez", async () => {
+  it("cannot deactivate the last active reason of a kind", async () => {
     const me = await admin();
-    const tek = await createApprovalReason("REJECTED", "Tek gerekçe");
+    const soleReason = await createApprovalReason("REJECTED", "Sole reason");
 
-    const sonuc = await setReasonActive(testDb, tek.id, false, me.id);
+    const result = await setReasonActive(testDb, soleReason.id, false, me.id);
 
-    // Katalogu boşalan karar türü hiç verilemez hâle gelirdi: müdür
-    // reddetmek isteyip seçecek gerekçe bulamazdı.
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("last_active_reason");
+    // Empty catalog would render decisions impossible to submit.
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("last_active_reason");
 
-    const guncel = await testDb.approvalReason.findUniqueOrThrow({
-      where: { id: tek.id },
+    const updated = await testDb.approvalReason.findUniqueOrThrow({
+      where: { id: soleReason.id },
     });
-    expect(guncel.isActive).toBe(true);
+    expect(updated.isActive).toBe(true);
   });
 
-  it("başka türde gerekçe kalması yetmez", async () => {
+  it("active reasons in another kind do not satisfy constraint", async () => {
     const me = await admin();
-    await createApprovalReason("CHANGES_REQUESTED", "Düzeltme gerekçesi");
-    const tekRet = await createApprovalReason("REJECTED", "Tek ret gerekçesi");
+    await createApprovalReason("CHANGES_REQUESTED", "Revision reason");
+    const soleRejection = await createApprovalReason("REJECTED", "Sole rejection reason");
 
-    const sonuc = await setReasonActive(testDb, tekRet.id, false, me.id);
+    const result = await setReasonActive(testDb, soleRejection.id, false, me.id);
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 
-  it("pasifleştirilen gerekçe yeniden açılabilir", async () => {
+  it("deactivated reason can be reactivated", async () => {
     const me = await admin();
-    await createApprovalReason("REJECTED", "Kalan");
-    const kalkan = await createApprovalReason("REJECTED", "Kalkan");
-    await setReasonActive(testDb, kalkan.id, false, me.id);
+    await createApprovalReason("REJECTED", "Remaining");
+    const deactivated = await createApprovalReason("REJECTED", "Deactivated");
+    await setReasonActive(testDb, deactivated.id, false, me.id);
 
-    const sonuc = await setReasonActive(testDb, kalkan.id, true, me.id);
+    const result = await setReasonActive(testDb, deactivated.id, true, me.id);
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     expect((await listActiveReasons(testDb, "REJECTED")).length).toBe(2);
   });
 
-  it("sıra numarasına göre sıralanır", async () => {
+  it("orders by sortOrder value", async () => {
     await testDb.approvalReason.createMany({
       data: [
-        { kind: "REJECTED", label: "Sonra", sortOrder: 90 },
-        { kind: "REJECTED", label: "Önce", sortOrder: 10 },
+        { kind: "REJECTED", label: "Later", sortOrder: 90 },
+        { kind: "REJECTED", label: "Earlier", sortOrder: 10 },
       ],
     });
 
-    const liste = await listActiveReasons(testDb, "REJECTED");
+    const list = await listActiveReasons(testDb, "REJECTED");
 
-    expect(liste.map((r) => r.label)).toEqual(["Önce", "Sonra"]);
+    expect(list.map((r) => r.label)).toEqual(["Earlier", "Later"]);
   });
 });
 
-describe("kullanılan gerekçe silinemez", () => {
-  it("faaliyete bağlı gerekçe veritabanınca korunur", async () => {
-    const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
-    const yazan = await createUser(unit.id, { fullName: "Yazan" });
-    const onaylayan = await createUser(unit.id, { fullName: "Onaylayan" });
-    const gerekce = await createApprovalReason("REJECTED", "Kullanılan");
+describe("in-use reasons cannot be deleted", () => {
+  it("reason linked to an activity is protected by database", async () => {
+    const unit = await createOrgUnit({ name: "Company", type: "Root" });
+    const author = await createUser(unit.id, { fullName: "Author" });
+    const approver = await createUser(unit.id, { fullName: "Approver" });
+    const reason = await createApprovalReason("REJECTED", "In use");
 
     await testDb.activity.create({
       data: {
-        authorId: yazan.id,
+        authorId: author.id,
         authorOrgUnitId: unit.id,
         activityDate: new Date("2026-08-18T00:00:00.000Z"),
-        title: "Kayıt",
-        description: "içerik",
+        title: "Record",
+        description: "content",
         approvalStatus: "REJECTED",
-        approverId: onaylayan.id,
-        approvalReasonId: gerekce.id,
+        approverId: approver.id,
+        approvalReasonId: reason.id,
         approvalReasonKind: "REJECTED",
       },
     });
 
-    // Fiziksel silme yok (§16.6); yabancı anahtar da engelliyor.
+    // Physical deletion forbidden (§16.6); foreign key prevents deletion.
     await expect(
-      testDb.approvalReason.delete({ where: { id: gerekce.id } }),
+      testDb.approvalReason.delete({ where: { id: reason.id } }),
     ).rejects.toThrow();
   });
 });

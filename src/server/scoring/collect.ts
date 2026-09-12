@@ -28,10 +28,10 @@ import {
 
 import type { ScoreInput } from "./compute";
 
-/** Sayılar ve onları doğuran olgular birlikte. */
+
 export type ScoreInputWithFacts = ScoreInput & { facts: ScoreFactRow[] };
 
-/** Kapanışta yazılacak tek bir katkı olgusu. */
+
 export interface ScoreFactRow {
   activityId: string;
   kind: "WRITTEN" | "ACCEPTED" | "DECISION" | "OBLIGATION" | "APPRECIATION";
@@ -40,23 +40,23 @@ export interface ScoreFactRow {
   onTime: boolean;
 }
 import {
-  cevapYukumlulukleri,
-  donemeGiriyorMu,
-  maddeKapanisi,
-  maddeSonHareketi,
+  answerResponsibilities,
+  isInPeriod,
+  itemClosure,
+  itemLastMovement,
 } from "./follow-up-discipline";
 
-// Skorun **paydası** (Görev 11.10).
+
 //
-// Payda üç şeye bağlı ve üçü de bu görevden önce kuruldu:
+
 //
-//   · `writesActivities: false` olan kişi hiç sayılmaz (§7.4 istisnası).
-//   · "Faaliyet beklenmiyor" dönemleri düşer (Görev 11.8). İptal edilmiş
-//     dönem **hiç yaşanmamış** sayılır (denetim 21.08.2026, bulgu 7).
-//   · Hangi günlerin iş günü olduğunu **birimin** çalışma takvimi söyler
-//     (Görev 11.9): cumartesi çalışan depo için cumartesiler paydada.
+
+
+
+
+
 //
-// Skorun plana en sona konmasının sebebi buydu.
+
 
 export type ScoreCollectDb = VisibilityDb &
   Pick<
@@ -76,107 +76,102 @@ export type ScoreCollectDb = VisibilityDb &
   | "systemSetting"
   >;
 
-/** `YYYY-MM-DD` günlerini sırayla verir. */
-function gunAralik(from: Date, to: Date): string[] {
-  const gunler: string[] = [];
-  const imlec = new Date(from);
 
-  while (imlec <= to) {
-    gunler.push(imlec.toISOString().slice(0, 10));
-    imlec.setUTCDate(imlec.getUTCDate() + 1);
+function dayRange(from: Date, to: Date): string[] {
+  const days: string[] = [];
+  const cursor = new Date(from);
+
+  while (cursor <= to) {
+    days.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 
-  return gunler;
+  return days;
 }
 
-/**
- * Birimin takvimine göre dönemdeki iş günleri.
- *
- * Şirket takvimi değil **birimin** penceresi kullanılıyor: cumartesi çalışan
- * bir depoda cumartesiler beklenen gündür ve o kişinin paydası daha büyüktür.
- */
+
 export async function expectedWorkDays(
   db: ScoreCollectDb,
   orgUnitId: string,
   from: Date,
   to: Date,
 ): Promise<string[]> {
-  const [indeks, takvim] = await Promise.all([
+  const [calendarIndex, companyCalendar] = await Promise.all([
     loadUnitCalendarIndex(db),
     loadWorkCalendar(db, from, to),
   ]);
 
-  return expectedWorkDaysFrom(indeks, orgUnitId, from, to, takvim.holidays);
+  return expectedWorkDaysFrom(
+    calendarIndex,
+    orgUnitId,
+    from,
+    to,
+    companyCalendar.holidays,
+  );
 }
 
-/**
- * Aynı hesap, **sorgusuz**: ağaç/takvim indeksi ve tatiller dışarıdan gelir.
- *
- * Toplu yol bunu kullanıyor; aynı birimdeki kırk kişi için ağacı kırk kez
- * yüklemek bulgu 9'un ta kendisiydi.
- */
+
 export function expectedWorkDaysFrom(
-  indeks: UnitCalendarIndex,
+  calendarIndex: UnitCalendarIndex,
   orgUnitId: string,
   from: Date,
   to: Date,
   holidays: string[],
 ): string[] {
-  const pencere = resolveUnitWorkWindowFrom(indeks, orgUnitId);
-  const tatiller = new Set(holidays);
+  const workWindow = resolveUnitWorkWindowFrom(calendarIndex, orgUnitId);
+  const holidaySet = new Set(holidays);
 
-  return gunAralik(from, to).filter((gun) => {
-    const isoGun = new Date(`${gun}T00:00:00.000Z`).getUTCDay() || 7;
-    if (!pencere.workingDays.includes(isoGun)) return false;
+  return dayRange(from, to).filter((day) => {
+    const isoDay = new Date(`${day}T00:00:00.000Z`).getUTCDay() || 7;
+    if (!workWindow.workingDays.includes(isoDay)) return false;
 
-    // Tatilde çalışan birimde tatil de iş günüdür (Görev 11.9).
-    if (tatiller.has(gun) && !pencere.worksOnHolidays) return false;
+    // A holiday is also a business day for a unit that works on holidays
+    // (Task 11.9).
+    if (holidaySet.has(day) && !workWindow.worksOnHolidays) return false;
 
     return true;
   });
 }
 
 /**
- * Bir kişinin dönemdeki skor girdisi.
+ * A person's score input for a period.
  *
- * **Sayı değil gün** sayılıyor: aynı günde beş kayıt bir gün. Sayı
- * ödüllendirilseydi bir işi anlatan tek kayıt yerine onu bölen beş kayıt
- * yazılırdı ve sistem dolarken içerik boşalırdı.
+ * **Days, not records**, are counted: five records on one day count as one
+ * day. Counting records would reward splitting one piece of work into five
+ * entries and reduce content quality as the system fills up.
  */
 export async function collectScoreInput(
   db: ScoreCollectDb,
   viewer: Viewer,
   userId: string,
-  /** Dönemin ilk günü (gün alanı). */
+  /** First day of the period (date-only field). */
   from: Date,
-  /** Dönemin son günü (gün alanı). */
+  /** Last day of the period (date-only field). */
   to: Date,
   /**
-   * Zaman damgalı olaylar için **dışlayıcı** üst an. Canlı dönemde gerçek
-   * `now`, kapanmış dönemde son günü izleyen şirket gününün başlangıcı.
+   * The **exclusive** upper instant for timestamped events. In a live period
+   * this is `now`; in a closed period it is the start of the company day
+   * after the period's last date.
    *
-   * Gün alanı ile zaman damgası aynı sınırla karşılaştırılamaz: "31 Ağustos"
-   * bir gün alanı için kapsayıcıdır, bir zaman damgası için o günün 00:00'ı
-   * ve gün içindeki her şeyi dışarıda bırakır (denetim 23.08.2026,
-   * P3-3).
+   * A date-only field and a timestamp cannot use the same boundary: August 31
+   * is inclusive for a date field, while midnight on that day excludes the
+   * rest of the day for a timestamp (audit finding P3-3, 23.08.2026).
    */
   until: Date = nextCompanyDayStart(companyDay(to)),
 ): Promise<ScoreInputWithFacts> {
-  // **Tek kişilik yol da toplu yoldan geçer** (denetim 25.08.2026,
-  // P8-2 çalışmasında birleştirildi).
-  //
-  // İki ayrı toplama vardı ve seçimleri elle eşlenmişti; birinde düzeltilen
-  // bir kural diğerinde eksik kalabiliyordu. Kapanış tek kişilik yolu, ekran
-  // toplu yolu kullandığı için ayrışma doğrudan "kapanan skor ile ekranda
-  // görünen skor farklı" demekti.
+  // **The single-person path also uses the batch path** (merged during the
+  // 25.08.2026 P8-2 audit).
+  // Separate collectors could drift when a rule changed in only one of them.
+  // The closure job uses the single-person path while the screen uses the
+  // batch path, so the drift directly changed the displayed closed score.
   const ctx = await loadScoreContext(db, viewer);
-  const hepsi = await collectScoreInputs(db, ctx, [userId], from, to, until);
+  const inputs = await collectScoreInputs(db, ctx, [userId], from, to, until);
 
-  return hepsi.get(userId) ?? BOS_GIRDI;
+  return inputs.get(userId) ?? EMPTY_SCORE_INPUT;
 }
 
-/** Kişi bulunamadığında; sıfır değil, **ölçülmeyen** dönem demek. */
-const BOS_GIRDI: ScoreInputWithFacts = {
+/** A missing person means an **unmeasured** period, not zero. */
+const EMPTY_SCORE_INPUT: ScoreInputWithFacts = {
   expectedDays: 0,
   writtenDays: 0,
   writtenCount: 0,
@@ -191,35 +186,34 @@ const BOS_GIRDI: ScoreInputWithFacts = {
 };
 
 /**
- * Bir kişinin dönem girdisini **sorgusuz** hesaplar.
+ * Calculates one person's period input **without additional queries**.
  *
- * Toplama ile hesap ayrıldı (denetim 23.08.2026, bulgu 9): tek kişilik
- * ve toplu yollar aynı hesabı çağırıyor, dolayısıyla ikisinin ayrışması
- * mümkün değil. Ayrışsalardı ekip listesi ile profil aynı kişi için farklı
- * skor gösterebilirdi.
+ * Collection and calculation were separated after audit finding 9
+ * (23.08.2026): both single-person and batch paths call this same calculation,
+ * so the team list and profile cannot show different scores.
  */
-export function hesaplaScoreInput(girdi: {
+export function calculateScoreInput(input: {
   userId: string;
-  anBasi: Date;
+  instantStart: Date;
   until: Date;
-  olcumAni: Date;
-  isGunleri: string[];
-  izinler: { startDate: Date; endDate: Date }[];
-  kayitlar: {
+  measurementInstant: Date;
+  workDays: string[];
+  absences: { startDate: Date; endDate: Date }[];
+  records: {
     id: string;
     activityDate: Date;
     approvalStatus: string;
     approverId: string | null;
-    /** Dönem sonuna kadar verilmiş **son** karar; yoksa boş. */
+    /** The **last** decision made by the period end, or null. */
     approvalRounds: { decision: string | null; decidedAt: Date | null }[];
   }[];
-  kararlar: { activityId: string; submittedAt: Date; decidedAt: Date | null }[];
-  maddeler: {
+  decisions: { activityId: string; submittedAt: Date; decidedAt: Date | null }[];
+  followUpItems: {
     activityId: string;
     openedAt: Date;
     events: { kind: FollowUpEventKind; createdAt: Date }[];
   }[];
-  konusmalar: {
+  conversations: {
     activityId: string;
     askerId: string;
     openedAt: Date;
@@ -227,262 +221,271 @@ export function hesaplaScoreInput(girdi: {
     activity: { authorId: string };
     messages: { authorId: string; createdAt: Date }[];
   }[];
-  takdirler: { activityId: string; createdAt: Date }[];
-  takvimAyari: { workingDays: number[] };
-  sirketTakvimi: { holidays: string[] };
-  onayEsigi: number;
-  cevapEsigi: number;
-  maddeEsigi: number;
+  appreciations: { activityId: string; createdAt: Date }[];
+  calendarSetting: { workingDays: number[] };
+  companyCalendar: { holidays: string[] };
+  approvalThreshold: number;
+  answerThreshold: number;
+  followUpThreshold: number;
   appreciationPointsPer: number;
 }): ScoreInputWithFacts {
   const {
     userId,
-    anBasi,
+    instantStart,
     until,
-    olcumAni,
-    isGunleri,
-    izinler,
-    kayitlar,
-    kararlar,
-    maddeler,
-    konusmalar,
-    takdirler,
+    measurementInstant,
+    workDays,
+    absences,
+    records,
+    decisions,
+    followUpItems,
+    conversations,
+    appreciations,
     appreciationPointsPer,
-    takvimAyari,
-    sirketTakvimi,
-    onayEsigi,
-    cevapEsigi,
-    maddeEsigi,
-  } = girdi;
+    calendarSetting,
+    companyCalendar,
+    approvalThreshold,
+    answerThreshold,
+    followUpThreshold,
+  } = input;
 
-  const takvim = {
-    workingDays: takvimAyari.workingDays,
-    holidays: sirketTakvimi.holidays,
+  const calendar = {
+    workingDays: calendarSetting.workingDays,
+    holidays: companyCalendar.holidays,
   };
 
-  // İzin günleri paydadan düşer.
-  const izinliGunler = new Set<string>();
-  for (const izin of izinler) {
-    for (const gun of gunAralik(izin.startDate, izin.endDate)) {
-      izinliGunler.add(gun);
+  // Absence days are removed from the denominator.
+  const absenceDays = new Set<string>();
+  for (const leave of absences) {
+    for (const day of dayRange(leave.startDate, leave.endDate)) {
+      absenceDays.add(day);
     }
   }
-  const beklenen = isGunleri.filter((gun) => !izinliGunler.has(gun));
+  const expectedDays = workDays.filter((day) => !absenceDays.has(day));
 
-  // **Gün** sayılıyor, kayıt değil.
+  // Count **days**, not records.
   //
-  // Pay, paydanın günleriyle **kesiştiriliyor** (denetim 23.08.2026,
-  // bulgu 10 çalışmasında bulundu). Payda beklenen iş günleri: hafta sonu,
-  // resmî tatil ve "faaliyet beklenmiyor" dönemleri düşüyor. Pay ise kaydın
-  // olduğu her günü sayıyordu; kişi izindeyken, hafta sonunda ya da tatilde
-  // bir kayıt yazdığında pay büyüyor, payda küçülüyordu ve oran %100'ü
-  // aşabiliyordu.
+  // Intersect the numerator with denominator days (audit finding 10,
+  // 23.08.2026). The denominator removes weekends, holidays, and no-activity
+  // periods. Previously the numerator counted every record date, so entries
+  // on leave, weekends, or holidays increased the numerator while shrinking
+  // the denominator and could push the ratio above 100%.
   //
-  // Sonuç yalnız yanlış bir sayı değildi: `UserScorePeriod_valid_days` kısıtı
-  // `writtenDays > expectedDays` satırını reddediyor ve **dönem kapanış
-  // işçisi hata veriyordu** — o ayın hiçbir kişisi için skor yazılamıyordu.
-  // Kabul ölçümünün skor dönemi üretimi bu yüzden çöktü.
+  // This was not only a wrong number: the `UserScorePeriod_valid_days`
+  // constraint rejected `writtenDays > expectedDays`, so the **period-closure
+  // worker failed** and wrote no scores for anyone that month.
   //
-  // Düzenlilik "beklenen günün kaçında yazdı" sorusudur; beklenmeyen günde
-  // yazmak bu soruyu cevaplamaz. Kayıt kaybolmuyor — akışta, listede ve
-  // aramada duruyor; yalnız bu **orana** girmiyor.
-  const beklenenKume = new Set(beklenen);
-  const yazilanGunler = new Set(
-    kayitlar
-      .map((k) => companyDay(toDateValue(k.activityDate.toISOString().slice(0, 10))))
-      .filter((gun) => beklenenKume.has(gun)),
+  // Regularity asks how many expected days received an entry; writing on an
+  // unexpected day does not answer that question. The record remains in the
+  // feed, list, and search; it is simply excluded from this **ratio**.
+  const expectedDaySet = new Set(expectedDays);
+  const writtenDays = new Set(
+    records
+      .map((record) =>
+        companyDay(toDateValue(record.activityDate.toISOString().slice(0, 10))),
+      )
+      .filter((day) => expectedDaySet.has(day)),
   );
 
-  // **Kabul dönem sonundaki gerçeğe göre** (denetim 25.08.2026, P8-2).
+  // **Acceptance is evaluated using the period-end truth** (audit 25.08.2026,
+  // P8-2).
   //
-  // Önce güncel `approvalStatus` okunuyordu: dönem bittikten sonra ama işçi
-  // koşmadan önce verilen bir onay geçmiş döneme kabul yazıyordu. Onaya tabi
-  // kayıtta cevap **karar turlarından** geliyor; onaya tabi olmayan birimde
-  // kayıt zaten onaylı doğuyor ve turu hiç olmuyor.
-  const donemSonundaKabul = (k: (typeof kayitlar)[number]): boolean => {
-    if (k.approverId === null) {
-      // Onaya tabi olmayan birim: doğuşta onaylı. İptal edilmişse buraya
-      // zaten gelmiyor (iptal dönem içindeyse süzüldü).
-      return k.approvalStatus !== "REJECTED";
+  // The current `approvalStatus` used to be read first: an approval given
+  // after the period ended could change a historical score. For approval-
+  // required records, acceptance comes from **decision turns**; a record in
+  // a unit without approval is approved at creation and has no turn.
+  const acceptedAtPeriodEnd = (record: (typeof records)[number]): boolean => {
+    if (record.approverId === null) {
+      // A unit without approval creates approved records. Cancelled records
+      // do not reach this point because an in-period cancellation is filtered.
+      return record.approvalStatus !== "REJECTED";
     }
-    return k.approvalRounds[0]?.decision === "APPROVED";
+    return record.approvalRounds[0]?.decision === "APPROVED";
   };
 
-  const onaylanan = kayitlar.filter(donemSonundaKabul).length;
-  const onayliKayitIds = new Set(
-    kayitlar.filter(donemSonundaKabul).map((kayit) => kayit.id),
+  const approved = records.filter(acceptedAtPeriodEnd).length;
+  const approvedRecordIds = new Set(
+    records.filter(acceptedAtPeriodEnd).map((record) => record.id),
   );
-  const gecerliTakdirler = takdirler.filter((takdir) =>
-    onayliKayitIds.has(takdir.activityId),
+  const validAppreciations = appreciations.filter((appreciation) =>
+    approvedRecordIds.has(appreciation.activityId),
   );
 
-  // **Onay süresi gerçekten ölçülüyor** (denetim 23.08.2026, bulgu 6).
+  // **Approval time is measured** (audit finding 6, 23.08.2026).
   //
-  // Eskiden `decidedOnTimeCount` koşulsuz olarak karar sayısına eşitleniyordu:
-  // gönderim ve karar anları seçildiği hâlde aradaki iş günü hiç
-  // hesaplanmıyor, geç karar veren her yönetici bu boyuttan tam puan
-  // alıyordu. Boyut, ölçtüğünü iddia ettiği şeyi ölçmüyordu.
+  // Previously `decidedOnTimeCount` always equaled the decision count: the
+  // submission and decision instants were selected, but business days between
+  // them were never calculated, giving every late manager full credit.
   //
-  // Sayaç **şirket geneli** takvimden besleniyor (tasarım satır 440: "iş günü
-  // sayacı şirket geneli, tek") ve eşik, hatırlatmanın kullandığı ayarın ta
-  // kendisi: iki yol ayrışsaydı, sistem "geç kaldın" diye hatırlatırken skor
-  // "zamanında" derdi.
-  const zamaninda = kararlar.filter(
-    (k) => businessDaysBetween(k.submittedAt, k.decidedAt!, takvim) < onayEsigi,
+  // The counter uses the **company-wide** calendar (design line 440), and the
+  // threshold is the same setting used by reminders. Divergence would let the
+  // reminder say "late" while the score said "on time".
+  const onTimeDecisions = decisions.filter(
+    (decision) =>
+      businessDaysBetween(
+        decision.submittedAt,
+        decision.decidedAt!,
+        calendar,
+      ) < approvalThreshold,
   ).length;
 
-  // **Takip disiplini = zamanında ele almak.**
+  // **Follow-up discipline means handling items on time.**
   //
-  // Madde: dönem sonuna kadar kapandıysa başarı; hâlâ açıksa ancak eşiği
-  // aşmamışsa. Ölçü **açılış anından** işliyor — tasarımın ölçtüğü şey
-  // maddeyi kapatmak. Güncel `lastMovedAt` kullanılmıyor: dönem kapandıktan
-  // sonra gelen bir hareket geçmişi değiştirirdi (P3-2).
-  const donemMaddeleri = maddeler
-    .map((madde) => {
-      const gorunum = { openedAt: madde.openedAt, olaylar: madde.events };
+  // An item is successful if it is closed by period end, or is still open but
+  // below the threshold. Measurement starts at **opening** because the design
+  // measures closure. The current `lastMovedAt` is not used: later movement
+  // would change historical results after period close (P3-2).
+  const periodItems = followUpItems
+    .map((item) => {
+      const view = { openedAt: item.openedAt, events: item.events };
       return {
-        activityId: madde.activityId,
-        openedAt: madde.openedAt,
-        kapanis: maddeKapanisi(gorunum),
-        sonHareket: maddeSonHareketi(gorunum),
+        activityId: item.activityId,
+        openedAt: item.openedAt,
+        closure: itemClosure(view),
+        lastMovement: itemLastMovement(view),
       };
     })
-    .filter(({ kapanis }) => kapanis === null || kapanis >= anBasi);
+    .filter(({ closure }) => closure === null || closure >= instantStart);
 
-  const maddeEleAlindi = ({
-    kapanis,
-    sonHareket,
+  const itemHandled = ({
+    closure,
+    lastMovement,
   }: {
-    kapanis: Date | null;
-    sonHareket: Date;
+    closure: Date | null;
+    lastMovement: Date;
   }): boolean =>
-    kapanis !== null
+    closure !== null
       ? true
-      : businessDaysBetween(sonHareket, olcumAni, takvim) < maddeEsigi;
+      : businessDaysBetween(lastMovement, measurementInstant, calendar) < followUpThreshold;
 
-  const eleAlinanMaddeler = donemMaddeleri.filter(maddeEleAlindi).length;
+  const handledItems = periodItems.filter(itemHandled).length;
 
-  // Soru: karşı tarafın açtığı her tur bir cevap borcudur. Dönemle kesişen
-  // borçlar paydada; eşiği aşmadan kapananlar payda.
-  const borclar = konusmalar
-    .flatMap((konusma) =>
-      cevapYukumlulukleri(
+  // Each round opened by the other side creates an answer obligation. Duties
+  // intersecting the period form the denominator; those closed before the
+  // threshold form the numerator.
+  const obligations = conversations
+    .flatMap((conversation) =>
+      answerResponsibilities(
         {
-          askerId: konusma.askerId,
-          respondentId: konusma.activity.authorId,
-          openedAt: konusma.openedAt,
-          kapanis: konusma.closedAt,
-          mesajlar: konusma.messages,
+          askerId: conversation.askerId,
+          respondentId: conversation.activity.authorId,
+          openedAt: conversation.openedAt,
+          closure: conversation.closedAt,
+          messages: conversation.messages,
         },
         userId,
-        olcumAni,
-      ).map((borc) => ({ ...borc, activityId: konusma.activityId })),
+        measurementInstant,
+      ).map((obligation) => ({ ...obligation, activityId: conversation.activityId })),
     )
-    .filter((borc) => donemeGiriyorMu(borc, anBasi, until))
-    // **Cevapsız kapanan soru ölçümden düşer** (ürün sahibi kararı,
-    // 23.08.2026; denetim P3-R2-2). Konuşmayı soran da sistem
-    // yöneticisi de kapatabilir; kişi cevap yazma fırsatını kaybetti. Başarı
-    // saymak puanı **başkasının** eylemine bağlardı, başarısızlık saymak da
-    // kişinin yapmadığı bir şeyi cezalandırırdı.
-    .filter((borc) => borc.sonu !== "KAPANDI");
+    .filter((obligation) => isInPeriod(obligation, instantStart, until))
+    // **A question closed without an answer is excluded** (product decision,
+    // 23.08.2026; audit P3-R2-2). The asker or a system administrator can
+    // close a conversation, removing the person's opportunity to answer.
+    // Counting success would depend on **someone else's** action; counting
+    // failure would penalize the person for something they did not do.
+    .filter((obligation) => obligation.end !== "CLOSED");
 
-  const borcZamaninda = (borc: { basladi: Date; bitti: Date }): boolean =>
-    businessDaysBetween(borc.basladi, borc.bitti, takvim) < cevapEsigi;
+  const obligationOnTime = (obligation: { startedAt: Date; endedAt: Date }): boolean =>
+    businessDaysBetween(obligation.startedAt, obligation.endedAt, calendar) < answerThreshold;
 
-  const cevaplananSorular = borclar.filter(borcZamaninda).length;
+  const answeredQuestions = obligations.filter(obligationOnTime).length;
 
-  // ── Katkı satırları ────────────────────────────────────────────────────
-  //
-  // Aynı hesaptan **olgular** da çıkıyor (P3-R2-4). Dönem kapanışı bunları
-  // yazıyor; kapanmış dönem sonradan yeniden hesaplanmıyor, yalnız bu
-  // satırlar bakanın görünürlüğünden süzülüyor. Sayılar ile olguların tek
-  // yerden çıkması şart: ayrı hesaplanan bir olgu kümesi, canlı dönemle
-  // kapanmış dönemin sessizce ayrışması demekti.
+  // ── Fact rows ──────────────────────────────────────────────────────────
+  // The same calculation also produces **facts** (P3-R2-4). Period closure
+  // stores them; closed periods are not recalculated, but the rows still pass
+  // through the viewer's visibility filter. Counts and facts must share one
+  // source so live and closed periods cannot silently diverge.
   const facts: ScoreFactRow[] = [
-    ...kayitlar.map((k) => {
-      const gun = companyDay(toDateValue(k.activityDate.toISOString().slice(0, 10)));
+    ...records.map((record) => {
+      const day = companyDay(
+        toDateValue(record.activityDate.toISOString().slice(0, 10)),
+      );
       return {
-        activityId: k.id,
+        activityId: record.id,
         kind: "WRITTEN" as const,
-        happenedOn: gun,
-        // Düzenliliğin payına yalnız **beklenen güne** düşen kayıt girer;
-        // kabul oranının paydası ise bütün kayıtlardır.
-        onTime: beklenenKume.has(gun),
+        happenedOn: day,
+        // Only records on an **expected day** enter the regularity numerator;
+        // the acceptance denominator contains every record.
+        onTime: expectedDaySet.has(day),
       };
     }),
-    ...kayitlar
-      .filter(donemSonundaKabul)
-      .map((k) => ({
-        activityId: k.id,
+    ...records
+      .filter(acceptedAtPeriodEnd)
+      .map((record) => ({
+        activityId: record.id,
         kind: "ACCEPTED" as const,
-        happenedOn: companyDay(toDateValue(k.activityDate.toISOString().slice(0, 10))),
+        happenedOn: companyDay(
+          toDateValue(record.activityDate.toISOString().slice(0, 10)),
+        ),
         onTime: true,
       })),
-    ...kararlar.map((k) => ({
-      activityId: k.activityId,
+    ...decisions.map((decision) => ({
+      activityId: decision.activityId,
       kind: "DECISION" as const,
-      happenedOn: companyDay(k.decidedAt!),
-      onTime: businessDaysBetween(k.submittedAt, k.decidedAt!, takvim) < onayEsigi,
+      happenedOn: companyDay(decision.decidedAt!),
+      onTime:
+        businessDaysBetween(
+          decision.submittedAt,
+          decision.decidedAt!,
+          calendar,
+        ) < approvalThreshold,
     })),
-    ...donemMaddeleri.map((madde) => ({
-      activityId: madde.activityId,
+    ...periodItems.map((item) => ({
+      activityId: item.activityId,
       kind: "OBLIGATION" as const,
-      happenedOn: companyDay(madde.kapanis ?? madde.openedAt),
-      onTime: maddeEleAlindi(madde),
+      happenedOn: companyDay(item.closure ?? item.openedAt),
+      onTime: itemHandled(item),
     })),
-    ...borclar.map((borc) => ({
-      activityId: borc.activityId,
+    ...obligations.map((obligation) => ({
+      activityId: obligation.activityId,
       kind: "OBLIGATION" as const,
-      happenedOn: companyDay(borc.bitti),
-      onTime: borcZamaninda(borc),
+      happenedOn: companyDay(obligation.endedAt),
+      onTime: obligationOnTime(obligation),
     })),
-    ...gecerliTakdirler.map((takdir) => ({
-      activityId: takdir.activityId,
+    ...validAppreciations.map((appreciation) => ({
+      activityId: appreciation.activityId,
       kind: "APPRECIATION" as const,
-      happenedOn: companyDay(takdir.createdAt),
+      happenedOn: companyDay(appreciation.createdAt),
       onTime: true,
     })),
   ];
 
   return {
-    expectedDays: beklenen.length,
-    writtenDays: yazilanGunler.size,
-    writtenCount: kayitlar.length,
-    approvedCount: onaylanan,
-    // Gönderim anı olmayan kayıt **hiçbir tarafta** sayılmaz: ölçülemeyen bir
-    // kararı paydaya koyup paydan düşmek, veri eksikliğini yöneticinin
-    // hatasıymış gibi gösterirdi.
-    decidedCount: kararlar.length,
-    decidedOnTimeCount: zamaninda,
-    followUpTotal: donemMaddeleri.length + borclar.length,
-    followUpHandled: eleAlinanMaddeler + cevaplananSorular,
-    appreciationCount: gecerliTakdirler.length,
+    expectedDays: expectedDays.length,
+    writtenDays: writtenDays.size,
+    writtenCount: records.length,
+    approvedCount: approved,
+    // A record without a submission instant is counted **nowhere**. Including
+    // an unmeasurable decision in the denominator would turn missing data
+    // into an apparent manager failure.
+    decidedCount: decisions.length,
+    decidedOnTimeCount: onTimeDecisions,
+    followUpTotal: periodItems.length + obligations.length,
+    followUpHandled: handledItems + answeredQuestions,
+    appreciationCount: validAppreciations.length,
     appreciationPointsPer,
     facts,
   };
 }
 
 
-// ── Toplu toplama ────────────────────────────────────────────────────────
+// ── Batch collection ─────────────────────────────────────────────────────
+// The team list used to run a multi-table calculation separately for every
+// person (audit finding 9, 23.08.2026): about 49 queries per person. The design
+// explicitly forbids that cost.
 //
-// Ekip listesi kişileri sırayla dolaşıp her biri için ayrı bir çok tablolu
-// hesap koşturuyordu (denetim 23.08.2026, bulgu 9). Ölçüldü: 20 kişide
-// 985, 40 kişide 1955 sorgu — kişi başına ~49. Tasarım bunu açıkça yasaklıyor.
-//
-// Buradaki yol aynı veriyi **kişi sayısından bağımsız** sayıda sorguyla
-// topluyor: her tablo bir kez `userId IN (…)` ile okunuyor, gruplama bellekte
-// yapılıyor. Hesabın kendisi değişmiyor — tek kişilik yol da toplu yol da
-// `hesaplaScoreInput` çağırıyor.
+// This path loads each table once with `userId IN (…)`, groups rows in memory,
+// and calls the same `calculateScoreInput` function as the single-person path.
 
-/** İstek başına bir kez yüklenen, kişiden bağımsız bağlam. */
+/** Context loaded once per request, independent of person count. */
 export interface ScoreContext {
-  /** Bakanın görebildiği kayıtların koşulu; bir kez çözülür. */
-  kapsam: Awaited<ReturnType<typeof visibleActivityWhere>>;
-  takvimIndeksi: UnitCalendarIndex;
-  takvimAyari: { workingDays: number[] };
-  onayEsigi: number;
-  cevapEsigi: number;
-  maddeEsigi: number;
+  /** Predicate for records visible to the viewer; resolved once. */
+  scope: Awaited<ReturnType<typeof visibleActivityWhere>>;
+  calendarIndex: UnitCalendarIndex;
+  calendarSetting: { workingDays: number[] };
+  approvalThreshold: number;
+  answerThreshold: number;
+  followUpThreshold: number;
   appreciationPointsPer: number;
 }
 
@@ -491,12 +494,12 @@ export async function loadScoreContext(
   viewer: Viewer,
 ): Promise<ScoreContext> {
   const [
-    kapsam,
-    takvimIndeksi,
-    takvimAyari,
-    onayEsigi,
-    cevapEsigi,
-    maddeEsigi,
+    scope,
+    calendarIndex,
+    calendarSetting,
+    approvalThreshold,
+    answerThreshold,
+    followUpThreshold,
     appreciationPointsPer,
   ] =
     await Promise.all([
@@ -510,33 +513,35 @@ export async function loadScoreContext(
     ]);
 
   return {
-    kapsam,
-    takvimIndeksi,
-    takvimAyari: { workingDays: takvimAyari.workingDays },
-    onayEsigi,
-    cevapEsigi,
-    maddeEsigi,
+    scope,
+    calendarIndex,
+    calendarSetting: { workingDays: calendarSetting.workingDays },
+    approvalThreshold,
+    answerThreshold,
+    followUpThreshold,
     appreciationPointsPer,
   };
 }
 
-/** Listeyi anahtara göre gruplar; eksik anahtar boş dizi verir. */
-function grupla<T>(satirlar: T[], anahtar: (satir: T) => string): Map<string, T[]> {
-  const sonuc = new Map<string, T[]>();
-  for (const satir of satirlar) {
-    const k = anahtar(satir);
-    const mevcut = sonuc.get(k);
-    if (mevcut) mevcut.push(satir);
-    else sonuc.set(k, [satir]);
+/** Groups rows by key; a missing key produces an empty array. */
+function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
+  const result = new Map<string, T[]>();
+  for (const row of rows) {
+    const groupKey = key(row);
+    const existing = result.get(groupKey);
+    if (existing) existing.push(row);
+    else result.set(groupKey, [row]);
   }
-  return sonuc;
+  return result;
 }
 
 /**
- * Birden çok kişinin dönem girdisi — **kişi sayısından bağımsız** sorguyla.
+ * Period inputs for multiple people with a query count **independent of the
+ * number of people**.
  *
- * Bakan tektir: kapsam bir kez çözülür ve bütün kişilere aynı süzgeç
- * uygulanır. Tasarımın kuralı korunuyor — herkes bakanın gözünden hesaplanır.
+ * There is one viewer: scope is resolved once and the same predicate is
+ * applied to everyone. All scores are calculated from that viewer's point of
+ * view.
  */
 export async function collectScoreInputs(
   db: ScoreCollectDb,
@@ -546,26 +551,26 @@ export async function collectScoreInputs(
   to: Date,
   until: Date = nextCompanyDayStart(companyDay(to)),
   overrides?: {
-    /** Tarihsel kapanışta kişinin o dönemdeki birimi. */
+  /** The person's unit during the period at historical close. */
     orgUnitByUser?: Map<string, string>;
-    /** Tarihsel şirket takvimi ve tatil kümesi. */
+    /** Historical company calendar and holiday set. */
     companyCalendar?: CompanyWorkCalendar;
   },
 ): Promise<Map<string, ScoreInputWithFacts>> {
-  const sonuc = new Map<string, ScoreInputWithFacts>();
-  if (userIds.length === 0) return sonuc;
+  const result = new Map<string, ScoreInputWithFacts>();
+  if (userIds.length === 0) return result;
 
-  const anBasi = companyDayStart(companyDay(from));
-  const olcumAni = new Date(until.getTime() - 1);
+  const instantStart = companyDayStart(companyDay(from));
+  const measurementInstant = new Date(until.getTime() - 1);
 
   const [
-    kisiler,
-    izinler,
-    kayitlar,
-    kararlar,
-    maddeler,
-    konusmalar,
-    takdirler,
+    people,
+    absences,
+    records,
+    decisions,
+    followUpItems,
+    conversations,
+    appreciations,
   ] =
     await Promise.all([
       db.user.findMany({
@@ -575,14 +580,14 @@ export async function collectScoreInputs(
       db.noActivityPeriod.findMany({
         where: {
           userId: { in: userIds },
-          // Bekleyen ve reddedilen talepler ölçümü değiştirmez. Onaylı
-          // kayıtlar ise iptal zamanına göre dönem içinde değerlendirilir.
+          // Pending and rejected requests do not affect the measurement.
+          // Approved requests are evaluated by their cancellation time.
           status: "APPROVED",
-          // **İptal dönem sonuna göre değerlendirilir** (denetim
-          // 25.08.2026, P8-2). `GECERLI_DONEM` yalnız "bugün iptal değil"
-          // diyor; dönem bittikten sonra iptal edilen izin, dönem içinde
-          // geçerliydi ve paydadan düşmüş olmalı. Bugünün durumuna bakmak
-          // kapanmış dönemin paydasını geç bir iptalle büyütüyordu.
+          // **Cancellation is evaluated at period end** (audit 25.08.2026,
+          // P8-2). The current-state predicate only says "not cancelled
+          // today"; leave cancelled after the period was valid during it and
+          // must reduce the denominator. Looking at today's state would grow a
+          // closed period's denominator after a late cancellation.
           OR: [{ cancelledAt: null }, { cancelledAt: { gte: until } }],
           startDate: { lte: to },
           endDate: { gte: from },
@@ -592,13 +597,13 @@ export async function collectScoreInputs(
       activityMaintenanceReader(db).findMany({
         where: {
           AND: [
-            ctx.kapsam,
+            ctx.scope,
             { authorId: { in: userIds } },
             { activityDate: { gte: from, lte: to } },
-            // **İptal dönem sonuna göre** (denetim 25.08.2026, P8-2).
-            // Durum kolonuna bakmak, dönem bittikten sonra yapılan bir
-            // iptalin kaydı geçmişten silmesi demekti. İptal kaydı zaman
-            // damgalı; dönem içinde iptal edilen düşer, sonra edilen kalır.
+            // **Cancellation uses the period end** (audit 25.08.2026, P8-2).
+            // Reading only the status would let a late cancellation erase a
+            // historical record. The cancellation row is timestamped: a
+            // cancellation during the period is excluded; a later one stays.
             {
               OR: [
                 { approvalStatus: { not: "CANCELLED" } },
@@ -614,8 +619,9 @@ export async function collectScoreInputs(
           approvalStatus: true,
           approverId: true,
           createdAt: true,
-          // Kabul, **dönem sonuna kadar verilmiş** karardan çözülür: durum
-          // kolonu bugünü söylüyor, tur geçmişi o günü.
+          // Acceptance comes from the decision **made by period end**: the
+          // status column describes today, while turn history describes that
+          // date.
           approvalRounds: {
             where: { decidedAt: { not: null, lt: until } },
             orderBy: { roundNo: "desc" },
@@ -628,8 +634,8 @@ export async function collectScoreInputs(
       db.approvalRound.findMany({
         where: {
           decidedById: { in: userIds },
-          decidedAt: { not: null, gte: anBasi, lt: until },
-          activity: ctx.kapsam,
+          decidedAt: { not: null, gte: instantStart, lt: until },
+          activity: ctx.scope,
         },
         select: {
           activityId: true,
@@ -642,8 +648,8 @@ export async function collectScoreInputs(
         where: {
           openedById: { in: userIds },
           openedAt: { lt: until },
-          OR: [{ closedAt: null }, { closedAt: { gte: anBasi } }],
-          activity: ctx.kapsam,
+          OR: [{ closedAt: null }, { closedAt: { gte: instantStart } }],
+          activity: ctx.scope,
         },
         select: {
           activityId: true,
@@ -656,13 +662,13 @@ export async function collectScoreInputs(
           },
         },
       }),
-      // Konuşmada kişi **iki taraftan biri** olabilir (§9.2): soran ya da
-      // faaliyeti yazan. Toplu sorgu ikisini de getiriyor, hangi kişiye
-      // sayılacağı bellekte ayrılıyor.
+      // A person can be **either side** of a conversation (§9.2): the asker or
+      // activity author. The batch query fetches both; attribution happens in
+      // memory.
       db.conversation.findMany({
         where: {
           AND: [
-            { activity: ctx.kapsam },
+            { activity: ctx.scope },
             {
               OR: [
                 { askerId: { in: userIds } },
@@ -670,7 +676,7 @@ export async function collectScoreInputs(
               ],
             },
             { openedAt: { lt: until } },
-            { OR: [{ closedAt: null }, { closedAt: { gte: anBasi } }] },
+            { OR: [{ closedAt: null }, { closedAt: { gte: instantStart } }] },
           ],
         },
         select: {
@@ -691,7 +697,7 @@ export async function collectScoreInputs(
           createdAt: { gte: from, lt: until },
           activity: {
             AND: [
-              ctx.kapsam,
+              ctx.scope,
               { authorId: { in: userIds } },
               { activityDate: { gte: from, lte: to } },
             ],
@@ -705,69 +711,83 @@ export async function collectScoreInputs(
       }),
     ]);
 
-  // Şirket takvimi **bir kez**, herkesin en eski çapasından dönem sonuna.
-  const capalar: Date[] = [
+  // Load the company calendar **once**, from the oldest relevant instant to
+  // period end.
+  const anchors: Date[] = [
     from,
-    ...kararlar.map((k) => k.submittedAt),
-    ...maddeler.map((m) => m.openedAt),
-    ...konusmalar.map((c) => c.messages[0]?.createdAt ?? c.openedAt),
+    ...decisions.map((decision) => decision.submittedAt),
+    ...followUpItems.map((item) => item.openedAt),
+    ...conversations.map((conversation) =>
+      conversation.messages[0]?.createdAt ?? conversation.openedAt,
+    ),
   ];
-  const enEskiAn = capalar.reduce((min, an) => (an < min ? an : min), from);
-  const sirketTakvimi =
-    overrides?.companyCalendar ?? (await loadWorkCalendar(db, enEskiAn, to));
+  const oldestInstant = anchors.reduce(
+    (min, instant) => (instant < min ? instant : min),
+    from,
+  );
+  const companyCalendar =
+    overrides?.companyCalendar ?? (await loadWorkCalendar(db, oldestInstant, to));
 
-  const izinIndeksi = grupla(izinler, (i) => i.userId);
-  const kayitIndeksi = grupla(kayitlar, (k) => k.authorId);
-  const kararIndeksi = grupla(kararlar, (k) => k.decidedById ?? "");
-  const maddeIndeksi = grupla(maddeler, (m) => m.openedById);
-  const takdirIndeksi = grupla(takdirler, (t) => t.activity.authorId);
+  const absenceIndex = groupBy(absences, (absence) => absence.userId);
+  const recordIndex = groupBy(records, (record) => record.authorId);
+  const decisionIndex = groupBy(
+    decisions,
+    (decision) => decision.decidedById ?? "",
+  );
+  const followUpIndex = groupBy(followUpItems, (item) => item.openedById);
+  const appreciationIndex = groupBy(
+    appreciations,
+    (appreciation) => appreciation.activity.authorId,
+  );
 
-  // İş günleri birim başına bir kez: aynı birimdeki kırk kişi aynı takvimi
-  // paylaşıyor ve pencere zaten bellekteki indeksten çözülüyor.
-  const birimGunleri = new Map<string, string[]>();
-  const isGunleriniAl = (orgUnitId: string): string[] => {
-    const mevcut = birimGunleri.get(orgUnitId);
-    if (mevcut) return mevcut;
+  // Load workdays once per unit: people in the same unit share a calendar and
+  // the window is resolved from the in-memory index.
+  const unitDays = new Map<string, string[]>();
+  const getWorkDays = (orgUnitId: string): string[] => {
+    const existing = unitDays.get(orgUnitId);
+    if (existing) return existing;
 
-    const gunler = expectedWorkDaysFrom(
-      ctx.takvimIndeksi,
+    const days = expectedWorkDaysFrom(
+      ctx.calendarIndex,
       orgUnitId,
       from,
       to,
-      sirketTakvimi.holidays,
+      companyCalendar.holidays,
     );
-    birimGunleri.set(orgUnitId, gunler);
-    return gunler;
+    unitDays.set(orgUnitId, days);
+    return days;
   };
 
-  for (const kisi of kisiler) {
-    const orgUnitId = overrides?.orgUnitByUser?.get(kisi.id) ?? kisi.orgUnitId;
-    sonuc.set(
-      kisi.id,
-      hesaplaScoreInput({
-        userId: kisi.id,
-        anBasi,
+  for (const person of people) {
+    const orgUnitId = overrides?.orgUnitByUser?.get(person.id) ?? person.orgUnitId;
+    result.set(
+      person.id,
+      calculateScoreInput({
+        userId: person.id,
+        instantStart,
         until,
-        olcumAni,
-        isGunleri: isGunleriniAl(orgUnitId),
-        izinler: izinIndeksi.get(kisi.id) ?? [],
-        kayitlar: kayitIndeksi.get(kisi.id) ?? [],
-        kararlar: kararIndeksi.get(kisi.id) ?? [],
-        maddeler: maddeIndeksi.get(kisi.id) ?? [],
-        // Konuşmalar kişiye göre süzülüyor: kişi ya soran ya da yazan olmalı.
-        konusmalar: konusmalar.filter(
-          (k) => k.askerId === kisi.id || k.activity.authorId === kisi.id,
+        measurementInstant,
+        workDays: getWorkDays(orgUnitId),
+        absences: absenceIndex.get(person.id) ?? [],
+        records: recordIndex.get(person.id) ?? [],
+        decisions: decisionIndex.get(person.id) ?? [],
+        followUpItems: followUpIndex.get(person.id) ?? [],
+        // Keep only conversations where this person is the asker or author.
+        conversations: conversations.filter(
+          (conversation) =>
+            conversation.askerId === person.id ||
+            conversation.activity.authorId === person.id,
         ),
-        takdirler: takdirIndeksi.get(kisi.id) ?? [],
-        takvimAyari: ctx.takvimAyari,
-        sirketTakvimi,
-        onayEsigi: ctx.onayEsigi,
-        cevapEsigi: ctx.cevapEsigi,
-        maddeEsigi: ctx.maddeEsigi,
+        appreciations: appreciationIndex.get(person.id) ?? [],
+        calendarSetting: ctx.calendarSetting,
+        companyCalendar,
+        approvalThreshold: ctx.approvalThreshold,
+        answerThreshold: ctx.answerThreshold,
+        followUpThreshold: ctx.followUpThreshold,
         appreciationPointsPer: ctx.appreciationPointsPer,
       }),
     );
   }
 
-  return sonuc;
+  return result;
 }

@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -15,11 +16,11 @@ import {
   reopenFollowUpAction,
 } from "./follow-up-actions";
 
-// Takip maddesi kartı (§11).
+
 //
-// Kart yalnız kaydı **tam görebilen** kişiye çizilir; yetkinin kendisi sunucuda
-// ayrıca doğrulanır. Kapanış notu zorunlu — notsuz kapatma, Excel'deki ölü
-// Açık/Kapalı sütununun aynısı olurdu.
+
+
+
 
 export interface OpenFollowUp {
   id: string;
@@ -46,45 +47,48 @@ export function FollowUpPanel({
 }: {
   activityId: string;
   item: OpenFollowUp | null;
-  /** En son kapanmış madde; varsa notu gösterilir ve yeniden açılabilir. */
+
   closed: ClosedFollowUp | null;
-  /** Kapatma/yeniden açma yetkisi: sahibi, açan ya da üstü. */
+
   canManage: boolean;
-  /** Kayıt açık bir duruma sahip mi (iptal/ret değil). */
+
   canOpen: boolean;
 }) {
-  const [acmaAcik, setAcmaAcik] = useState(false);
-  const [kapatmaAcik, setKapatmaAcik] = useState(false);
+  const t = useTranslations();
+  const [openingOpen, setOpeningOpen] = useState(false);
+  const [closingOpen, setClosingOpen] = useState(false);
 
-  const [acmaDurumu, acmaAction, acmaPending] = useActionState(
+  const [openingState, openingAction, openingPending] = useActionState(
     openFollowUpAction,
     emptyActivityFormState,
   );
-  const [kapatmaDurumu, kapatmaAction, kapatmaPending] = useActionState(
+  const [closingStatus, closingAction, closingPending] = useActionState(
     closeFollowUpAction,
     emptyActivityFormState,
   );
-  const [acmaTekrarDurumu, acmaTekrarAction, acmaTekrarPending] = useActionState(
+  const [reopenState, reopenAction, reopenPending] = useActionState(
     reopenFollowUpAction,
     emptyActivityFormState,
   );
 
-  const [yenidenAcik, setYenidenAcik] = useState(false);
+  const [reopenOpen, setReopenOpen] = useState(false);
 
   if (!item) {
     if (!canOpen && !closed) return null;
 
     return (
-      <Card data-test="takip-yok">
+      <Card data-test="no-follow-up">
         <CardBody className="flex flex-col gap-3">
           {closed ? (
             <div
               className="rounded-(--radius-sm) border border-line bg-inset/40 px-3 py-2.5"
-              data-test="takip-kapali"
+              data-test="closed-follow-up"
             >
               <p className="text-[length:var(--text-xs)] text-muted">
-                Takip {closed.closedAt} tarihinde {closed.closedByName} tarafından
-                kapatıldı.
+                {t("followUps.closedOnBy", {
+                  date: closed.closedAt,
+                  name: closed.closedByName,
+                })}
               </p>
               <p className="mt-0.5 whitespace-pre-line text-[length:var(--text-sm)] text-ink">
                 {closed.closingNote}
@@ -95,25 +99,27 @@ export function FollowUpPanel({
                   <Button
                     type="button"
                     size="sm"
-                    onClick={() => setYenidenAcik((onceki) => !onceki)}
-                    aria-expanded={yenidenAcik}
+                    onClick={() => setReopenOpen((previous) => !previous)}
+                    aria-expanded={reopenOpen}
                   >
-                    {yenidenAcik ? "Vazgeç" : "Yeniden aç"}
+                    {reopenOpen
+                      ? t("followUps.cancelReopen")
+                      : t("followUps.reopen")}
                   </Button>
                 </div>
               ) : null}
 
-              {yenidenAcik ? (
+              {reopenOpen ? (
                 <form
-                  action={acmaTekrarAction}
+                  action={reopenAction}
                   className="mt-2 flex flex-col gap-2"
-                  data-test="takip-yeniden-ac-formu"
+                  data-test="reopen-follow-up-form"
                 >
                   <input type="hidden" name="id" value={closed.id} />
                   <Field
                     htmlFor="reopen-note"
-                    label="Yeniden açma gerekçesi"
-                    hint="Konu neden yeniden açılıyor?"
+                    label={t("followUps.reopenReasonLabel")}
+                    hint={t("followUps.reopenHint")}
                     required
                   >
                     <Textarea
@@ -124,17 +130,19 @@ export function FollowUpPanel({
                       maxLength={1000}
                     />
                   </Field>
-                  {acmaTekrarDurumu.error ? (
-                    <Alert tone="danger">{acmaTekrarDurumu.error}</Alert>
+                  {reopenState.error ? (
+                    <Alert tone="danger">{reopenState.error}</Alert>
                   ) : null}
                   <div>
                     <Button
                       type="submit"
                       variant="primary"
                       size="sm"
-                      disabled={acmaTekrarPending}
+                      disabled={reopenPending}
                     >
-                      {acmaTekrarPending ? "Açılıyor…" : "Yeniden aç"}
+                      {reopenPending
+                        ? t("followUps.opening")
+                        : t("followUps.reopen")}
                     </Button>
                   </div>
                 </form>
@@ -145,47 +153,51 @@ export function FollowUpPanel({
           {canOpen ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-[length:var(--text-sm)] text-muted">
-              Bu konu kapandı mı? Açık kalması gerekiyorsa takip maddesi açın.
+              {t("followUps.topicClosedHint")}
             </p>
             <Button
               type="button"
-              onClick={() => setAcmaAcik((onceki) => !onceki)}
-              aria-expanded={acmaAcik}
+              onClick={() => setOpeningOpen((previous) => !previous)}
+              aria-expanded={openingOpen}
             >
-              {acmaAcik ? "Vazgeç" : "Takip aç"}
+              {openingOpen
+                ? t("followUps.cancelReopen")
+                : t("followUps.openFollowUp")}
             </Button>
           </div>
           ) : null}
 
-          {acmaAcik ? (
-            <form action={acmaAction} className="flex flex-col gap-3" data-test="takip-ac-formu">
+          {openingOpen ? (
+            <form action={openingAction} className="flex flex-col gap-3" data-test="open-follow-up-form">
               <input type="hidden" name="activityId" value={activityId} />
 
               <FormGrid columns={2}>
                 <Field
                   htmlFor="nextStep"
-                  label="Sonraki adım (isteğe bağlı)"
-                  hint="Ne bekleniyor? Örn. parça gelince haber ver."
+                  label={t("followUps.nextStep")}
+                  hint={t("followUps.nextStepHint")}
                 >
                   <Input id="nextStep" name="nextStep" maxLength={500} />
                 </Field>
 
                 <Field
                   htmlFor="reviewDate"
-                  label="Gözden geçirme günü (isteğe bağlı)"
-                  hint="O gün geldiğinde listede işaretlenir."
+                  label={t("followUps.reviewDate")}
+                  hint={t("followUps.reviewDateHint")}
                 >
                   <Input id="reviewDate" name="reviewDate" type="date" />
                 </Field>
               </FormGrid>
 
-              {acmaDurumu.error ? (
-                <Alert tone="danger">{acmaDurumu.error}</Alert>
+              {openingState.error ? (
+                <Alert tone="danger">{openingState.error}</Alert>
               ) : null}
 
               <div>
-                <Button type="submit" variant="primary" disabled={acmaPending}>
-                  {acmaPending ? "Açılıyor…" : "Takibi aç"}
+                <Button type="submit" variant="primary" disabled={openingPending}>
+                  {openingPending
+                    ? t("followUps.opening")
+                    : t("followUps.openFollowUp")}
                 </Button>
               </div>
             </form>
@@ -196,37 +208,39 @@ export function FollowUpPanel({
   }
 
   return (
-    <Card data-test="takip-karti">
+    <Card data-test="follow-up-card">
       <CardHeader
-        title="Takipte"
-        description={`Sorumlu: ${item.ownerName} · ${item.openedByName} açtı`}
+        title={t("followUps.inFollowUp")}
+        description={`${t("followUps.assignedToMe")}: ${item.ownerName} · ${t("followUps.openedBy", { name: item.openedByName })}`}
       />
       <CardBody className="flex flex-col gap-3">
         <dl className="flex flex-col gap-1.5 text-[length:var(--text-sm)]">
           {item.nextStep ? (
             <div className="flex gap-2">
-              <dt className="text-muted">Sonraki adım:</dt>
+              <dt className="text-muted">{t("followUps.nextStep")}:</dt>
               <dd className="text-ink">{item.nextStep}</dd>
             </div>
           ) : null}
 
           {item.reviewDate ? (
             <div className="flex gap-2">
-              <dt className="text-muted">Gözden geçirme:</dt>
+              <dt className="text-muted">{t("followUps.reviewDate")}:</dt>
               <dd className="text-ink">{item.reviewDate}</dd>
             </div>
           ) : null}
 
           <div className="flex gap-2">
-            <dt className="text-muted">Son hareket:</dt>
+            <dt className="text-muted">{t("followUps.lastActivity")}</dt>
             <dd
               className={
                 item.idleBusinessDays >= 5 ? "text-correction" : "text-muted"
               }
             >
               {item.idleBusinessDays === 0
-                ? "bugün"
-                : `${item.idleBusinessDays} iş günü önce`}
+                ? t("followUps.today")
+                : t("followUps.businessDaysAgo", {
+                    count: item.idleBusinessDays,
+                  })}
             </dd>
           </div>
         </dl>
@@ -236,37 +250,41 @@ export function FollowUpPanel({
             <div>
               <Button
                 type="button"
-                onClick={() => setKapatmaAcik((onceki) => !onceki)}
-                aria-expanded={kapatmaAcik}
+                onClick={() => setClosingOpen((previous) => !previous)}
+                aria-expanded={closingOpen}
               >
-                {kapatmaAcik ? "Vazgeç" : "Takibi kapat"}
+                {closingOpen
+                  ? t("followUps.cancelReopen")
+                  : t("followUps.closeItem")}
               </Button>
             </div>
 
-            {kapatmaAcik ? (
+            {closingOpen ? (
               <form
-                action={kapatmaAction}
+                action={closingAction}
                 className="flex flex-col gap-3"
-                data-test="takip-kapat-formu"
+                data-test="close-follow-up-form"
               >
                 <input type="hidden" name="id" value={item.id} />
 
                 <Field
                   htmlFor="note"
-                  label="Kapanış notu"
-                  hint="Ne oldu, konu nasıl kapandı? Bu not kayıtta kalır."
+                  label={t("followUps.closingNote")}
+                  hint={t("followUps.closingNoteHint")}
                   required
                 >
                   <Textarea id="note" name="note" rows={3} required maxLength={1000} />
                 </Field>
 
-                {kapatmaDurumu.error ? (
-                  <Alert tone="danger">{kapatmaDurumu.error}</Alert>
+                {closingStatus.error ? (
+                  <Alert tone="danger">{closingStatus.error}</Alert>
                 ) : null}
 
                 <div>
-                  <Button type="submit" variant="primary" disabled={kapatmaPending}>
-                    {kapatmaPending ? "Kapatılıyor…" : "Kapat"}
+                  <Button type="submit" variant="primary" disabled={closingPending}>
+                    {closingPending
+                      ? t("followUps.closing")
+                      : t("followUps.close")}
                   </Button>
                 </div>
               </form>

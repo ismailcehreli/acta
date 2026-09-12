@@ -29,13 +29,12 @@ import { setUserPassword, updateUser } from "@/server/users/update";
 
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Denetim izi (§15.2). Bu dosya listedeki **her** işlem türü için kaydın
-// atıldığını sınar; ayrıca kaydın değiştirilemediğini ve okuma verisinin
-// kapsam dışı kaldığını (§10.3) doğrular.
+// Audit log (§15.2). Tests that records are created for all operations,
+// records are immutable, and read queries remain excluded (§10.3).
 
 const NOW = new Date("2026-08-18T09:00:00.000Z");
-const PAROLA = "deneme-parola-1234";
-const SECRET = "test-icin-en-az-otuz-iki-karakterlik-anahtar";
+const PASSWORD = "test-password-1234";
+const SECRET = "test-secret-at-least-thirty-two-chars-long";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -45,83 +44,83 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function kayitlar(action?: string) {
+async function getAuditLogs(action?: string) {
   return testDb.auditLog.findMany({
     where: action ? { action } : undefined,
     orderBy: { createdAt: "asc" },
   });
 }
 
-async function sirket() {
-  const kok = await createOrgUnit(
+async function setupCompany() {
+  const root = await createOrgUnit(
     testDb,
-    { name: "Şirket", type: "Kök", parentId: null, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
+    { name: "Company", type: "Root", parentId: null, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
     null,
     NOW,
   );
-  if (!kok.ok) throw new Error("kurulum");
+  if (!root.ok) throw new Error("setup failed");
 
   const admin = await createUser(
     testDb,
     {
-      fullName: "Sistem Yöneticisi",
-      email: "admin@ornek.test",
-      orgUnitId: kok.value.id,
+      fullName: "System Administrator",
+      email: "admin@example.test",
+      orgUnitId: root.value.id,
       isUnitManager: true,
       isSystemAdmin: true,
       writesActivities: true,
-      initialPassword: PAROLA,
+      initialPassword: PASSWORD,
     },
     null,
     NOW,
   );
-  if (!admin.ok) throw new Error("kurulum");
+  if (!admin.ok) throw new Error("setup failed");
 
-  return { kok: kok.value, admin: admin.user };
+  return { root: root.value, admin: admin.user };
 }
 
-describe("organizasyon ve kullanıcı işlemleri", () => {
-  it("birim açma, taşıma ve pasifleştirme kayda geçer", async () => {
-    const { kok, admin } = await sirket();
+describe("organization and user operations", () => {
+  it("unit creation, movement, and deactivation are logged", async () => {
+    const { root, admin } = await setupCompany();
 
-    const alt = await createOrgUnit(
+    const subUnit = await createOrgUnit(
       testDb,
-      { name: "Kalıphane", type: "Departman", parentId: kok.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
+      { name: "Tooling Shop", type: "Department", parentId: root.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
       admin.id,
       NOW,
     );
-    if (!alt.ok) throw new Error("kurulum");
+    if (!subUnit.ok) throw new Error("setup failed");
 
-    const ara = await createOrgUnit(
+    const interUnit = await createOrgUnit(
       testDb,
-      { name: "Genel Müdürlük", type: "GM", parentId: kok.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
+      { name: "Headquarters", type: "GM", parentId: root.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
       admin.id,
       NOW,
     );
-    if (!ara.ok) throw new Error("kurulum");
+    if (!interUnit.ok) throw new Error("setup failed");
 
-    await moveOrgUnit(testDb, { id: alt.value.id, newParentId: ara.value.id }, admin.id, NOW);
-    await deactivateOrgUnit(testDb, alt.value.id, admin.id, NOW);
+    await moveOrgUnit(testDb, { id: subUnit.value.id, newParentId: interUnit.value.id }, admin.id, NOW);
+    await deactivateOrgUnit(testDb, subUnit.value.id, admin.id, NOW);
 
-    expect(await kayitlar(AUDIT_ACTIONS.orgUnitCreated)).toHaveLength(3);
-    const tasima = await kayitlar(AUDIT_ACTIONS.orgUnitMoved);
-    expect(tasima).toHaveLength(1);
-    expect(tasima[0].detail).toEqual({
-      fromParentId: kok.id,
-      toParentId: ara.value.id,
+    expect(await getAuditLogs(AUDIT_ACTIONS.orgUnitCreated)).toHaveLength(3);
+    const moveLogs = await getAuditLogs(AUDIT_ACTIONS.orgUnitMoved);
+    expect(moveLogs).toHaveLength(1);
+    expect(moveLogs[0].detail).toEqual({
+      fromParentId: root.id,
+      toParentId: interUnit.value.id,
     });
-    expect(await kayitlar(AUDIT_ACTIONS.orgUnitDeactivated)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.orgUnitDeactivated)).toHaveLength(1);
   });
 
-  it("birim ve kullanıcı aktifleştirme kayda geçer", async () => {
-    const { kok, admin } = await sirket();
+  it("unit and user reactivation are logged", async () => {
+    const { root, admin } = await setupCompany();
 
-    const birim = await createOrgUnit(
+    const unit = await createOrgUnit(
       testDb,
       {
-        name: "Kapanan Birim",
-        type: "Ekip",
-        parentId: kok.id,
+        name: "Closed Unit",
+        type: "Team",
+        parentId: root.id,
         sortOrder: 0,
         requiresApproval: false,
         autoFlowsUp: true,
@@ -130,44 +129,44 @@ describe("organizasyon ve kullanıcı işlemleri", () => {
       admin.id,
       NOW,
     );
-    if (!birim.ok) throw new Error("kurulum");
+    if (!unit.ok) throw new Error("setup failed");
 
-    await deactivateOrgUnit(testDb, birim.value.id, admin.id, NOW);
-    await reactivateOrgUnit(testDb, birim.value.id, admin.id, NOW);
+    await deactivateOrgUnit(testDb, unit.value.id, admin.id, NOW);
+    await reactivateOrgUnit(testDb, unit.value.id, admin.id, NOW);
 
-    const birimKaydi = await kayitlar(AUDIT_ACTIONS.orgUnitReactivated);
-    expect(birimKaydi).toHaveLength(1);
-    expect(birimKaydi[0].userId).toBe(admin.id);
+    const unitLogs = await getAuditLogs(AUDIT_ACTIONS.orgUnitReactivated);
+    expect(unitLogs).toHaveLength(1);
+    expect(unitLogs[0].userId).toBe(admin.id);
 
-    const kisi = await createUser(testDb, {
-      fullName: "Geri Dönen",
-      email: "geri@ornek.test",
-      orgUnitId: kok.id,
+    const user = await createUser(testDb, {
+      fullName: "Returning User",
+      email: "returning@example.test",
+      orgUnitId: root.id,
       isUnitManager: false,
       isSystemAdmin: false,
       writesActivities: true,
-      initialPassword: "ilk-parola-1234",
+      initialPassword: "initial-password-1234",
     });
-    if (!kisi.ok) throw new Error("kurulum");
+    if (!user.ok) throw new Error("setup failed");
 
-    await deactivateUser(testDb, kisi.user.id, NOW, admin.id);
-    await reactivateUser(testDb, kisi.user.id, NOW, admin.id);
+    await deactivateUser(testDb, user.user.id, NOW, admin.id);
+    await reactivateUser(testDb, user.user.id, NOW, admin.id);
 
-    const kisiKaydi = await kayitlar(AUDIT_ACTIONS.userReactivated);
-    expect(kisiKaydi).toHaveLength(1);
-    expect(kisiKaydi[0].userId).toBe(admin.id);
-    expect(kisiKaydi[0].objectId).toBe(kisi.user.id);
+    const userLogs = await getAuditLogs(AUDIT_ACTIONS.userReactivated);
+    expect(userLogs).toHaveLength(1);
+    expect(userLogs[0].userId).toBe(admin.id);
+    expect(userLogs[0].objectId).toBe(user.user.id);
   });
 
-  it("birim düzenleme kayda geçer ve yalnız değişen alanları yazar", async () => {
-    const { kok, admin } = await sirket();
+  it("unit updates are logged recording only changed fields", async () => {
+    const { root, admin } = await setupCompany();
 
-    const birim = await createOrgUnit(
+    const unit = await createOrgUnit(
       testDb,
       {
-        name: "Yanlış Ad",
-        type: "Ekip",
-        parentId: kok.id,
+        name: "Wrong Name",
+        type: "Team",
+        parentId: root.id,
         sortOrder: 0,
         requiresApproval: false,
         autoFlowsUp: true,
@@ -176,14 +175,14 @@ describe("organizasyon ve kullanıcı işlemleri", () => {
       admin.id,
       NOW,
     );
-    if (!birim.ok) throw new Error("kurulum");
+    if (!unit.ok) throw new Error("setup failed");
 
     await updateOrgUnit(
       testDb,
       {
-        id: birim.value.id,
-        name: "Kalıphane",
-        type: "Ekip",
+        id: unit.value.id,
+        name: "Tooling Shop",
+        type: "Team",
         requiresApproval: true,
         autoFlowsUp: true,
         attentionGroupId: null,
@@ -192,28 +191,27 @@ describe("organizasyon ve kullanıcı işlemleri", () => {
       NOW,
     );
 
-    const kayit = await kayitlar(AUDIT_ACTIONS.orgUnitUpdated);
-    expect(kayit).toHaveLength(1);
-    expect(kayit[0].userId).toBe(admin.id);
-    // Değişmeyen alanlar kayda girmez: "neyi değiştirdi" sorusunun cevabı
-    // gürültüyle karışmamalı.
-    expect(kayit[0].detail).toEqual({
+    const logs = await getAuditLogs(AUDIT_ACTIONS.orgUnitUpdated);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].userId).toBe(admin.id);
+    // Unchanged fields are not logged.
+    expect(logs[0].detail).toEqual({
       changed: {
-        name: { onceki: "Yanlış Ad", sonraki: "Kalıphane" },
-        requiresApproval: { onceki: false, sonraki: true },
+        name: { before: "Wrong Name", after: "Tooling Shop" },
+        requiresApproval: { before: false, after: true },
       },
     });
   });
 
-  it("hiçbir alan değişmediyse denetim izine kayıt düşmez", async () => {
-    const { kok, admin } = await sirket();
+  it("no log is recorded if no fields changed", async () => {
+    const { root, admin } = await setupCompany();
 
-    const birim = await createOrgUnit(
+    const unit = await createOrgUnit(
       testDb,
       {
-        name: "Kalıphane",
-        type: "Departman",
-        parentId: kok.id,
+        name: "Tooling Shop",
+        type: "Department",
+        parentId: root.id,
         sortOrder: 0,
         requiresApproval: false,
         autoFlowsUp: true,
@@ -222,14 +220,14 @@ describe("organizasyon ve kullanıcı işlemleri", () => {
       admin.id,
       NOW,
     );
-    if (!birim.ok) throw new Error("kurulum");
+    if (!unit.ok) throw new Error("setup failed");
 
-    const sonuc = await updateOrgUnit(
+    const result = await updateOrgUnit(
       testDb,
       {
-        id: birim.value.id,
-        name: "Kalıphane",
-        type: "Departman",
+        id: unit.value.id,
+        name: "Tooling Shop",
+        type: "Department",
         requiresApproval: false,
         autoFlowsUp: true,
         attentionGroupId: null,
@@ -238,36 +236,36 @@ describe("organizasyon ve kullanıcı işlemleri", () => {
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    expect(await kayitlar(AUDIT_ACTIONS.orgUnitUpdated)).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    expect(await getAuditLogs(AUDIT_ACTIONS.orgUnitUpdated)).toHaveLength(0);
   });
 
-  it("kullanıcı ekleme, düzenleme, parola ve pasifleştirme kayda geçer", async () => {
-    const { kok, admin } = await sirket();
+  it("user creation, update, password set, and deactivation are logged", async () => {
+    const { root, admin } = await setupCompany();
 
-    const kisi = await createUser(
+    const user = await createUser(
       testDb,
       {
-        fullName: "Deneme Kişi",
-        email: "kisi@ornek.test",
-        orgUnitId: kok.id,
+        fullName: "Test User",
+        email: "user@example.test",
+        orgUnitId: root.id,
         isUnitManager: false,
         isSystemAdmin: false,
         writesActivities: true,
-        initialPassword: PAROLA,
+        initialPassword: PASSWORD,
       },
       admin.id,
       NOW,
     );
-    if (!kisi.ok) throw new Error("kurulum");
+    if (!user.ok) throw new Error("setup failed");
 
     await updateUser(
       testDb,
       {
-        id: kisi.user.id,
-        fullName: "Yeni Ad",
-        email: "yeni@ornek.test",
-        orgUnitId: kok.id,
+        id: user.user.id,
+        fullName: "New Name",
+        email: "new@example.test",
+        orgUnitId: root.id,
         isUnitManager: false,
         isSystemAdmin: true,
         writesActivities: true,
@@ -276,249 +274,249 @@ describe("organizasyon ve kullanıcı işlemleri", () => {
       NOW,
     );
 
-    await setUserPassword(testDb, kisi.user.id, "yeni-parola-5678", NOW, admin.id);
-    await deactivateUser(testDb, kisi.user.id, NOW, admin.id);
+    await setUserPassword(testDb, user.user.id, "new-password-5678", NOW, admin.id);
+    await deactivateUser(testDb, user.user.id, NOW, admin.id);
 
-    // Kurulumdaki yönetici de sayıldığı için iki kayıt.
-    expect(await kayitlar(AUDIT_ACTIONS.userCreated)).toHaveLength(2);
+    // Initial admin plus this user = 2 creation logs.
+    expect(await getAuditLogs(AUDIT_ACTIONS.userCreated)).toHaveLength(2);
 
-    const duzenleme = await kayitlar(AUDIT_ACTIONS.userUpdated);
-    expect(duzenleme).toHaveLength(1);
-    // Yetki değişikliği eski ve yeni hâliyle görünür (§15.2).
-    const detay = duzenleme[0].detail as {
+    const updateLogs = await getAuditLogs(AUDIT_ACTIONS.userUpdated);
+    expect(updateLogs).toHaveLength(1);
+    // Permission changes show old and new states (§15.2).
+    const detail = updateLogs[0].detail as {
       before: { isSystemAdmin: boolean };
       after: { isSystemAdmin: boolean };
     };
-    expect(detay.before.isSystemAdmin).toBe(false);
-    expect(detay.after.isSystemAdmin).toBe(true);
+    expect(detail.before.isSystemAdmin).toBe(false);
+    expect(detail.after.isSystemAdmin).toBe(true);
 
-    expect(await kayitlar(AUDIT_ACTIONS.userPasswordSet)).toHaveLength(1);
-    expect(await kayitlar(AUDIT_ACTIONS.userDeactivated)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.userPasswordSet)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.userDeactivated)).toHaveLength(1);
   });
 
-  it("parola hiçbir kayda düz metin olarak girmez", async () => {
-    const { kok, admin } = await sirket();
-    const kisi = await createUser(
+  it("passwords are never logged in plain text", async () => {
+    const { root, admin } = await setupCompany();
+    const user = await createUser(
       testDb,
       {
-        fullName: "Deneme Kişi",
-        email: "kisi@ornek.test",
-        orgUnitId: kok.id,
+        fullName: "Test User",
+        email: "user@example.test",
+        orgUnitId: root.id,
         isUnitManager: false,
         isSystemAdmin: false,
         writesActivities: true,
-        initialPassword: "cok-gizli-parola-9999",
+        initialPassword: "very-secret-password-9999",
       },
       admin.id,
       NOW,
     );
-    if (!kisi.ok) throw new Error("kurulum");
+    if (!user.ok) throw new Error("setup failed");
 
-    await setUserPassword(testDb, kisi.user.id, "baska-gizli-parola-8888", NOW, admin.id);
+    await setUserPassword(testDb, user.user.id, "other-secret-password-8888", NOW, admin.id);
 
-    const hepsi = JSON.stringify(await kayitlar());
-    expect(hepsi).not.toContain("cok-gizli-parola-9999");
-    expect(hepsi).not.toContain("baska-gizli-parola-8888");
+    const allLogsJson = JSON.stringify(await getAuditLogs());
+    expect(allLogsJson).not.toContain("very-secret-password-9999");
+    expect(allLogsJson).not.toContain("other-secret-password-8888");
   });
 });
 
-describe("faaliyet ve konuşma işlemleri", () => {
-  async function faaliyetli() {
-    const { kok, admin } = await sirket();
-    const departman = await createOrgUnit(
+describe("activity and conversation operations", () => {
+  async function setupWithActivity() {
+    const { root, admin } = await setupCompany();
+    const department = await createOrgUnit(
       testDb,
-      { name: "Kalıphane", type: "Departman", parentId: kok.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
+      { name: "Tooling Shop", type: "Department", parentId: root.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
       admin.id,
       NOW,
     );
-    if (!departman.ok) throw new Error("kurulum");
+    if (!department.ok) throw new Error("setup failed");
 
-    const yazar = await createUser(
+    const author = await createUser(
       testDb,
       {
-        fullName: "Kalıphane Müdürü",
-        email: "mudur@ornek.test",
-        orgUnitId: departman.value.id,
+        fullName: "Shop Manager",
+        email: "manager@example.test",
+        orgUnitId: department.value.id,
         isUnitManager: true,
         isSystemAdmin: false,
         writesActivities: true,
-        initialPassword: PAROLA,
+        initialPassword: PASSWORD,
       },
       admin.id,
       NOW,
     );
-    if (!yazar.ok) throw new Error("kurulum");
+    if (!author.ok) throw new Error("setup failed");
 
-    const faaliyet = await createActivity(
+    const activity = await createActivity(
       testDb,
-      { id: yazar.user.id, orgUnitId: departman.value.id, requiresApproval: false },
+      { id: author.user.id, orgUnitId: department.value.id, requiresApproval: false },
       {
         activityDate: "2026-08-18",
-        title: "Kalıp bakımı",
-        description: "Presteki kalıplar temizlendi.",
-        targetDepartmentIds: [departman.value.id],
+        title: "Mold maintenance",
+        description: "Molds on the press cleaned.",
+        targetDepartmentIds: [department.value.id],
       },
       NOW,
     );
-    if (!faaliyet.ok) throw new Error("kurulum");
+    if (!activity.ok) throw new Error("setup failed");
 
-    return { admin, yazar: yazar.user, faaliyet: faaliyet.activity, departman: departman.value };
+    return { admin, author: author.user, activity: activity.activity, department: department.value };
   }
 
-  it("faaliyet oluşturma ve revizyon kayda geçer", async () => {
-    const { yazar, faaliyet, departman } = await faaliyetli();
+  it("activity creation and revision are logged", async () => {
+    const { author, activity, department } = await setupWithActivity();
 
-    expect(await kayitlar(AUDIT_ACTIONS.activityCreated)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.activityCreated)).toHaveLength(1);
 
     await updateActivity(
       testDb,
-      yazar.id,
+      author.id,
       {
-        id: faaliyet.id,
+        id: activity.id,
         activityDate: "2026-08-18",
-        title: "Kalıp bakımı — düzeltildi",
-        description: "Presteki kalıplar temizlendi ve ölçüldü.",
-        targetDepartmentIds: [departman.id],
+        title: "Mold maintenance — revised",
+        description: "Molds cleaned and measured.",
+        targetDepartmentIds: [department.id],
       },
       new Date(NOW.getTime() + 60_000),
     );
 
-    const revizyon = await kayitlar(AUDIT_ACTIONS.activityRevised);
-    expect(revizyon).toHaveLength(1);
-    expect(revizyon[0].objectType).toBe(AUDIT_OBJECTS.activity);
-    expect(revizyon[0].userId).toBe(yazar.id);
+    const revisedLogs = await getAuditLogs(AUDIT_ACTIONS.activityRevised);
+    expect(revisedLogs).toHaveLength(1);
+    expect(revisedLogs[0].objectType).toBe(AUDIT_OBJECTS.activity);
+    expect(revisedLogs[0].userId).toBe(author.id);
   });
 
-  it("konuşma açma, cevap ve kapatma kayda geçer", async () => {
-    const { admin, yazar, faaliyet } = await faaliyetli();
+  it("conversation opening, reply, and closing are logged", async () => {
+    const { admin, author, activity } = await setupWithActivity();
 
-    const soru = await askQuestion(
+    const question = await askQuestion(
       testDb,
       { id: admin.id, isSystemAdmin: true },
-      { activityId: faaliyet.id, text: "Bu ne durumda?" },
+      { activityId: activity.id, text: "What is the status?" },
       NOW,
     );
-    if (!soru.ok) throw new Error(`soru: ${soru.message}`);
+    if (!question.ok) throw new Error(`question: ${question.message}`);
 
     await replyToConversation(
       testDb,
-      { id: yazar.id, isSystemAdmin: false },
-      { conversationId: soru.value.id, text: "Tamamlandı." },
+      { id: author.id, isSystemAdmin: false },
+      { conversationId: question.value.id, text: "Completed." },
       new Date(NOW.getTime() + 60_000),
     );
 
     await closeConversation(
       testDb,
       { id: admin.id, isSystemAdmin: true },
-      soru.value.id,
+      question.value.id,
       new Date(NOW.getTime() + 120_000),
     );
 
-    expect(await kayitlar(AUDIT_ACTIONS.conversationOpened)).toHaveLength(1);
-    expect(await kayitlar(AUDIT_ACTIONS.conversationReplied)).toHaveLength(1);
-    expect(await kayitlar(AUDIT_ACTIONS.conversationClosed)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.conversationOpened)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.conversationReplied)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.conversationClosed)).toHaveLength(1);
   });
 
-  it("iptal kayda geçer ama gerekçe metni izde durmaz", async () => {
-    const { yazar, faaliyet } = await faaliyetli();
+  it("cancellation is logged but reason text is excluded from trail", async () => {
+    const { author, activity } = await setupWithActivity();
 
     await cancelActivity(
       testDb,
-      { id: yazar.id, isSystemAdmin: false },
-      faaliyet.id,
-      "Yanlış güne girildi.",
+      { id: author.id, isSystemAdmin: false },
+      activity.id,
+      "Entered on wrong day.",
       new Date(NOW.getTime() + 60_000),
     );
 
-    const iptal = await kayitlar(AUDIT_ACTIONS.activityCancelled);
-    expect(iptal).toHaveLength(1);
-    // Gerekçe metni denetim izinde **yok**: sistem yöneticisi izi görür ama
-    // içeriğe erişemez (§15.1).
-    expect(JSON.stringify(iptal[0].detail)).not.toContain("Yanlış güne girildi.");
+    const cancelLogs = await getAuditLogs(AUDIT_ACTIONS.activityCancelled);
+    expect(cancelLogs).toHaveLength(1);
+    // Cancellation reason is not in audit log: system admin sees the audit log
+    // but does not have access to activity content (§15.1).
+    expect(JSON.stringify(cancelLogs[0].detail)).not.toContain("Entered on wrong day.");
   });
 });
 
-describe("oturum denemeleri (§15.3)", () => {
-  it("başarılı giriş kayda geçer", async () => {
-    const { admin } = await sirket();
+describe("session attempts (§15.3)", () => {
+  it("successful login is logged", async () => {
+    const { admin } = await setupCompany();
 
-    const sonuc = await login(
+    const result = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep: async () => undefined },
-      { email: admin.email, password: PAROLA },
+      { email: admin.email, password: PASSWORD },
     );
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
 
-    const kayit = await kayitlar(AUDIT_ACTIONS.loginSucceeded);
-    expect(kayit).toHaveLength(1);
-    expect(kayit[0].userId).toBe(admin.id);
-    expect(kayit[0].ipAddress).toBe("10.0.0.1");
+    const logs = await getAuditLogs(AUDIT_ACTIONS.loginSucceeded);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].userId).toBe(admin.id);
+    expect(logs[0].ipAddress).toBe("10.0.0.1");
   });
 
-  it("yanlış parola kayda geçer", async () => {
-    const { admin } = await sirket();
+  it("wrong password is logged", async () => {
+    const { admin } = await setupCompany();
 
     await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.2", sleep: async () => undefined },
-      { email: admin.email, password: "yanlis-parola-1234" },
+      { email: admin.email, password: "wrong-password-1234" },
     );
 
-    const kayit = await kayitlar(AUDIT_ACTIONS.loginFailed);
-    expect(kayit).toHaveLength(1);
-    expect(kayit[0].userId).toBe(admin.id);
-    expect((kayit[0].detail as { reason: string }).reason).toBe("wrong_password");
+    const logs = await getAuditLogs(AUDIT_ACTIONS.loginFailed);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].userId).toBe(admin.id);
+    expect((logs[0].detail as { reason: string }).reason).toBe("wrong_password");
   });
 
-  it("kayıtsız e-posta denemesi de kayda geçer", async () => {
-    await sirket();
+  it("unregistered email attempt is logged", async () => {
+    await setupCompany();
 
     await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.3", sleep: async () => undefined },
-      { email: "hic-yok@ornek.test", password: "deneme-parola-1234" },
+      { email: "does-not-exist@example.test", password: "test-password-1234" },
     );
 
-    const kayit = await kayitlar(AUDIT_ACTIONS.loginFailed);
-    expect(kayit).toHaveLength(1);
-    // Kullanıcı bilinmiyor; denenen adres ayrıntıda duruyor.
-    expect(kayit[0].userId).toBeNull();
-    expect((kayit[0].detail as { email: string }).email).toBe("hic-yok@ornek.test");
+    const logs = await getAuditLogs(AUDIT_ACTIONS.loginFailed);
+    expect(logs).toHaveLength(1);
+    // User is unknown; attempted email address is stored in detail.
+    expect(logs[0].userId).toBeNull();
+    expect((logs[0].detail as { email: string }).email).toBe("does-not-exist@example.test");
   });
 
-  it("kilitlenme kayda geçer", async () => {
-    const { admin } = await sirket();
+  it("lockout is logged", async () => {
+    const { admin } = await setupCompany();
 
     for (let i = 0; i < 10; i += 1) {
       await login(
         { db: testDb, now: NOW, rateLimitKey: `10.0.1.${i}`, sleep: async () => undefined },
-        { email: admin.email, password: "yanlis-parola-1234" },
+        { email: admin.email, password: "wrong-password-1234" },
       );
     }
 
-    expect(await kayitlar(AUDIT_ACTIONS.loginLocked)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.loginLocked)).toHaveLength(1);
   });
 
-  it("parola değişimi ve sıfırlama kayda geçer", async () => {
-    const { admin } = await sirket();
+  it("password change and reset are logged", async () => {
+    const { admin } = await setupCompany();
 
     await changePassword(
       { db: testDb, now: NOW },
-      { userId: admin.id, currentPassword: PAROLA, newPassword: "yeni-parola-5678" },
+      { userId: admin.id, currentPassword: PASSWORD, newPassword: "new-password-5678" },
     );
-    expect(await kayitlar(AUDIT_ACTIONS.userPasswordChanged)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.userPasswordChanged)).toHaveLength(1);
 
     await requestPasswordReset(testDb, admin.email, NOW, SECRET);
-    const kuyruk = await testDb.notificationQueue.findFirstOrThrow({
+    const queueItem = await testDb.notificationQueue.findFirstOrThrow({
       where: { eventType: "password_reset" },
     });
-    const token = (kuyruk.payload as { token: string }).token;
+    const token = (queueItem.payload as { token: string }).token;
 
-    await resetPassword(testDb, token, "sifirlanan-parola-9999", NOW, SECRET);
-    expect(await kayitlar(AUDIT_ACTIONS.userPasswordReset)).toHaveLength(1);
+    await resetPassword(testDb, token, "reset-password-9999", NOW, SECRET);
+    expect(await getAuditLogs(AUDIT_ACTIONS.userPasswordReset)).toHaveLength(1);
   });
 });
 
-describe("ayar değişiklikleri (§16.5)", () => {
-  it("sistem ayarı değişimi eski ve yeni değerle kayda geçer", async () => {
-    const { admin } = await sirket();
+describe("settings changes (§16.5)", () => {
+  it("system setting change is logged with previous and new values", async () => {
+    const { admin } = await setupCompany();
 
     await saveSettings(
       testDb,
@@ -527,20 +525,20 @@ describe("ayar değişiklikleri (§16.5)", () => {
       NOW,
     );
 
-    const kayit = await kayitlar(AUDIT_ACTIONS.settingsChanged);
-    expect(kayit).toHaveLength(1);
-    const detay = kayit[0].detail as {
+    const logs = await getAuditLogs(AUDIT_ACTIONS.settingsChanged);
+    expect(logs).toHaveLength(1);
+    const detail = logs[0].detail as {
       changed: { key: string; before: string; after: string }[];
     };
-    expect(detay.changed[0]).toEqual({
+    expect(detail.changed[0]).toEqual({
       key: SETTING_KEYS.overdueAnswerBusinessDays,
       before: "3",
       after: "5",
     });
   });
 
-  it("değişiklik yoksa iz bırakılmaz", async () => {
-    const { admin } = await sirket();
+  it("no log is recorded if settings do not change", async () => {
+    const { admin } = await setupCompany();
 
     await saveSettings(
       testDb,
@@ -549,190 +547,186 @@ describe("ayar değişiklikleri (§16.5)", () => {
       NOW,
     );
 
-    // Aynı değeri yeniden kaydetmek denetim izini gürültüye boğmamalı.
-    expect(await kayitlar(AUDIT_ACTIONS.settingsChanged)).toHaveLength(0);
+    expect(await getAuditLogs(AUDIT_ACTIONS.settingsChanged)).toHaveLength(0);
   });
 
-  it("takvim, tatil ve SMTP değişimi kayda geçer", async () => {
-    const { admin } = await sirket();
+  it("calendar, holiday, and SMTP changes are logged", async () => {
+    const { admin } = await setupCompany();
 
     await saveWorkCalendar(testDb, DEFAULT_WORK_CALENDAR, admin.id, NOW);
-    await addHoliday(testDb, { date: "2026-12-31", description: "Yılbaşı" }, admin.id, NOW);
+    await addHoliday(testDb, { date: "2026-12-31", description: "New Year" }, admin.id, NOW);
     await removeHoliday(testDb, "2026-12-31", admin.id, NOW);
     await saveSmtpSettings(
       testDb,
       {
-        host: "posta.ornek.test",
+        host: "mail.example.test",
         port: 587,
         secure: false,
-        user: "faaliyet",
-        from: "faaliyet@ornek.test",
-        password: "gizli-smtp-parolasi",
+        user: "activity",
+        from: "activity@example.test",
+        password: "secret-smtp-password",
       },
       SECRET,
       admin.id,
       NOW,
     );
 
-    expect(await kayitlar(AUDIT_ACTIONS.workCalendarChanged)).toHaveLength(1);
-    expect(await kayitlar(AUDIT_ACTIONS.holidayAdded)).toHaveLength(1);
-    expect(await kayitlar(AUDIT_ACTIONS.holidayRemoved)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.workCalendarChanged)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.holidayAdded)).toHaveLength(1);
+    expect(await getAuditLogs(AUDIT_ACTIONS.holidayRemoved)).toHaveLength(1);
 
-    const smtp = await kayitlar(AUDIT_ACTIONS.smtpChanged);
-    expect(smtp).toHaveLength(1);
-    // SMTP parolası kayda geçmez; yalnız değiştirildiği bilgisi.
-    expect(JSON.stringify(smtp[0].detail)).not.toContain("gizli-smtp-parolasi");
-    expect((smtp[0].detail as { passwordChanged: boolean }).passwordChanged).toBe(true);
+    const smtpLogs = await getAuditLogs(AUDIT_ACTIONS.smtpChanged);
+    expect(smtpLogs).toHaveLength(1);
+    // SMTP password is never logged; only that it was changed.
+    expect(JSON.stringify(smtpLogs[0].detail)).not.toContain("secret-smtp-password");
+    expect((smtpLogs[0].detail as { passwordChanged: boolean }).passwordChanged).toBe(true);
   });
 });
 
-describe("kaydın değişmezliği (§15.2)", () => {
-  it("denetim kaydı güncellenemez ve silinemez", async () => {
-    const { admin } = await sirket();
-    const kayit = await testDb.auditLog.findFirstOrThrow();
+describe("record immutability (§15.2)", () => {
+  it("audit log record cannot be updated or deleted", async () => {
+    const { admin } = await setupCompany();
+    const log = await testDb.auditLog.findFirstOrThrow();
 
     await expect(
       testDb.auditLog.update({
-        where: { id: kayit.id },
-        data: { action: "degistirildi" },
+        where: { id: log.id },
+        data: { action: "modified" },
       }),
-    ).rejects.toThrow(/AUDIT_LOG_IMMUTABLE|no_update|güncelle/i);
+    ).rejects.toThrow(/AUDIT_LOG_IMMUTABLE|no_update/i);
 
     await expect(
-      testDb.auditLog.delete({ where: { id: kayit.id } }),
+      testDb.auditLog.delete({ where: { id: log.id } }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
 
     expect(admin.id).toBeTruthy();
   });
 });
 
-describe("okuma verisi kapsam dışı (§10.3)", () => {
-  it("faaliyeti okumak denetim kaydı üretmez", async () => {
-    const { kok, admin } = await sirket();
-    const departman = await createOrgUnit(
+describe("read queries excluded from audit log (§10.3)", () => {
+  it("reading activity does not produce audit log", async () => {
+    const { root, admin } = await setupCompany();
+    const department = await createOrgUnit(
       testDb,
-      { name: "Kalıphane", type: "Departman", parentId: kok.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
+      { name: "Tooling Shop", type: "Department", parentId: root.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
       admin.id,
       NOW,
     );
-    if (!departman.ok) throw new Error("kurulum");
+    if (!department.ok) throw new Error("setup failed");
 
-    const yazar = await createUser(
+    const author = await createUser(
       testDb,
       {
-        fullName: "Müdür",
-        email: "mudur@ornek.test",
-        orgUnitId: departman.value.id,
+        fullName: "Manager",
+        email: "manager@example.test",
+        orgUnitId: department.value.id,
         isUnitManager: true,
         isSystemAdmin: false,
         writesActivities: true,
-        initialPassword: PAROLA,
+        initialPassword: PASSWORD,
       },
       admin.id,
       NOW,
     );
-    if (!yazar.ok) throw new Error("kurulum");
+    if (!author.ok) throw new Error("setup failed");
 
-    const faaliyet = await createActivity(
+    const activity = await createActivity(
       testDb,
-      { id: yazar.user.id, orgUnitId: departman.value.id, requiresApproval: false },
+      { id: author.user.id, orgUnitId: department.value.id, requiresApproval: false },
       {
         activityDate: "2026-08-18",
-        title: "Kalıp bakımı",
-        description: "Açıklama",
-        targetDepartmentIds: [departman.value.id],
+        title: "Mold maintenance",
+        description: "Description",
+        targetDepartmentIds: [department.value.id],
       },
       NOW,
     );
-    if (!faaliyet.ok) throw new Error("kurulum");
+    if (!activity.ok) throw new Error("setup failed");
 
-    const oncekiSayi = (await kayitlar()).length;
+    const previousCount = (await getAuditLogs()).length;
 
     const { markActivityAsRead } = await import("@/server/reads/service");
     await markActivityAsRead(
       testDb,
       { id: admin.id, isSystemAdmin: true },
-      faaliyet.activity.id,
+      activity.activity.id,
       5_000,
       NOW,
     );
 
-    // Okundu bilgisi bir kolaylık göstergesidir, adli kayıt değil (§10.3).
-    expect((await kayitlar()).length).toBe(oncekiSayi);
+    // Read status is an indicator, not a forensic record (§10.3).
+    expect((await getAuditLogs()).length).toBe(previousCount);
   });
 });
 
-describe("denetim izi içerik taşımaz (§15.1)", () => {
-  // Denetim izini sistem yöneticisi görür; sistem yöneticisinin içeriğe
-  // erişimi yoktur. `detail` alanına başlık, açıklama, gerekçe ya da mesaj
-  // metni yazılsaydı denetim ekranı görünürlük katmanını atlayan bir okuma
-  // yolu olurdu.
-  it("faaliyet başlığı, açıklaması ve mesaj metni hiçbir kayda girmez", async () => {
-    const { kok, admin } = await sirket();
-    const departman = await createOrgUnit(
+describe("audit log carries no content (§15.1)", () => {
+  // Audit log is viewed by system admin; system admin has no content access.
+  // Titles, descriptions, reasons, or message texts must not be logged in detail field.
+  it("activity title, description, and message text are never logged", async () => {
+    const { root, admin } = await setupCompany();
+    const department = await createOrgUnit(
       testDb,
-      { name: "Kalıphane", type: "Departman", parentId: kok.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
+      { name: "Tooling Shop", type: "Department", parentId: root.id, sortOrder: 0, requiresApproval: false, autoFlowsUp: true, attentionGroupId: null },
       admin.id,
       NOW,
     );
-    if (!departman.ok) throw new Error("kurulum");
+    if (!department.ok) throw new Error("setup failed");
 
-    const yazar = await createUser(
+    const author = await createUser(
       testDb,
       {
-        fullName: "Müdür",
-        email: "mudur@ornek.test",
-        orgUnitId: departman.value.id,
+        fullName: "Manager",
+        email: "manager@example.test",
+        orgUnitId: department.value.id,
         isUnitManager: true,
         isSystemAdmin: false,
         writesActivities: true,
-        initialPassword: PAROLA,
+        initialPassword: PASSWORD,
       },
       admin.id,
       NOW,
     );
-    if (!yazar.ok) throw new Error("kurulum");
+    if (!author.ok) throw new Error("setup failed");
 
-    const GIZLI_BASLIK = "GIZLIBASLIK-müşteri-şikâyeti";
-    const GIZLI_ACIKLAMA = "GIZLIACIKLAMA-hattaki-fire-oranı";
-    const GIZLI_MESAJ = "GIZLIMESAJ-bu-soru-neden-cevapsız";
-    const GIZLI_GEREKCE = "GIZLIGEREKCE-yanlış-girildi";
+    const SECRET_TITLE = "SECRETTITLE-customer-complaint";
+    const SECRET_DESCRIPTION = "SECRETDESCRIPTION-scrap-rate-on-line";
+    const SECRET_MESSAGE = "SECRETMESSAGE-why-is-this-unanswered";
+    const SECRET_REASON = "SECRETREASON-entered-incorrectly";
 
-    const faaliyet = await createActivity(
+    const activity = await createActivity(
       testDb,
-      { id: yazar.user.id, orgUnitId: departman.value.id, requiresApproval: false },
+      { id: author.user.id, orgUnitId: department.value.id, requiresApproval: false },
       {
         activityDate: "2026-08-18",
-        title: GIZLI_BASLIK,
-        description: GIZLI_ACIKLAMA,
-        targetDepartmentIds: [departman.value.id],
+        title: SECRET_TITLE,
+        description: SECRET_DESCRIPTION,
+        targetDepartmentIds: [department.value.id],
       },
       NOW,
     );
-    if (!faaliyet.ok) throw new Error("kurulum");
+    if (!activity.ok) throw new Error("setup failed");
 
-    const soru = await askQuestion(
+    const question = await askQuestion(
       testDb,
       { id: admin.id, isSystemAdmin: true },
-      { activityId: faaliyet.activity.id, text: GIZLI_MESAJ },
+      { activityId: activity.activity.id, text: SECRET_MESSAGE },
       NOW,
     );
-    if (!soru.ok) throw new Error("kurulum");
+    if (!question.ok) throw new Error("setup failed");
 
     await cancelActivity(
       testDb,
-      { id: yazar.user.id, isSystemAdmin: false },
-      faaliyet.activity.id,
-      GIZLI_GEREKCE,
+      { id: author.user.id, isSystemAdmin: false },
+      activity.activity.id,
+      SECRET_REASON,
       new Date(NOW.getTime() + 60_000),
     );
 
-    const hepsi = JSON.stringify(await kayitlar());
-    for (const gizli of [GIZLI_BASLIK, GIZLI_ACIKLAMA, GIZLI_MESAJ, GIZLI_GEREKCE]) {
-      expect(hepsi, `"${gizli}" denetim izine sızmış`).not.toContain(gizli);
+    const allLogsJson = JSON.stringify(await getAuditLogs());
+    for (const secret of [SECRET_TITLE, SECRET_DESCRIPTION, SECRET_MESSAGE, SECRET_REASON]) {
+      expect(allLogsJson, `"${secret}" leaked into audit log`).not.toContain(secret);
     }
 
-    // Kayıtlar yine de atılmış olmalı; boş bir iz de sınamayı geçerdi.
-    expect((await kayitlar()).length).toBeGreaterThan(3);
+    expect((await getAuditLogs()).length).toBeGreaterThan(3);
   });
 });

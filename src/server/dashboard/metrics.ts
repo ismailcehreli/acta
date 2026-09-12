@@ -19,16 +19,16 @@ import { countableActivityWhere } from "@/server/activities/countable";
 import { countManageableFeedback } from "@/server/feedback/service";
 import { readNumericSetting, SETTING_KEYS } from "@/server/settings/system-settings";
 
-// Ana ekranın sayaçları.
+
 //
-// **Sayaç kapsam açmaz.** Hepsi `visibleActivityWhere` üzerinden hesaplanır;
-// kullanıcı göremediği bir kaydı sayıda da göremez. Sayı sızıntısı da
-// sızıntıdır: "kapsamınızda 4 onay bekliyor" bilgisi, görülemeyen bir kaydın
-// varlığını ele verirdi.
+
+
+
+
 //
-// Kayıt sayısı ve yazan kişi sayısı akışla **aynı döneme** bağlıdır: kullanıcı
-// dönemi değiştirince ikisi birlikte değişir. Bekleyen iş sayıları dönemden
-// bağımsızdır — geçen haftadan kalan onay bu haftanın işidir.
+
+
+
 
 export type MetricsDb = ActivityRepositoryDb &
   Pick<
@@ -42,25 +42,25 @@ export type MetricsDb = ActivityRepositoryDb &
   >;
 
 export interface DashboardMetrics {
-  /** Dönemde kapsamda yazılan kayıt. */
+
   activities: number;
-  /** Dönemde kapsamda kayıt yazan farklı kişi. */
+
   contributors: number;
-  /** Kapsamda onay bekleyen kayıt. */
+
   pendingApproval: number;
-  /** Kapsamda düzeltme istenmiş kayıt. */
+
   correctionRequested: number;
-  /** Kapsamda başkasının sorduğu açık sorusu olan faaliyet. */
+
   openQuestions: number;
-  /** Kapsamdaki kayıtlarda açık takip maddesi. */
+
   openFollowUps: number;
-  /** Bunların kaçı eşiği aşacak kadar hareketsiz. */
+
   staleFollowUps: number;
-  /** Hareketsizlik eşiği (iş günü); metinde geçsin diye taşınır. */
+
   staleThreshold: number;
-  /** Bu kişi izin talebi karara bağlayabiliyorsa bekleyen talep sayısı. */
+
   pendingAbsence: number | null;
-  /** Bu kişi geri bildirim yönetebiliyorsa yeni kayıt sayısı. */
+
   newFeedback: number | null;
 }
 
@@ -69,31 +69,27 @@ export interface DashboardMetricsOptions {
   canManageFeedback?: boolean;
 }
 
-/**
- * Oturum sahibinin kendi durumunu ekip toplamından bağımsız hesaplar.
- * `dashboardMetrics` yöneticinin alt ağacını sayar; bu yol yalnız kişinin
- * kendi faaliyetlerini ve kendi işlerini kullanır.
- */
+
 export async function personalDashboardMetrics(
   db: MetricsDb,
   viewer: Viewer,
   period: FeedFilters["period"],
   now: Date,
 ): Promise<DashboardMetrics> {
-  const [scope, takvimAyari, esik] = await Promise.all([
+  const [scope, calendarSetting, threshold] = await Promise.all([
     visibleActivityWhere(db, viewer, []),
     readWorkCalendar(db),
     readNumericSetting(db, SETTING_KEYS.followUpStaleBusinessDays),
   ]);
 
-  const baslangic = periodStart(period, now);
+  const start = periodStart(period, now);
   const ownPeriod: Prisma.ActivityWhereInput = {
     AND: [
       scope,
       { authorId: viewer.id },
-      // İptal ve ret sayıya girmez (§5.4, karar 03.09.2026); tanım tek yerde.
+
       countableActivityWhere(),
-      ...(baslangic ? [{ activityDate: { gte: baslangic } }] : []),
+      ...(start ? [{ activityDate: { gte: start } }] : []),
     ],
   };
   const ownScope: Prisma.ActivityWhereInput = {
@@ -130,14 +126,14 @@ export async function personalDashboardMetrics(
     correctionRequested,
     openQuestions,
     openFollowUps: followUps.length,
-    staleFollowUps: await hareketsizSayisi(
+    staleFollowUps: await countStaleFollowUps(
       db,
       followUps,
-      takvimAyari,
-      esik,
+      calendarSetting,
+      threshold,
       now,
     ),
-    staleThreshold: esik,
+    staleThreshold: threshold,
     pendingAbsence: null,
     newFeedback: null,
   };
@@ -151,7 +147,7 @@ export async function dashboardMetrics(
   now: Date,
   options: DashboardMetricsOptions = {},
 ): Promise<DashboardMetrics> {
-  const [scope, takvimAyari, esik, pendingAbsence, newFeedback] = await Promise.all([
+  const [scope, calendarSetting, threshold, pendingAbsence, newFeedback] = await Promise.all([
     visibleActivityWhere(db, viewer, subordinates),
     readWorkCalendar(db),
     readNumericSetting(db, SETTING_KEYS.followUpStaleBusinessDays),
@@ -163,28 +159,28 @@ export async function dashboardMetrics(
       : Promise.resolve(null),
   ]);
 
-  const baslangic = periodStart(period, now);
-  // Bu fonksiyon dashboard'un "Yönettiğim alan" bölümünü besler. Görünürlük
-  // kuralı yöneticinin kendi kayıtlarını da doğal olarak açar; yönetilen alan
-  // sayacında kendi kaydı görünmesin diye burada ast yazarlarla ayrıca
-  // sınırlarız.
+  const start = periodStart(period, now);
+
+
+
+
   const managedScope: Prisma.ActivityWhereInput = {
     AND: [scope, { authorId: { in: subordinates } }],
   };
   const managedAuthors: Prisma.ActivityWhereInput = {
     authorId: { in: subordinates },
   };
-  const donemli: Prisma.ActivityWhereInput = {
+  const periodScope: Prisma.ActivityWhereInput = {
     AND: [
       managedScope,
       countableActivityWhere(),
-      ...(baslangic ? [{ activityDate: { gte: baslangic } }] : []),
+      ...(start ? [{ activityDate: { gte: start } }] : []),
     ],
   };
 
-  const [activities, pendingApproval, correctionRequested, openQuestions, acikMaddeler, yazarlar] =
+  const [activities, pendingApproval, correctionRequested, openQuestions, openItems, authors] =
     await Promise.all([
-      countVisibleActivities(db, viewer, donemli, subordinates),
+      countVisibleActivities(db, viewer, periodScope, subordinates),
       countVisibleActivities(
         db,
         viewer,
@@ -210,7 +206,7 @@ export async function dashboardMetrics(
         select: { lastMovedAt: true },
       }),
       listVisibleActivities(db, viewer, {
-        where: donemli,
+        where: periodScope,
         select: { authorId: true },
         distinct: ["authorId"],
       }, subordinates),
@@ -218,19 +214,19 @@ export async function dashboardMetrics(
 
   return {
     activities,
-    contributors: yazarlar.length,
+    contributors: authors.length,
     pendingApproval,
     correctionRequested,
     openQuestions,
-    openFollowUps: acikMaddeler.length,
-    staleFollowUps: await hareketsizSayisi(db, acikMaddeler, takvimAyari, esik, now),
-    staleThreshold: esik,
+    openFollowUps: openItems.length,
+    staleFollowUps: await countStaleFollowUps(db, openItems, calendarSetting, threshold, now),
+    staleThreshold: threshold,
     pendingAbsence,
     newFeedback,
   };
 }
 
-/** Yalnızca o anda kararı bu kullanıcı verebiliyorsa izinleri sayar. */
+
 async function countPendingManagedAbsences(
   db: MetricsDb,
   managerId: string,
@@ -248,31 +244,27 @@ async function countPendingManagedAbsences(
   });
 }
 
-/**
- * Hareketsizlik **iş günüyle** ölçülür: hafta sonu ve resmî tatil sayılmaz.
- * Bu yüzden veritabanında tarih çıkarmasıyla hesaplanamaz; takvim yüklenip
- * her madde oradan geçirilir — takip listesindeki hesabın aynısı.
- */
-async function hareketsizSayisi(
+
+async function countStaleFollowUps(
   db: MetricsDb,
-  maddeler: { lastMovedAt: Date }[],
-  takvimAyari: { workingDays: number[] },
-  esik: number,
+  items: { lastMovedAt: Date }[],
+  calendarSetting: { workingDays: number[] },
+  threshold: number,
   now: Date,
 ): Promise<number> {
-  if (maddeler.length === 0) return 0;
+  if (items.length === 0) return 0;
 
-  const enEski = maddeler.reduce(
-    (min, madde) => (madde.lastMovedAt < min ? madde.lastMovedAt : min),
-    maddeler[0].lastMovedAt,
+  const earliest = items.reduce(
+    (min, item) => (item.lastMovedAt < min ? item.lastMovedAt : min),
+    items[0].lastMovedAt,
   );
-  const takvim = await loadWorkCalendar(db, enEski, now);
-  const secenekler = {
-    workingDays: takvimAyari.workingDays,
-    holidays: takvim.holidays,
+  const calendar = await loadWorkCalendar(db, earliest, now);
+  const options = {
+    workingDays: calendarSetting.workingDays,
+    holidays: calendar.holidays,
   };
 
-  return maddeler.filter(
-    (madde) => businessDaysBetween(madde.lastMovedAt, now, secenekler) >= esik,
+  return items.filter(
+    (item) => businessDaysBetween(item.lastMovedAt, now, options) >= threshold,
   ).length;
 }

@@ -1,10 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
-import type { ActivityTextLimits } from "@/shared/schemas/activity";
-
 import { AUDIT_ACTIONS, AUDIT_OBJECTS, recordAudit } from "@/server/audit/log";
 
-import { parseDomainList } from "./email-domains";
 import {
   findSetting,
   SETTING_DEFINITIONS,
@@ -13,55 +10,56 @@ import {
   SETTING_SUM_RULES,
   validateSettingValue,
 } from "./registry";
-
-// Sistem ayarlarının okunması ve yazılması (§16.5). Varsayılanlar koda gömülü
-// değil, kayıt defterinde; veritabanındaki kayıt varsa onun yerini alır.
-// Böylece bir değeri değiştirmek için sürüm çıkmak gerekmez.
+import { parseDomainList } from "./email-domains";
 
 export { SETTING_KEYS };
-
 export type SettingsDb = Pick<PrismaClient, "systemSetting">;
 
-/** Tüm ayarların güncel değerleri; kayıt yoksa varsayılan. */
+export interface ActivityTextLimits {
+  titleMin: number;
+  titleMax: number;
+  descriptionMin: number;
+  descriptionMax: number;
+}
+
 export async function readAllSettings(
   db: SettingsDb,
 ): Promise<Record<string, string>> {
   const rows = await db.systemSetting.findMany();
-  const kayitli = new Map(rows.map((row) => [row.key, row.value]));
+  const persisted = new Map(rows.map((row) => [row.key, row.value]));
 
-  const sonuc: Record<string, string> = {};
+  const result: Record<string, string> = {};
   for (const definition of SETTING_DEFINITIONS) {
-    sonuc[definition.key] = kayitli.get(definition.key) ?? definition.defaultValue;
+    result[definition.key] = persisted.get(definition.key) ?? definition.defaultValue;
   }
 
-  return sonuc;
+  return result;
 }
 
 async function readRaw(db: SettingsDb, key: string): Promise<string> {
   const definition = findSetting(key);
   if (!definition) {
-    // Defterde olmayan anahtar bir programlama hatasıdır; sessizce bir
-    // varsayılana düşmek yanlış davranışı gizlerdi.
-    throw new Error(`Tanımsız ayar anahtarı: ${key}`);
+    // Missing key in registry is a programmer error; do not silently fall back.
+    throw new Error(`Undefined setting key: ${key}`);
   }
 
   const row = await db.systemSetting.findUnique({ where: { key } });
   if (!row) return definition.defaultValue;
 
-  // Bozuk bir kayıt sistemi durdurmaz ama sessiz de kalmaz.
-  const dogrulama = validateSettingValue(definition, row.value);
-  if (!dogrulama.ok) {
+  // Corrupted persisted record does not halt system, but logs warning and falls back to default.
+  const validation = validateSettingValue(definition, row.value);
+  if (!validation.ok) {
     console.error(
-      `[ayar] "${key}" geçersiz ("${row.value}"): ${dogrulama.message} ` +
-        `Varsayılan ${definition.defaultValue} kullanılıyor.`,
+      `[settings] "${key}" invalid ("${row.value}"): ${validation.message} ` +
+        `Default ${definition.defaultValue} used instead.`,
     );
     return definition.defaultValue;
   }
 
-  return dogrulama.value;
+  return validation.value;
 }
 
-/** Tek bir ayarı, kayıtta yoksa kayıt defterindeki varsayılanıyla okur. */
+/** Reads a single setting, returning registry default if not persisted. */
 export async function readSettingValue(
   db: SettingsDb,
   key: string,
@@ -77,22 +75,20 @@ export async function readNumericSetting(
 }
 
 /**
- * İzinli e-posta alan adları. Bozuk kayıt varsa **kısıt kapalı** sayılır:
- * okunamayan bir kısıt yüzünden hesap açılamaz hâle gelmek, kısıtın kendisinden
- * daha büyük bir arıza olurdu — ama sessiz kalmaz, günlüğe yazılır.
+ * Allowed email domains. If corrupted, restriction is treated as disabled.
  */
 export async function readAllowedEmailDomains(
   db: SettingsDb,
 ): Promise<string[]> {
   const raw = await readRaw(db, SETTING_KEYS.allowedEmailDomains);
-  const liste = parseDomainList(raw);
+  const list = parseDomainList(raw);
 
-  if (!liste.ok) {
-    console.error(`[ayar] izinli alan adları okunamadı: ${liste.message}`);
+  if (!list.ok) {
+    console.error(`[settings] allowed email domains could not be read: ${list.message}`);
     return [];
   }
 
-  return liste.domains;
+  return list.domains;
 }
 
 export async function readBooleanSetting(
@@ -104,12 +100,16 @@ export async function readBooleanSetting(
 
 export type SaveSettingsResult =
   | { ok: true; changed: string[] }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      error: "undefined_setting" | "invalid_value" | "pair_invalid" | "sum_invalid";
+      message: string;
+      messageKey?: string;
+      messageValues?: Record<string, string | number>;
+    };
 
 /**
- * Verilen ayarları doğrulayıp yazar. **Hepsi ya da hiçbiri**: bir değer
- * geçersizse hiçbiri yazılmaz, aksi hâlde yarısı yeni yarısı eski bir
- * yapılandırma kalırdı.
+ * Validates and saves given settings atomically. All or nothing.
  */
 export async function saveSettings(
   db: SettingsDb &
@@ -118,92 +118,107 @@ export async function saveSettings(
   actorId: string | null = null,
   now: Date = new Date(),
 ): Promise<SaveSettingsResult> {
-  const yazilacak: { key: string; value: string; description: string }[] = [];
+  const toWrite: { key: string; value: string; description: string }[] = [];
 
-  // Tek tek tür ve sınır doğrulaması girdiye bağlıdır; başka isteğin ne
-  // yazdığıyla ilgisi yok, işlemden önce yapılabilir.
   for (const [key, raw] of Object.entries(values)) {
     const definition = findSetting(key);
-    if (!definition) return { ok: false, message: `Tanımsız ayar: ${key}` };
+    if (!definition) {
+      return {
+        ok: false,
+        error: "undefined_setting",
+        message: `Undefined setting: ${key}`,
+        messageKey: "errors.settings.undefinedSetting",
+        messageValues: { key },
+      };
+    }
 
-    const dogrulama = validateSettingValue(definition, raw);
-    if (!dogrulama.ok) return { ok: false, message: dogrulama.message };
+    const validation = validateSettingValue(definition, raw);
+    if (!validation.ok) {
+      return {
+        ok: false,
+        error: "invalid_value",
+        message: validation.message,
+        messageKey: validation.messageKey,
+        messageValues: validation.messageValues,
+      };
+    }
 
-    yazilacak.push({
+    toWrite.push({
       key,
-      value: dogrulama.value,
+      value: validation.value,
       description: definition.label,
     });
   }
 
-  // **Çapraz doğrulama okuma ile yazma arasındaki pencerede delinemez**
-  // (denetim 23.08.2026, P3-4). Okuma, doğrulama ve yazma işlemin
-  // dışındaydı: iki istek aynı eski görüntüyü okuyup ayrı ayrı geçerli kısmi
-  // bileşimleri doğrulayabiliyor, sonra birbirinin anahtarlarını ezerek 100
-  // etmeyen bir formül bırakabiliyordu. Değişmez, kaydetme sınırında
-  // gerçekten zorlanmıyordu.
-  //
-  // Danışma kilidi ayar satırı **hiç yokken** de çalışır; satır kilidi
-  // yalnız var olan satırı korurdu ve ilk kaydetmede pencere açık kalırdı.
+  // Cross-validation is protected against race conditions using advisory lock.
   return db.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('faaliyet:sistem_ayarlari'))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('acta:system_settings'))`;
 
-    const mevcut = await readAllSettings(tx);
+    const current = await readAllSettings(tx);
 
-    const sonrakiDeger = (key: string): number | null => {
-      const yazilan = yazilacak.find((item) => item.key === key);
-      const ham = yazilan?.value ?? mevcut[key] ?? findSetting(key)?.defaultValue;
-      if (ham === undefined) return null;
+    const nextValue = (key: string): number | null => {
+      const pending = toWrite.find((item) => item.key === key);
+      const raw = pending?.value ?? current[key] ?? findSetting(key)?.defaultValue;
+      if (raw === undefined) return null;
 
-      const sayi = Number(ham);
-      return Number.isFinite(sayi) ? sayi : null;
+      const num = Number(raw);
+      return Number.isFinite(num) ? num : null;
     };
 
-    for (const kural of SETTING_PAIR_RULES) {
-      // Çift bu kaydetmede hiç geçmiyorsa dokunulmuyor: alakasız bir ayarı
-      // değiştiren kullanıcı, önceden bozulmuş bir çift yüzünden engellenmez.
-      const dokunuldu = yazilacak.some(
-        (item) => item.key === kural.min || item.key === kural.max,
+    for (const rule of SETTING_PAIR_RULES) {
+      const touched = toWrite.some(
+        (item) => item.key === rule.min || item.key === rule.max,
       );
-      if (!dokunuldu) continue;
+      if (!touched) continue;
 
-      const alt = sonrakiDeger(kural.min);
-      const ust = sonrakiDeger(kural.max);
-      if (alt === null || ust === null) continue;
+      const min = nextValue(rule.min);
+      const max = nextValue(rule.max);
+      if (min === null || max === null) continue;
 
-      if (alt > ust) return { ok: false, message: kural.message };
+      if (min > max) {
+        return {
+          ok: false,
+          error: "pair_invalid",
+          message: rule.message,
+          messageKey: rule.messageKey,
+        };
+      }
     }
 
-    // **Toplam kuralları.** Temel skorun tavanı her profilde 100; dört
-    // ağırlığın her biri tek başına geçerli olduğu hâlde bir profilde 110
-    // edebilir. Takdir katkısı bu temel toplamın dışındadır.
-    for (const kural of SETTING_SUM_RULES) {
-      const dokunuldu = yazilacak.some((item) => kural.keys.includes(item.key));
-      if (!dokunuldu) continue;
+    // Sum rules: base score total must sum to 100 for each profile.
+    for (const rule of SETTING_SUM_RULES) {
+      const touched = toWrite.some((item) => rule.keys.includes(item.key));
+      if (!touched) continue;
 
-      let toplam = 0;
-      let eksik = false;
+      let sum = 0;
+      let missing = false;
 
-      for (const key of kural.keys) {
-        const deger = sonrakiDeger(key);
-        if (deger === null) {
-          eksik = true;
+      for (const key of rule.keys) {
+        const val = nextValue(key);
+        if (val === null) {
+          missing = true;
           break;
         }
-        toplam += deger;
+        sum += val;
       }
 
-      if (eksik) continue;
-      if (toplam !== kural.total) {
-        return { ok: false, message: `${kural.message} Şu an ${toplam}.` };
+      if (missing) continue;
+      if (sum !== rule.total) {
+        return {
+          ok: false,
+          error: "sum_invalid",
+          message: `${rule.message} Currently ${sum}.`,
+          messageKey: rule.messageKey,
+          messageValues: { sum },
+        };
       }
     }
 
-    const degisen = yazilacak
-      .filter((item) => mevcut[item.key] !== item.value)
+    const changedKeys = toWrite
+      .filter((item) => current[item.key] !== item.value)
       .map((item) => item.key);
 
-    for (const item of yazilacak) {
+    for (const item of toWrite) {
       await tx.systemSetting.upsert({
         where: { key: item.key },
         update: { value: item.value, description: item.description },
@@ -211,37 +226,29 @@ export async function saveSettings(
       });
     }
 
-    // Değişiklik yoksa iz de bırakılmaz: her kaydetme düğmesine basışı kayda
-    // geçirmek denetim izini gürültüye boğardı (§15.2). "Önce" değeri kilit
-    // altında okunan görüntüden geliyor; bayat görüntü yanlış bir tarihçe
-    // yazardı.
-    if (degisen.length > 0) {
+    if (changedKeys.length > 0) {
       await recordAudit(tx, {
         userId: actorId,
         objectType: AUDIT_OBJECTS.setting,
         objectId: "system",
         action: AUDIT_ACTIONS.settingsChanged,
         detail: {
-          changed: degisen.map((key) => ({
+          changed: changedKeys.map((key) => ({
             key,
-            before: mevcut[key],
-            after: yazilacak.find((item) => item.key === key)?.value,
+            before: current[key],
+            after: toWrite.find((item) => item.key === key)?.value,
           })),
         },
         now,
       });
     }
 
-    return { ok: true, changed: degisen };
+    return { ok: true, changed: changedKeys };
   });
 }
 
 /**
- * Faaliyet metinlerinin uzunluk sınırları (Görev 11.6).
- *
- * Doğrulama şeması bunu kullanıyor; ekran da aynı sayıları alıyor. Tek yerden
- * okunmasının sebebi bu: iki taraf ayrı okusaydı biri değiştiğinde form
- * kabul ettiğini sunucuya reddettirirdi.
+ * Activity text length boundaries (Task 11.6).
  */
 export async function readActivityTextLimits(
   db: SettingsDb,

@@ -1,34 +1,33 @@
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getTranslations } from "@/server/i18n/server";
 import { REALTIME_EVENTS, type RealtimeEvent } from "@/server/realtime/events";
 import { subscribe } from "@/server/realtime/hub";
 
-// Sunucudan istemciye olay akışı (§13, Görev 7.3).
+
 //
-// Akış **oturuma bağlıdır**: kullanıcı kimliği çerezden okunur, istemciden
-// gelen hiçbir değer alıcıyı belirlemez. Kimliğini kendi söyleyebilen bir uç,
-// başkasının akışını dinlemenin en kısa yolu olurdu.
+
+
+
 //
-// Gövde içerik taşımaz; yalnızca "değişti" der (bkz. `realtime/events.ts`).
+
 
 export const dynamic = "force-dynamic";
 
-/**
- * Ters vekil ve tarayıcı, sessiz kalan bir bağlantıyı kapatır. Yorum satırı
- * (`:` ile başlayan) olay sayılmaz; sadece hattı açık tutar.
- */
+
 const HEARTBEAT_MS = 25_000;
 
-function sseVeri(event: RealtimeEvent): string {
+function sseData(event: RealtimeEvent): string {
   return `event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
 export async function GET(request: Request): Promise<Response> {
   const user = await getCurrentUser();
+  const t = await getTranslations();
 
-  // Oturumsuz istek akış açmaz. 401 burada bilgi sızdırmaz: kullanıcının
-  // kendi oturumunun durumu zaten kendisine ait.
+  // Unauthenticated requests cannot open a stream. The 401 response reveals
+  // no information because the session belongs to the requester.
   if (!user) {
-    return new Response("Oturum gerekli.", { status: 401 });
+    return new Response(t("errors.api.authenticationRequired"), { status: 401 });
   }
 
   const userId = user.id;
@@ -38,18 +37,17 @@ export async function GET(request: Request): Promise<Response> {
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      let kapandi = false;
+      let closed = false;
 
       /**
-       * Kaynakları bırakır. `controller.close()` **çağrılmaz**: bağlantı karşı
-       * taraftan koptuğunda akışı bizim kapatmaya çalışmamız, Next'in yazma
-       * hattında "The destination stream closed early" hatasına dönüşüyor ve
-       * her sekme kapanışı sunucu günlüğüne hata olarak düşüyordu. Kopan
-       * bağlantıda akışı platform kendisi iptal ediyor (`cancel`).
+       * Releases resources. Do not call `controller.close()`: when the remote
+       * side disconnects, closing the stream here causes a "destination stream
+       * closed early" error in Next's write path. The platform cancels the
+       * stream when the connection is gone.
        */
-      const kapat = () => {
-        if (kapandi) return;
-        kapandi = true;
+      const closeResources = () => {
+        if (closed) return;
+        closed = true;
 
         if (heartbeat) clearInterval(heartbeat);
         heartbeat = null;
@@ -57,56 +55,52 @@ export async function GET(request: Request): Promise<Response> {
         unsubscribe = null;
       };
 
-      /** Yalnızca hata yolunda: akışı biz sonlandırmak zorundayız. */
-      const hatayaKapat = () => {
-        kapat();
+      /** Error path only: the server must terminate the stream. */
+      const closeOnError = () => {
+        closeResources();
         try {
           controller.close();
         } catch {
-          // Akış karşı taraftan zaten kapanmış olabilir.
+          // The remote side may already have closed the stream.
         }
       };
 
-      const yaz = (metin: string) => {
-        // Tarayıcı bağlantıyı kesmişse hiç yazmaya kalkışılmaz. `enqueue`
-        // hemen fırlatmıyor; alttaki akış sonradan hata veriyor ve Next bunu
-        // uygulama hatası olarak günlüğe basıyordu ("The destination stream
-        // closed early"). Gerçek hataların arasında kaybolmasın diye kaynakta
-        // engelleniyor.
-        if (kapandi || request.signal.aborted) {
-          kapat();
+      const write = (text: string) => {
+        // Do not enqueue after the browser disconnects. The error can surface
+        // later in the stream and look like an application failure in Next.
+        if (closed || request.signal.aborted) {
+          closeResources();
           return;
         }
         try {
-          controller.enqueue(encoder.encode(metin));
+          controller.enqueue(encoder.encode(text));
         } catch {
-          // Yazılamıyorsa bağlantı gitmiştir; kaynakları bırak.
-          kapat();
+          // A failed write means the connection is gone; release resources.
+          closeResources();
         }
       };
 
-      // Tarayıcı bağlantı koptuğunda kendi yeniden dener; aralığı biz veririz.
-      yaz("retry: 3000\n\n");
+      // The browser retries after a disconnect; this tells it the retry delay.
+      write("retry: 3000\n\n");
 
       try {
-        unsubscribe = await subscribe(userId, (event) => yaz(sseVeri(event)));
+        unsubscribe = await subscribe(userId, (event) => write(sseData(event)));
       } catch (error) {
-        // Dinleyici kurulamadıysa akış **açık bırakılmaz**. Sessizce boş bir
-        // akış vermek, "gerçek zamanlı çalışıyor" yanılsaması üretirdi.
-        console.error("[realtime] abone olunamadı:", error);
-        yaz("event: error\ndata: {}\n\n");
-        hatayaKapat();
+        // Do not leave the stream open when the subscription cannot be created.
+        console.error("[realtime] subscription failed:", error);
+        write("event: error\ndata: {}\n\n");
+        closeOnError();
         return;
       }
 
-      // İlk işaret: istemci akışın gerçekten kurulduğunu bilir ve kopukluk
-      // sırasında kaçırdığı olabilecek değişiklikler için bir kez tazeler.
-      yaz(sseVeri({ kind: REALTIME_EVENTS.reconnected }));
+      // The first event confirms that the stream is established. The client
+      // refreshes once to recover changes that may have been missed while away.
+      write(sseData({ kind: REALTIME_EVENTS.reconnected }));
 
-      heartbeat = setInterval(() => yaz(": ping\n\n"), HEARTBEAT_MS);
+      heartbeat = setInterval(() => write(": ping\n\n"), HEARTBEAT_MS);
 
-      request.signal.addEventListener("abort", kapat);
-      if (request.signal.aborted) kapat();
+      request.signal.addEventListener("abort", closeResources);
+      if (request.signal.aborted) closeResources();
     },
 
     cancel() {
@@ -120,11 +114,11 @@ export async function GET(request: Request): Promise<Response> {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
-      // Ara belleklere hiçbir koşulda düşmemeli: akış kişiye özeldir.
+      // Never cache this stream: it is user-specific.
       "Cache-Control": "no-store, no-transform",
       Connection: "keep-alive",
-      // Nginx ve benzeri vekiller yanıtı tamponlamasın; tamponlanan bir akış
-      // gerçek zamanlı olmaz (§15.5, ters vekil arkasında çalışacak).
+      // Prevent reverse proxies such as Nginx from buffering the response;
+      // a buffered stream is not real-time (§15.5).
       "X-Accel-Buffering": "no",
     },
   });

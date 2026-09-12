@@ -1,9 +1,9 @@
 import { cookies } from "next/headers";
 
-// Oturum belirteci yalnızca çerezde taşınır: httpOnly olduğu için sayfadaki
-// hiçbir betik okuyamaz, sameSite=lax olduğu için başka sitelerden gönderilmez.
 
-export const SESSION_COOKIE_NAME = "faaliyet_oturum";
+
+
+export const SESSION_COOKIE_NAME = "acta_session";
 
 export async function setSessionCookie(
   token: string,
@@ -14,7 +14,7 @@ export async function setSessionCookie(
   store.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    // Üretimde sistem yalnızca HTTPS üzerinden yayınlanır (§15.5).
+
     secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: expiresAt,

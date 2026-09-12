@@ -1,14 +1,17 @@
 import Link from "next/link";
 
 import { AuthLayout } from "@/components/shell/auth-layout";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import { ResetPasswordForm } from "../reset-forms";
 
-// Yeni parola ekranı (§15.3). Belirteç burada **doğrulanmaz**: geçerliliğini
-// söylemek, hangi bağlantının işe yaradığını denemeye açardı. Karar, parola
-// yazıldıktan sonra sunucuda verilir.
 
-export const metadata = { title: "Yeni parola" };
+
+
+
+export async function generateMetadata() {
+  return getLocalizedMetadata("auth.newPasswordPageTitle");
+}
 
 export default async function ResetTokenPage({
   params,
@@ -16,14 +19,15 @@ export default async function ResetTokenPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
+  const t = await getTranslations();
 
   return (
     <AuthLayout
-      title="Yeni parola"
-      description="Değişiklikten sonra açık oturumlarınız kapanır."
+      title={t("auth.newPasswordPageTitle")}
+      description={t("auth.newPasswordPageDescription")}
       footer={
         <Link href="/login" className="text-primary hover:underline">
-          Giriş ekranına dön
+          {t("auth.backToSignIn")}
         </Link>
       }
     >

@@ -17,15 +17,15 @@ export interface LegacyDemoOriginCandidate {
 type OriginReadDb = Pick<PrismaClient, "user" | "orgUnit" | "demoObject">;
 
 /**
- * Örnek kullanıcı taşıyan fakat köken kararı olmayan birimler.
+ * Lists org units containing demo users but lacking an explicit origin decision.
  *
- * Ad bir kanıt değildir. Aday kümesi yalnız mevcut ilişkiye bakar; kararın
- * kendisini sistem yöneticisi verir (denetim 24.08.2026, P3-R6-2).
+ * Name matching is insufficient evidence. The candidate set looks solely at existing relations;
+ * the actual classification decision is made by the system administrator.
  */
 export async function listLegacyDemoOriginCandidates(
   db: OriginReadDb,
 ): Promise<LegacyDemoOriginCandidate[]> {
-  const birimler = await db.orgUnit.findMany({
+  const units = await db.orgUnit.findMany({
     where: {
       users: { some: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } } },
     },
@@ -37,23 +37,23 @@ export async function listLegacyDemoOriginCandidates(
     orderBy: [{ name: "asc" }, { id: "asc" }],
   });
 
-  if (birimler.length === 0) return [];
+  if (units.length === 0) return [];
 
-  const kayitli = await db.demoObject.findMany({
+  const recorded = await db.demoObject.findMany({
     where: {
       objectType: DEMO_OBJECT_ORG_UNIT,
-      objectId: { in: birimler.map((birim) => birim.id) },
+      objectId: { in: units.map((unit) => unit.id) },
     },
     select: { objectId: true },
   });
-  const kayitliIds = new Set(kayitli.map((kayit) => kayit.objectId));
+  const recordedIds = new Set(recorded.map((rec) => rec.objectId));
 
-  return birimler
-    .filter((birim) => !kayitliIds.has(birim.id))
-    .map((birim) => ({
-      id: birim.id,
-      name: birim.name,
-      parentName: birim.parent?.name ?? null,
+  return units
+    .filter((unit) => !recordedIds.has(unit.id))
+    .map((unit) => ({
+      id: unit.id,
+      name: unit.name,
+      parentName: unit.parent?.name ?? null,
     }));
 }
 
@@ -81,12 +81,11 @@ export async function classifyLegacyDemoOrgUnits(
   }
 
   return db.$transaction(async (tx) => {
-    // Sınıflandırma ile temizlik birbirini geçemez. Void döndüren advisory
-    // lock `$queryRaw` ile çözümlenemez; `$executeRaw` kullanılmalı.
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('faaliyet:demo_verisi'))`;
+    // Advisory lock prevents concurrent purge and classification
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('acta:demo_data'))`;
 
-    const adaylar = await listLegacyDemoOriginCandidates(tx as OriginReadDb);
-    const expectedIds = adaylar.map((aday) => aday.id).sort();
+    const candidates = await listLegacyDemoOriginCandidates(tx as OriginReadDb);
+    const expectedIds = candidates.map((cand) => cand.id).sort();
     const actualIds = [...submittedIds].sort();
     if (
       expectedIds.length !== actualIds.length ||
@@ -123,7 +122,7 @@ export async function classifyLegacyDemoOrgUnits(
   });
 }
 
-/** İdempotent kurulumda kanıtlı köken kararını değiştirmeden kaydeder. */
+/** In idempotent installation, records confirmed origin decision without overwriting existing entries. */
 export async function rememberDemoOrgUnitOrigin(
   db: Pick<PrismaClient, "demoObject">,
   objectId: string,
@@ -134,8 +133,8 @@ export async function rememberDemoOrgUnitOrigin(
       objectType_objectId: { objectType: DEMO_OBJECT_ORG_UNIT, objectId },
     },
     create: { objectType: DEMO_OBJECT_ORG_UNIT, objectId, origin },
-    // İkinci kurulumda birim artık “mevcut” görünür. Önceki kesin kararı
-    // REUSED_EXISTING ile ezmek, kurulumun oluşturduğu birimi ölümsüz yapardı.
+    // On subsequent installation, a previously created unit now appears "existing".
+    // Overwriting the decision with REUSED_EXISTING would make demo units undeletable.
     update: {},
   });
 }

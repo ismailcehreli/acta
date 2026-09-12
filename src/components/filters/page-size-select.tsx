@@ -2,40 +2,42 @@
 
 import { useId } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import { Field, Select } from "@/components/ui/form";
 import { PAGE_SIZES, PAGE_SIZE_COOKIE } from "@/shared/page-size";
 
-// "Sayfada kaç kayıt" seçici.
-//
-// Seçim yapıldığı anda uygulanır — kullanıcı ayrıca "Uygula"ya basmak zorunda
-// değil. Aynı anda çereze de yazılır; tercih diğer listelerde ve sonraki
-// oturumlarda hatırlanır.
-//
-// Çerez **istemcide** yazılıyor: bu bir ekran tercihi, güvenlikle ilgisi yok
-// ve sunucuya ayrı bir tur attırmak için sebep yok. Sunucu yine de gelen
-// değeri izinli listeye indirgiyor; buradaki yazma bir kolaylık, kaynak
-// doğrulama değil.
 
-const BIR_YIL = 60 * 60 * 24 * 365;
+//
+
+
+
+//
+
+
+
+
+
+const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
 
 export function PageSizeSelect({ value }: { value: number }) {
+  const t = useTranslations();
   const id = useId();
 
   return (
-    <Field htmlFor={id} label="Sayfada" className="w-28">
+    <Field htmlFor={id} label={t("common.pageSize")} className="w-28">
       <Select
         key={value}
         id={id}
-        name="boyut"
+        name="pageSize"
         defaultValue={String(value)}
-        onChange={(olay) => {
-          document.cookie = `${PAGE_SIZE_COOKIE}=${olay.target.value}; path=/; max-age=${BIR_YIL}; samesite=lax`;
-          olay.target.form?.requestSubmit();
+        onChange={(event) => {
+          document.cookie = `${PAGE_SIZE_COOKIE}=${event.target.value}; path=/; max-age=${ONE_YEAR_SECONDS}; samesite=lax`;
+          event.target.form?.requestSubmit();
         }}
       >
-        {PAGE_SIZES.map((boyut) => (
-          <option key={boyut} value={boyut}>
-            {boyut}
+        {PAGE_SIZES.map((pageSize) => (
+          <option key={pageSize} value={pageSize}>
+            {pageSize}
           </option>
         ))}
       </Select>

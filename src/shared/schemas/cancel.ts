@@ -1,17 +1,15 @@
 import { z } from "zod";
 
-// İptal gerekçesi zorunludur (§5.5): kaydın neden iptal edildiği sonradan
-// okunabilmeli.
+// A cancellation reason is required so the record's history remains clear.
 export const cancelActivitySchema = z.object({
   id: z.string().uuid(),
-  // Tasarım §5.5 yalnızca gerekçenin zorunlu olmasını istiyor; asgari uzunluk
-  // ürün sahibi kararı olmadan konmuştu ve geçerli kısa gerekçeleri
-  // reddediyordu (denetim 18.08.2026, bulgu 10).
+  // The design requires a reason but does not impose an undocumented minimum
+  // length; short, meaningful reasons are valid.
   reason: z
     .string()
     .trim()
-    .min(1, "İptal gerekçesi zorunludur")
-    .max(1000, "Gerekçe en fazla 1000 karakter olabilir"),
+    .min(1, "Cancellation reason is required")
+    .max(1000, "Reason must be 1000 characters or fewer"),
 });
 
 export type CancelActivityInput = z.infer<typeof cancelActivitySchema>;

@@ -1,13 +1,13 @@
 import type { ScoreInput, ScoreProfile, ScoreResult, ScoreWeights } from "./compute";
 
-// Skor formülü sürüm 2. Temel üç skor bölümü V1 ile aynı hesaplanır; geçerli
-// takdirler, ayardaki puan kadar toplamın üzerine eklenir.
-//
-// Bu modülün kendi hesap yardımcıları vardır. V1 dönemleri hiçbir zaman yeni
-// bir davranışla yeniden yorumlanmaz; yeni formül sürümü yeni dönemlerde
-// kullanılır.
 
-function profilAgirliklari(
+
+//
+
+
+
+
+function profileWeights(
   profile: ScoreProfile,
   weights: ScoreWeights,
 ): ScoreWeights {
@@ -37,12 +37,12 @@ function profilAgirliklari(
   };
 }
 
-function puan(pay: number, payda: number, agirlik: number): number {
-  if (agirlik === 0) return 0;
-  if (payda <= 0) return agirlik;
+function score(share: number, denominator: number, weight: number): number {
+  if (weight === 0) return 0;
+  if (denominator <= 0) return weight;
 
-  const oran = Math.min(1, Math.max(0, pay / payda));
-  return Math.round(agirlik * oran);
+  const ratio = Math.min(1, Math.max(0, share / denominator));
+  return Math.round(weight * ratio);
 }
 
 export function computeScoreV2(
@@ -50,18 +50,18 @@ export function computeScoreV2(
   input: ScoreInput,
   weights: ScoreWeights,
 ): ScoreResult {
-  const w = profilAgirliklari(profile, weights);
+  const w = profileWeights(profile, weights);
 
-  const regularity = puan(input.writtenDays, input.expectedDays, w.regularity);
-  const followUp = puan(input.followUpHandled, input.followUpTotal, w.followUp);
+  const regularity = score(input.writtenDays, input.expectedDays, w.regularity);
+  const followUp = score(input.followUpHandled, input.followUpTotal, w.followUp);
   const acceptance =
     w.acceptance === 0
       ? null
-      : puan(input.approvedCount, input.writtenCount, w.acceptance);
+      : score(input.approvedCount, input.writtenCount, w.acceptance);
   const approval =
     w.approval === 0
       ? null
-      : puan(input.decidedOnTimeCount, input.decidedCount, w.approval);
+      : score(input.decidedOnTimeCount, input.decidedCount, w.approval);
 
   const baseTotal =
     regularity + (acceptance ?? 0) + (approval ?? 0) + followUp;

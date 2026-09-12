@@ -10,7 +10,7 @@ export type BackupRequestDb = Pick<
 
 export type BackupRequestResult =
   | { ok: true; id: string }
-  | { ok: false; message: string };
+  | { ok: false; error: "already_waiting"; message: string };
 
 export interface BackupRequestView {
   id: string;
@@ -24,7 +24,7 @@ export interface BackupRequestView {
   message: string | null;
 }
 
-/** Panel isteğini kuyruğa bırakır; gerçek yedek host koşucusunda alınır. */
+
 export async function requestBackup(
   db: BackupRequestDb,
   actorId: string,
@@ -59,14 +59,15 @@ export async function requestBackup(
     if (isUniqueViolation(error)) {
       return {
         ok: false,
-        message: "Bekleyen ya da çalışan bir yedek var. Bitmesini bekleyin.",
+        error: "already_waiting",
+        message: "A backup is already waiting or running. Wait for it to finish.",
       };
     }
     throw error;
   }
 }
 
-/** Panelde gösterilecek son yedek isteklerini tarih sırasıyla okur. */
+
 export async function listBackupRequests(
   db: Pick<PrismaClient, "backupRequest">,
   limit = 10,

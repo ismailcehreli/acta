@@ -1,12 +1,13 @@
-import { DEFAULT_LOCALE, type Locale } from "./config";
-import { en, type Messages } from "./messages/en";
-import { tr } from "./messages/tr";
-import type { TranslateFunction, TranslationKey, TranslationValues } from "./types";
-
-const DICTIONARIES: Record<Locale, Messages> = {
-  en,
-  tr,
-};
+import {
+  DEFAULT_LOCALE,
+  LOCALE_DICTIONARIES,
+  type Locale,
+} from "./config";
+import type {
+  TranslateFunction,
+  TranslationKey,
+  TranslationValues,
+} from "./types";
 
 function resolvePath(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split(".");
@@ -31,8 +32,9 @@ function interpolate(text: string, values?: TranslationValues): string {
 }
 
 export function createTranslator(locale: Locale): TranslateFunction {
-  const primaryDict = DICTIONARIES[locale] || DICTIONARIES[DEFAULT_LOCALE];
-  const fallbackDict = DICTIONARIES[DEFAULT_LOCALE];
+  const primaryDict =
+    LOCALE_DICTIONARIES[locale] || LOCALE_DICTIONARIES[DEFAULT_LOCALE];
+  const fallbackDict = LOCALE_DICTIONARIES[DEFAULT_LOCALE];
 
   return (key: TranslationKey | string, values?: TranslationValues): string => {
     let raw = resolvePath(primaryDict as unknown as Record<string, unknown>, key);
@@ -49,4 +51,5 @@ export function createTranslator(locale: Locale): TranslateFunction {
   };
 }
 
-export { en, tr };
+export { en } from "./messages/en";
+export { tr } from "./messages/tr";

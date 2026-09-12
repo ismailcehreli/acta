@@ -25,22 +25,11 @@ import {
 
 import { closeApprovalRound } from "./approval-rounds";
 
-// Onay akışı (§5.4 durum modeli, §8.2 yetki matrisi).
-//
-// Akış tasarımdaki diyagramın birebir karşılığıdır:
-//
-//   onay_bekliyor → onaylandi
-//        ↓
-//   duzeltme_istendi → (düzeltilir) → onay_bekliyor
-//
-//   onay_bekliyor / duzeltme_istendi → yonetici_bulunamadi  (§4.4 hata durumu)
-//
-// **Onaylayan yalnız aktif onaylayıcıdır** ve o da §4.4'ün çözdüğü kişidir.
-// Zincirde olmak yetmez: Genel Müdür de Kalıphane çalışanının zincirindedir
-// ama onaylayıcısı Kalıphane Müdürü'dür. Akışın varlık sebebi zaten bu —
-// süzülmemiş içerik yukarı akmasın.
-//
-// Sistem yöneticisi onaylayamaz: işlevsel yetki içerik erişimi vermez (§15.1).
+// Approval flow (§5.4 status model, §8.2 authorization matrix).
+// State transitions are enforced by the database and the transaction below.
+
+// pending approval → approved
+// pending approval / changes requested → manager not found (§4.4 error state)
 
 export type ApprovalDb = Pick<
   PrismaClient,
@@ -73,35 +62,18 @@ export type ApprovalResult =
   | { ok: false; error: ApprovalError; message: string };
 
 const MESSAGES: Record<ApprovalError, string> = {
-  not_found: "Faaliyet bulunamadı.",
-  not_approver: "Bu faaliyetin onayı size düşmüyor.",
-  wrong_status: "Faaliyet onay bekleyen durumda değil.",
-  reason_required: "Geçerli bir gerekçe seçilmeli.",
-  conflict: "Faaliyet bu sırada değişti. Sayfayı yenileyip tekrar deneyin.",
+  not_found: "Activity not found.",
+  not_approver: "You are not an approver for this activity.",
+  wrong_status: "The activity is not awaiting approval.",
+  reason_required: "Select a valid reason.",
+  conflict: "The activity changed while you were working. Refresh the page and try again.",
 };
 
 function fail(error: ApprovalError): ApprovalResult {
   return { ok: false, error, message: MESSAGES[error] };
 }
 
-/**
- * Yeni kaydın doğacağı durum (§5.4).
- *
- * Onaya tabi olmayan birimde kayıt doğrudan `onaylandi` doğar. Onaya tabi
- * birimde onaylayıcı çözülür; bulunamazsa kayıt **kaybolmaz**, hata durumunda
- * bekler ve sistem yöneticisine alarm gider (§4.4).
- *
- * **Birim yöneticisi kendi biriminin onay bayrağına tabi değildir** (§4.3,
- * §7.4). Tasarımın bayrak tablosu "departman çalışanı: evet, müdür ve üstü:
- * hayır" diyor ama bayrak birim **düğümünde** duruyor ve müdür yönettiği
- * birimin içinde oturuyor; bayrak tek başına ikisini ayıramaz. Ayrımı burada
- * `isUnitManager` yapıyor — süzgecin kendisi süzgeçten geçmez, müdürün kaydı
- * bugünkü gibi doğrudan yukarı akar.
- *
- * Karar **çağırana bırakılmıyor**: bayrağı taşıyan `author` nesnesini kuran
- * her yol kuralı yeniden hatırlamak zorunda kalırdı ve biri unuttuğunda kayıt
- * sessizce yanlış kuyruğa düşerdi.
- */
+
 export async function resolveInitialApproval(
   db: Pick<PrismaClient, "user" | "orgUnit">,
   author: { id: string; requiresApproval: boolean },
@@ -114,20 +86,20 @@ export async function resolveInitialApproval(
     return { status: "APPROVED", approverId: null, approverIds: [] };
   }
 
-  const yazan = await db.user.findUnique({
+  const authorRecord = await db.user.findUnique({
     where: { id: author.id },
     select: { isUnitManager: true },
   });
 
-  // Kişi bulunamadıysa muafiyet **varsayılmaz**: karar aşağıdaki çözüme kalır,
-  // o da kişiyi bulamayınca yöneticisiz durumu döndürür (§4.4).
-  if (yazan?.isUnitManager) {
+
+
+  if (authorRecord?.isUnitManager) {
     return { status: "APPROVED", approverId: null, approverIds: [] };
   }
 
-  // Birimde birden fazla müdür olabilir (20.08.2026 kararı): kayıt hepsinin
-  // kuyruğuna düşer, ilk karar veren kapatır. `approverId` karar öncesinde
-  // ilk çözüleni, karar sonrasında **kararı vereni** taşır.
+
+
+
   const managers = await resolveManagers(db, author.id);
 
   if (!managers.found) {
@@ -141,33 +113,26 @@ export async function resolveInitialApproval(
   };
 }
 
-/** Onay kararının ortak kilit protokolü; iki karar aynı satırda yarışabilir. */
+
 async function withLockedActivity(
   db: ApprovalDb,
   activityId: string,
   actorId: string,
   now: Date,
-  beklenen: ActivityApprovalStatus[],
-  islem: (
+  expectedStatuses: ActivityApprovalStatus[],
+  operation: (
     tx: ApprovalDb,
-    mevcut: {
+    currentActivity: {
       id: string;
       authorId: string;
       activityDate: Date;
       title: string;
-      /** Karar duyurusunun gideceği diğer müdürler. */
+
       eligibleApproverIds: string[];
-      /** Vekâletle karar veriliyorsa kimin adına; değilse `null`. */
+
       onBehalfOfId: string | null;
-      /**
-       * Kilit altında okunan **güncel** durum.
-       *
-       * Karar yolunun hangi durumdan geldiği kararın kendisini değiştiriyor:
-       * bekleyen kayıtta açık bir onay turu **olmak zorundadır**, düzeltme
-       * istenmiş kayıtta ise iş yazarın önündedir ve tur yoktur
-       * (denetim 23.08.2026, P3-R3-2).
-       */
-      durum: ActivityApprovalStatus;
+
+      status: ActivityApprovalStatus;
     },
   ) => Promise<Activity>,
 ): Promise<ApprovalResult> {
@@ -184,44 +149,50 @@ async function withLockedActivity(
     },
   });
 
-  // Onayı ona düşmeyen kişi kaydın **varlığını** da öğrenmez: "bulunamadı" ile
-  // "yetkiniz yok" aynı cevabı verirdi ama burada ayrım güvenlik açığı değil,
-  // yalnız kolaylık olurdu — yine de sızdırmamayı seçiyoruz (§8.2).
+
+
+
   if (!activity) return fail("not_found");
 
-  // Yetki artık tek sütuna değil **uygun onaylayıcılar listesine** bakar:
-  // iki müdürlü birimde ikisi de karar verebilir.
-  const uygunlar = new Set(activity.eligibleApprovers.map((satir) => satir.userId));
 
-  // Vekâlet süresince, vekâlet edilenin onayı vekile de açıktır (§4.5).
-  // Bu hak **türetilir, dondurulmaz**: süre bitince kendiliğinden kapanır.
+
+  const eligibleApproverIds = new Set(
+    activity.eligibleApprovers.map((row) => row.userId),
+  );
+
+
+
   //
-  // Buradaki okuma yalnız **ucuz ön eleme**dir: yetkisi olmayan biri için
-  // boşuna transaction açmamak içindir. Kararın dayandığı okuma kilitten
-  // sonra, işlemin içinde yapılır (aşağıda).
-  const onVekalet = await activeDeputyFor(db, actorId, now);
 
-  if (!uygunlar.has(actorId) && !onVekalet.some((kisiId) => uygunlar.has(kisiId))) {
+
+
+  const deputyIds = await activeDeputyFor(db, actorId, now);
+
+  if (
+    !eligibleApproverIds.has(actorId) &&
+    !deputyIds.some((personId) => eligibleApproverIds.has(personId))
+  ) {
     return fail("not_found");
   }
 
-  if (!beklenen.includes(activity.approvalStatus)) {
+  if (!expectedStatuses.includes(activity.approvalStatus)) {
     return fail("wrong_status");
   }
 
-  const sonuc = await db.$transaction(async (tx) => {
-    const gecici = tx as unknown as ApprovalDb;
+  const result = await db.$transaction(async (tx) => {
+    const transactionDb = tx as unknown as ApprovalDb;
 
-    // Kilit sırası: skor kapanışı → faaliyet satırı. Kuyruk kilidini karar
-    // yazıldıktan sonra almak kapanışın FK okumasıyla kilitlenme sarmalı
-    // doğurur ve kararın ilk sürüm/kuyruk arasından düşmesini engellemez.
+
+
+
     await acquireScoreMutationLock(tx);
 
-    // Satır kilitlenir: iki karar (onayla / düzeltme iste) aynı anda
-    // gelebiliyor ve ikincisi birincinin sonucunu ezerdi.
-    await lockActivityForMaintenance(gecici, activityId);
 
-    const taze = await activityMaintenanceReader(gecici).findUnique({
+    // Both requests could reach this point concurrently, and the second could
+    // overwrite the result of the first.
+    await lockActivityForMaintenance(transactionDb, activityId);
+
+    const fresh = await activityMaintenanceReader(transactionDb).findUnique({
       where: { id: activityId },
       select: {
         approvalStatus: true,
@@ -229,43 +200,48 @@ async function withLockedActivity(
       },
     });
 
-    if (!taze) return null;
-    // Kilidi aldıktan sonra listeyi yeniden okuruz: iki müdür aynı anda
-    // karar verirse ikincisi burada durur ve `conflict` alır. "İlk karar
-    // veren kapatır" kuralı bu satırda uygulanıyor.
-    const tazeUygunlar = new Set(taze.eligibleApprovers.map((s) => s.userId));
+    if (!fresh) return null;
 
-    // **Vekâlet de burada yeniden okunur** (denetim 21.08.2026,
-    // bulgu 4). Önceden kilitten önce okunmuş liste yetki kanıtı olarak
-    // kullanılıyordu: vekil onaya basıp kilitte beklerken yönetici dönemi
-    // kaldırırsa, kilit açıldığında artık yetkisi olmayan kişi kararı
-    // tamamlıyordu. Yetkinin dayandığı okuma, yazmanın yapıldığı işlemin
-    // içinde olmalı.
-    const tazeVekalet = await activeDeputyFor(gecici, actorId, now);
-    const adinaKararVerilen = tazeVekalet.find((kisiId) => tazeUygunlar.has(kisiId));
 
-    const hâlâYetkili = tazeUygunlar.has(actorId) || adinaKararVerilen !== undefined;
 
-    if (!hâlâYetkili) return null;
-    if (!beklenen.includes(taze.approvalStatus)) return null;
+    const freshEligibleApproverIds = new Set(
+      fresh.eligibleApprovers.map((row) => row.userId),
+    );
 
-    return islem(gecici, {
+    // **Delegations are re-read here as well** (audit 2026-08-21,
+
+
+
+
+
+    const freshDeputyIds = await activeDeputyFor(transactionDb, actorId, now);
+    const onBehalfOfId = freshDeputyIds.find((personId) =>
+      freshEligibleApproverIds.has(personId),
+    );
+
+    const stillAuthorized =
+      freshEligibleApproverIds.has(actorId) || onBehalfOfId !== undefined;
+
+    if (!stillAuthorized) return null;
+    if (!expectedStatuses.includes(fresh.approvalStatus)) return null;
+
+    return operation(transactionDb, {
       id: activity.id,
       authorId: activity.authorId,
       activityDate: activity.activityDate,
       title: activity.title,
-      // Kilit altında okunan taze liste: karar duyurusu, kararın verildiği
-      // andaki müdürlere gider.
-      eligibleApproverIds: [...tazeUygunlar],
-      // Vekâletle karar veriliyorsa kimin adına verildiği; denetim izine ve
-      // ekrana "X adına Y" olarak yazılır.
-      onBehalfOfId: adinaKararVerilen ?? null,
-      durum: taze.approvalStatus,
+
+
+      eligibleApproverIds: [...freshEligibleApproverIds],
+
+
+      onBehalfOfId: onBehalfOfId ?? null,
+      status: fresh.approvalStatus,
     });
   });
 
-  if (sonuc === null) return fail("conflict");
-  return { ok: true, value: sonuc };
+  if (result === null) return fail("conflict");
+  return { ok: true, value: result };
 }
 
 export async function approveActivity(
@@ -280,71 +256,70 @@ export async function approveActivity(
     actorId,
     now,
     ["PENDING_APPROVAL"],
-    async (tx, mevcut) => {
-      const guncel = await tx.activity.update({
+    async (tx, currentActivity) => {
+      const current = await tx.activity.update({
         where: { id: activityId },
         data: {
           approvalStatus: "APPROVED",
-          // Karardan sonra `approverId` "kim onayladı"nın cevabıdır. İki
-          // müdürlü birimde bu, kaydı ilk eline alan kişidir.
+
+
           approverId: actorId,
           approvalDecidedAt: now,
           approvalSubmittedAt: null,
-          // Onaylanan kayıtta eski karar gerekçesi durmaz; kısıt da
-          // durmasına izin vermez.
+
+
           approvalReasonId: null,
           approvalReasonKind: null,
           approvalReasonNote: null,
         },
       });
 
-      // Turu karara bağla: gönderim anı burada kaybolmasın (P3-R2-1).
-      // **Ret de karardır** ve aynı satırı kapatır.
+
+
       await closeApprovalRound(tx, activityId, actorId, "APPROVED", now);
       await enqueueScoreRecalculation(tx, {
-        userId: mevcut.authorId,
-        activityDate: mevcut.activityDate,
+        userId: currentActivity.authorId,
+        activityDate: currentActivity.activityDate,
         sourceType: "ACTIVITY_APPROVED",
         sourceId: `${activityId}:${now.toISOString()}`,
         now,
       });
 
       await enqueueNotification(tx, {
-        userId: mevcut.authorId,
+        userId: currentActivity.authorId,
         eventType: NOTIFICATION_EVENTS.activityApproved,
-        payload: { activityId, activityTitle: mevcut.title },
+        payload: { activityId, activityTitle: currentActivity.title },
         idempotencyKey: `activity_approved:${activityId}`,
         now,
       });
 
       await recordAudit(tx, {
         userId: actorId,
-        // Vekâletle verilen karar izde "X adına Y" olarak durur.
-        actualUserId: mevcut.onBehalfOfId,
+        // A delegated decision records the covered approver as "on behalf of".
+        actualUserId: currentActivity.onBehalfOfId,
         objectType: AUDIT_OBJECTS.activity,
         objectId: activityId,
         action: AUDIT_ACTIONS.activityApproved,
-        // Denetim izi içerik taşımaz (§15.1).
+        // The audit trail does not contain record content (§15.1).
         now,
       });
 
-      // Karar, **diğer uygun onaylayıcılara da** duyurulur: kayıt onların
-      // kuyruğundan düşmeli. Duyurulmazsa iki müdürlü birimde ikinci müdür
-      // kapanmış bir işi kendi listesinde görmeye devam ederdi.
+      // Notify every eligible approver so the decided activity leaves each
+      // queue, including the second approver in a dual-manager unit.
       await publishRealtimeEvent(tx, {
         kind: REALTIME_EVENTS.approvalDecided,
-        userIds: [mevcut.authorId, actorId, ...mevcut.eligibleApproverIds],
+        userIds: [currentActivity.authorId, actorId, ...currentActivity.eligibleApproverIds],
       });
 
-      return guncel;
+      return current;
     },
   );
 }
 
 /**
- * Gerekçe kategorisinin var, aktif ve **doğru türde** olduğunu doğrular.
- * Tür uyumunu veritabanı da bileşik yabancı anahtarla zorluyor; burada
- * kullanıcıya anlaşılır cevap vermek için bakılıyor.
+ * Verifies that a reason category exists, is active, and has the expected
+ * kind. The database also enforces the kind with a compound foreign key;
+ * this lookup provides a useful response before the write is attempted.
  */
 async function resolveReason(
   db: ApprovalDb,
@@ -360,9 +335,9 @@ async function resolveReason(
 }
 
 export interface ApprovalDecisionInput {
-  /** Sistem yöneticisinin tanımladığı kategori; zorunlu. */
+  /** Category defined by a system administrator; required. */
   reasonId: string;
-  /** Serbest açıklama; isteğe bağlı. */
+  /** Free-form explanation; optional. */
   note?: string | null;
 }
 
@@ -384,14 +359,14 @@ export async function requestChanges(
     actorId,
     now,
     ["PENDING_APPROVAL"],
-    async (tx, mevcut) => {
-      const guncel = await tx.activity.update({
+    async (tx, currentActivity) => {
+      const current = await tx.activity.update({
         where: { id: activityId },
         data: {
           approvalStatus: "CHANGES_REQUESTED",
           approverId: actorId,
           approvalDecidedAt: now,
-          // Top yazana geçti; onay sayacı durur.
+          // The turn returns to the author, so the approval timer stops.
           approvalSubmittedAt: null,
           approvalReasonId: reason.id,
           approvalReasonKind: "CHANGES_REQUESTED",
@@ -399,64 +374,62 @@ export async function requestChanges(
         },
       });
 
-      // Turu karara bağla: gönderim anı burada kaybolmasın (P3-R2-1).
-      // **Ret de karardır** ve aynı satırı kapatır.
+      // Close the turn without losing its submission timestamp (P3-R2-1).
+      // A rejection is also a decision and closes the same row.
       await closeApprovalRound(tx, activityId, actorId, "CHANGES_REQUESTED", now);
       await enqueueScoreRecalculation(tx, {
-        userId: mevcut.authorId,
-        activityDate: mevcut.activityDate,
+        userId: currentActivity.authorId,
+        activityDate: currentActivity.activityDate,
         sourceType: "ACTIVITY_CHANGES_REQUESTED",
         sourceId: `${activityId}:${now.toISOString()}`,
         now,
       });
 
       await enqueueNotification(tx, {
-        userId: mevcut.authorId,
+        userId: currentActivity.authorId,
         eventType: NOTIFICATION_EVENTS.changesRequested,
-        // Gerekçe metni bildirime **girmez**: içerik postada taşınmaz (§12.3).
-        payload: { activityId, activityTitle: mevcut.title },
+        // The reason text is not included in notifications (§12.3).
+        payload: { activityId, activityTitle: currentActivity.title },
         idempotencyKey: `changes_requested:${activityId}:${now.getTime()}`,
         now,
       });
 
       await recordAudit(tx, {
         userId: actorId,
-        // Vekâletle verilen karar izde "X adına Y" olarak durur.
-        actualUserId: mevcut.onBehalfOfId,
+        // A delegated decision records the covered approver as "on behalf of".
+        actualUserId: currentActivity.onBehalfOfId,
         objectType: AUDIT_OBJECTS.activity,
         objectId: activityId,
         action: AUDIT_ACTIONS.activityChangesRequested,
-        // Kategori denetim izine yazılır: raporlanabilir olan odur. Serbest
-        // açıklama içeriktir, ize girmez (§15.1).
+        // Store the category in the audit trail for reporting; free-form
+        // explanation is content and is intentionally excluded (§15.1).
         detail: { reasonId: reason.id },
         now,
       });
 
-      // Karar, **diğer uygun onaylayıcılara da** duyurulur: kayıt onların
-      // kuyruğundan düşmeli. Duyurulmazsa iki müdürlü birimde ikinci müdür
-      // kapanmış bir işi kendi listesinde görmeye devam ederdi.
+      // Notify every eligible approver so the decided activity leaves each
+      // queue, including the second approver in a dual-manager unit.
       await publishRealtimeEvent(tx, {
         kind: REALTIME_EVENTS.approvalDecided,
-        userIds: [mevcut.authorId, actorId, ...mevcut.eligibleApproverIds],
+        userIds: [currentActivity.authorId, actorId, ...currentActivity.eligibleApproverIds],
       });
 
-      return guncel;
+      return current;
     },
   );
 }
 
 /**
- * Reddetme (ürün sahibi kararı, 19.08.2026). **İptalden farklıdır:** iptal
- * yayımlanmış bir kaydın geri çekilmesidir, reddetme kaydın hiç kabul
- * edilmemesi. İkisi aynı duruma tıkılsaydı denetim izinde "bu kayıt
- * yayımlandı mı" sorusu cevapsız kalırdı.
+ * Rejection (a product decision from 19.08.2026) differs from cancellation:
+ * cancellation withdraws a published record, while rejection means the
+ * record was never accepted. Keeping them separate preserves audit meaning.
  *
- * `CHANGES_REQUESTED` durumundan da reddedilebilir: müdür düzeltme istedikten
- * sonra yazar kaydı hiç düzeltmezse, kayıt aksi hâlde sonsuza kadar askıda
- * kalırdı — ne kapanabilir ne de yukarı akabilirdi.
+ * A `CHANGES_REQUESTED` record can also be rejected. Otherwise a record could
+ * remain pending forever when its author never submits a revision.
  *
- * Reddedilen kayıt **silinmez** (§16.6) ve **yukarı akmaz**: yazan ve kararı
- * veren görür, üst zincir görmez. Süzgecin bütün amacı budur.
+ * Rejected records are not deleted (§16.6) and do not move upward: the author
+ * and decision-maker can see them, while higher levels cannot. This is the
+ * purpose of the visibility filter.
  */
 export async function rejectActivity(
   db: ApprovalDb,
@@ -476,8 +449,8 @@ export async function rejectActivity(
     actorId,
     now,
     ["PENDING_APPROVAL", "CHANGES_REQUESTED"],
-    async (tx, mevcut) => {
-      const guncel = await tx.activity.update({
+    async (tx, currentActivity) => {
+      const current = await tx.activity.update({
         where: { id: activityId },
         data: {
           approvalStatus: "REJECTED",
@@ -490,41 +463,37 @@ export async function rejectActivity(
         },
       });
 
-      // Turu karara bağla: gönderim anı burada kaybolmasın (P3-R2-1).
-      // **Ret de karardır** ve aynı satırı kapatır.
-      // Düzeltme istenmiş kayıt reddedilebiliyor (ürün sahibi kararı,
-      // 19.08.2026). O sırada iş **yazarın** önünde olduğu için açık tur
-      // yoktur ve ölçülecek bir bekleme süresi de yoktur. **Bekleyen** kayıtta
-      // ise tur zorunlu: yokluğunu yutmak, kararın geçmişe hiç yazılmaması
-      // ve yöneticinin ölçülmediği bir boyuttan tam puan alması demek olurdu.
+      // Close the turn without losing its submission timestamp (P3-R2-1).
+      // A revision-requested record has no open turn because it is with the
+      // author; a pending record must have one so approval time is measured.
       await closeApprovalRound(
         tx,
         activityId,
         actorId,
         "REJECTED",
         now,
-        mevcut.durum === "CHANGES_REQUESTED" ? "atla" : "hata",
+        currentActivity.status === "CHANGES_REQUESTED" ? "skip" : "error",
       );
       await enqueueScoreRecalculation(tx, {
-        userId: mevcut.authorId,
-        activityDate: mevcut.activityDate,
+        userId: currentActivity.authorId,
+        activityDate: currentActivity.activityDate,
         sourceType: "ACTIVITY_REJECTED",
         sourceId: `${activityId}:${now.toISOString()}`,
         now,
       });
 
       await enqueueNotification(tx, {
-        userId: mevcut.authorId,
+        userId: currentActivity.authorId,
         eventType: NOTIFICATION_EVENTS.activityRejected,
-        payload: { activityId, activityTitle: mevcut.title },
+        payload: { activityId, activityTitle: currentActivity.title },
         idempotencyKey: `activity_rejected:${activityId}`,
         now,
       });
 
       await recordAudit(tx, {
         userId: actorId,
-        // Vekâletle verilen karar izde "X adına Y" olarak durur.
-        actualUserId: mevcut.onBehalfOfId,
+        // A delegated decision records the covered approver as "on behalf of".
+        actualUserId: currentActivity.onBehalfOfId,
         objectType: AUDIT_OBJECTS.activity,
         objectId: activityId,
         action: AUDIT_ACTIONS.activityRejected,
@@ -532,34 +501,32 @@ export async function rejectActivity(
         now,
       });
 
-      // Karar, **diğer uygun onaylayıcılara da** duyurulur: kayıt onların
-      // kuyruğundan düşmeli. Duyurulmazsa iki müdürlü birimde ikinci müdür
-      // kapanmış bir işi kendi listesinde görmeye devam ederdi.
+      // Notify every eligible approver so the decided activity leaves each
+      // queue, including the second approver in a dual-manager unit.
       await publishRealtimeEvent(tx, {
         kind: REALTIME_EVENTS.approvalDecided,
-        userIds: [mevcut.authorId, actorId, ...mevcut.eligibleApproverIds],
+        userIds: [currentActivity.authorId, actorId, ...currentActivity.eligibleApproverIds],
       });
 
-      return guncel;
+      return current;
     },
   );
 }
 
-/** Onayımı bekleyenler (§13.1 bloğu). Yalnız kendi önündeki iş. */
+/** Activities awaiting this user's approval (§13.1). */
 /**
- * Bu kişi bu kayda karar verebilir mi?
+ * Can this user decide this activity?
  *
- * **Ekranla eylem aynı kaynaktan beslenmeli.** Detay ekranı eskiden
- * `activity.approverId === user.id` diye bakıyordu; tek sütunlu dünyadan
- * kalma bir kontroldü ve iki durumda yanlış cevap veriyordu (21.08.2026'da
- * vekâlet testi yakaladı):
+ * The screen and the action must use the same authorization source. The
+ * detail screen previously checked `activity.approverId === user.id`, a
+ * leftover from the single-approver model that failed in two cases:
  *
- *   · İki müdürlü birimde **ikinci müdüre** onay paneli hiç çıkmıyordu.
- *   · Vekâlet süresince **vekile** çıkmıyordu.
+ *   · The second approver in a dual-manager unit saw no approval panel.
+ *   · A deputy saw no approval panel during an active delegation.
  *
- * İkisinde de sunucu eylemi kararı kabul ederdi ama kullanıcı düğmeyi
- * göremediği için ulaşamıyordu. Yetki yine eylemde doğrulanıyor; buradaki
- * tek iş paneli göstermek.
+ * The server action accepted both decisions, but the user could not reach the
+ * action because the button was hidden. Authorization is still verified by
+ * the action; this function only controls panel visibility.
  */
 export async function canDecideOnActivity(
   db: Pick<PrismaClient, "activityApprover" | "noActivityPeriod">,
@@ -567,14 +534,14 @@ export async function canDecideOnActivity(
   activityId: string,
   now: Date = new Date(),
 ): Promise<boolean> {
-  const vekaletEttikleri = await activeDeputyFor(db, userId, now);
+  const theirDeputies = await activeDeputyFor(db, userId, now);
 
-  const satir = await db.activityApprover.findFirst({
-    where: { activityId, userId: { in: [userId, ...vekaletEttikleri] } },
+  const row = await db.activityApprover.findFirst({
+    where: { activityId, userId: { in: [userId, ...theirDeputies] } },
     select: { userId: true },
   });
 
-  return satir !== null;
+  return row !== null;
 }
 
 export async function listPendingApprovals(
@@ -591,11 +558,9 @@ export async function listPendingApprovals(
   }[]
 > {
   const rows = await listAuthorizedActivities(db, approvalQueueWhere(approverId, now), {
-    // Kuyruk koşulu görünürlük modülünden gelir (§8): "onayı bana düşenler"
-    // sorusunu üç ekran soruyor ve her birinin kendi süzgecini yazması,
-    // birinin diğerinden sessizce ayrışması demekti. Koşul vekâleti de
-    // **sorgunun içinde** çözer; önceden okunan kimlik listesiyle değil
-    // (denetim 21.08.2026, bulgu 2).
+    // The queue predicate comes from the visibility module (§8). It resolves
+    // delegation inside the query rather than from a separately read ID list,
+    // keeping every queue screen consistent (audit finding 2, 21.08.2026).
     where: { approvalStatus: "PENDING_APPROVAL" },
     orderBy: [{ activityDate: "asc" }, { createdAt: "asc" }],
     select: {

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Yedek istek koşucusu.
+# Backup request runner.
 #
-# Bu betik host üzerinde systemd timer ya da cron tarafından dakikada bir
-# çalıştırılır. Panelde bırakılan isteği alır, uygulama konteynerlerinin dışında
-# backup.sh'i çalıştırır ve sonucu veritabanına yazar.
+# This script runs once per minute from a systemd timer or cron on the host. It
+# claims a request left by the administration panel, runs backup.sh outside the
+# application containers, and writes the result to the database.
 
 set -euo pipefail
 umask 077
 
-KOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$KOK"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 if [[ -f .env ]]; then
   set -a
@@ -18,25 +18,25 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-HEDEF_DIZIN="${BACKUP_DIR:-$KOK/yedek}"
-KILIT_DOSYASI="${BACKUP_LOCK_FILE:-${BACKUP_RUNNER_LOCK_FILE:-$KOK/.faaliyet-backup.lock}}"
+TARGET_DIR="${BACKUP_DIR:-$PROJECT_ROOT/backups}"
+LOCK_FILE="${BACKUP_LOCK_FILE:-${BACKUP_RUNNER_LOCK_FILE:-$PROJECT_ROOT/.acta-backup.lock}}"
 
 [[ -n "${POSTGRES_USER:-}" && -n "${POSTGRES_DB:-}" ]] || {
-  echo "[yedek koşucu] POSTGRES_USER / POSTGRES_DB tanımlı değil." >&2
+  echo "[backup runner] POSTGRES_USER / POSTGRES_DB are not set." >&2
   exit 1
 }
 
 command -v docker >/dev/null || {
-  echo "[yedek koşucu] docker bulunamadı." >&2
+  echo "[backup runner] docker was not found." >&2
   exit 1
 }
 command -v flock >/dev/null || {
-  echo "[yedek koşucu] flock bulunamadı." >&2
+  echo "[backup runner] flock was not found." >&2
   exit 1
 }
 
-# Önceki yedek hâlâ sürüyorsa yeni koşu aynı isteği yeniden ele almasın.
-exec 9>"$KILIT_DOSYASI"
+# Do not claim the same request while another backup is still running.
+exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   exit 0
 fi
@@ -48,14 +48,14 @@ psql() {
 }
 
 log() {
-  echo "[yedek koşucu] $*"
+  echo "[backup runner] $*"
 }
 
-# Bekleyen ilk isteği atomik biçimde çalışana çeker. SKIP LOCKED, aynı hostta
-# yanlışlıkla iki koşucu başlasa bile iki sürecin aynı satırı almamasını sağlar.
-bekleyen_istegi_al() {
+# Atomically claim the first pending request. SKIP LOCKED prevents two runners
+# accidentally started on the same host from claiming the same row.
+take_pending_request() {
   psql --command "
-    WITH secilen AS (
+    WITH selected_request AS (
       SELECT \"id\"
       FROM \"BackupRequest\"
       WHERE \"status\" = 'PENDING'
@@ -63,18 +63,18 @@ bekleyen_istegi_al() {
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     )
-    UPDATE \"BackupRequest\" AS istek
+    UPDATE \"BackupRequest\" AS request
     SET \"status\" = 'RUNNING', \"startedAt\" = now(), \"message\" = NULL
-    FROM secilen
-    WHERE istek.\"id\" = secilen.\"id\"
-    RETURNING istek.\"id\";
+    FROM selected_request
+    WHERE request.\"id\" = selected_request.\"id\"
+    RETURNING request.\"id\";
   " | sed -n '1p'
 }
 
-# Günlük istek aynı tabloya yazılır. Son 24 saatte başarılı yedek ya da günlük
-# istek varsa yeni bir otomatik istek açılmaz; başarısız bir çalışma her dakika
-# yeniden başlatılıp sunucuyu yormaz.
-gunluk_istek_olustur() {
+# Create the daily scheduled request in the same table. A successful backup or
+# scheduled request in the last 24 hours suppresses another automatic request;
+# a failed run is not restarted every minute and cannot overload the server.
+create_scheduled_request() {
   psql --command "
     INSERT INTO \"BackupRequest\" (\"id\", \"source\", \"requestedById\", \"status\", \"requestedAt\")
     SELECT gen_random_uuid(), 'SCHEDULED', NULL, 'PENDING', now()
@@ -97,97 +97,98 @@ gunluk_istek_olustur() {
 }
 
 request_id=""
-gecici_log=""
+TEMP_LOG=""
 
-request_id="$(bekleyen_istegi_al)"
+request_id="$(take_pending_request)"
 
 if [[ -z "$request_id" ]]; then
-  gunluk_istek_olustur
-  request_id="$(bekleyen_istegi_al)"
+  create_scheduled_request
+  request_id="$(take_pending_request)"
 fi
 
 if [[ -z "$request_id" ]]; then
   exit 0
 fi
 
-# Beklenmeyen bir hata RUNNING satırını sonsuza kadar kilitlemesin. Normal
-# başarıda request_id boşaltılır ve bu işlem yapılmaz.
-kosucu_cikisi() {
-  local kod=$?
+# Do not leave a RUNNING row locked forever after an unexpected error. On
+# normal success request_id is cleared, so this handler does nothing.
+runner_exit() {
+  local exit_code=$?
   trap - EXIT
-  if [[ "$kod" != "0" && -n "$request_id" ]]; then
+  if [[ "$exit_code" != "0" && -n "$request_id" ]]; then
     set +e
     psql \
       --set="id=$request_id" \
-      --set="message=Koşucu beklenmeyen bir hatayla durdu." \
+      --set="message=The backup runner stopped unexpectedly." \
       --command "UPDATE \"BackupRequest\"
                  SET \"status\" = 'FAILED', \"finishedAt\" = now(),
                      \"message\" = left(:'message', 1000)
                  WHERE \"id\" = :'id' AND \"status\" = 'RUNNING';" \
       >/dev/null
   fi
-  exit "$kod"
+  exit "$exit_code"
 }
-trap kosucu_cikisi EXIT
+trap runner_exit EXIT
 
-mkdir -p "$HEDEF_DIZIN"
-gecici_log="$(mktemp)"
+mkdir -p "$TARGET_DIR"
+TEMP_LOG="$(mktemp)"
 set +e
-BACKUP_LOCK_HELD=1 "$KOK/scripts/backup.sh" "$HEDEF_DIZIN" >"$gecici_log" 2>&1
-backup_kodu=$?
+BACKUP_LOCK_HELD=1 "$PROJECT_ROOT/scripts/backup.sh" "$TARGET_DIR" >"$TEMP_LOG" 2>&1
+backup_exit_code=$?
 set -e
 
-if [[ "$backup_kodu" != "0" ]]; then
-  hata_mesaji="$(tail -c 1000 "$gecici_log" | tr '\n' ' ')"
+if [[ "$backup_exit_code" != "0" ]]; then
+  error_message="$(tail -c 1000 "$TEMP_LOG" | tr '\n' ' ')"
   psql \
     --set="id=$request_id" \
-    --set="message=$hata_mesaji" \
+    --set="message=$error_message" \
     --command "UPDATE \"BackupRequest\"
                SET \"status\" = 'FAILED', \"finishedAt\" = now(),
                    \"message\" = left(:'message', 1000)
                WHERE \"id\" = :'id' AND \"status\" = 'RUNNING';" \
     >/dev/null
   request_id=""
-  rm -f -- "$gecici_log"
-  exit "$backup_kodu"
+  rm -f -- "$TEMP_LOG"
+  exit "$backup_exit_code"
 fi
 
-dosya="$(find "$HEDEF_DIZIN" -maxdepth 1 -type f -name 'faaliyet-*.tar.gz.enc' -print | sort | tail -n 1)"
-if [[ -z "$dosya" ]]; then
+output_file="$(find "$TARGET_DIR" -maxdepth 1 -type f \( -name 'acta-*.tar.gz.enc' -o -name 'faaliyet-*.tar.gz.enc' \) -print | sort | tail -n 1)"
+if [[ -z "$output_file" ]]; then
   psql \
     --set="id=$request_id" \
-    --set="message=Yedek tamamlandı ama çıktı dosyası bulunamadı." \
+    --set="message=Backup finished but no output file was found." \
     --command "UPDATE \"BackupRequest\"
                SET \"status\" = 'FAILED', \"finishedAt\" = now(),
                    \"message\" = left(:'message', 1000)
                WHERE \"id\" = :'id' AND \"status\" = 'RUNNING';" \
     >/dev/null
   request_id=""
-  rm -f -- "$gecici_log"
+  rm -f -- "$TEMP_LOG"
   exit 1
 fi
 
-dosya_adi="$(basename "$dosya")"
-boyut="$(wc -c <"$dosya" | tr -d '[:space:]')"
+file_name="$(basename "$output_file")"
+size_bytes="$(wc -c <"$output_file" | tr -d '[:space:]')"
 
 psql \
   --set="id=$request_id" \
-  --set="file_name=$dosya_adi" \
-  --set="size_bytes=$boyut" \
+  --set="file_name=$file_name" \
+  --set="size_bytes=$size_bytes" \
   --command "UPDATE \"BackupRequest\"
              SET \"status\" = 'DONE', \"finishedAt\" = now(),
                  \"fileName\" = :'file_name', \"sizeBytes\" = :size_bytes,
-                 \"message\" = 'Yedek dosyası hazır.'
+                 \"message\" = 'Backup file is ready.'
              WHERE \"id\" = :'id' AND \"status\" = 'RUNNING';" \
   >/dev/null
 
-# İzleme ilk başarılı yedekten sonra açılır. Ayar satırı yoksa da koşucu açar;
-# kayıt defterindeki varsayılan açıklama burada tekrar edilir.
+# Monitoring is enabled after the first successful backup. The runner creates
+# the setting if it does not exist; the registry's default description is
+# repeated here.
 psql \
   --set="id=$request_id" \
   --command "
   INSERT INTO \"SystemSetting\" (\"key\", \"value\", \"description\", \"updatedAt\")
-  VALUES ('backup_monitoring_enabled', 'true', 'Yedekleme izlemesi', now())
+  VALUES ('backup_monitoring_enabled', 'true', 'Backup monitoring', now())
   ON CONFLICT (\"key\") DO UPDATE
     SET \"value\" = CASE
       WHEN NOT EXISTS (
@@ -200,5 +201,5 @@ psql \
 " >/dev/null
 
 request_id=""
-rm -f -- "$gecici_log"
-log "yedek isteği tamamlandı: $dosya_adi ($boyut bayt)"
+rm -f -- "$TEMP_LOG"
+log "backup request completed: $file_name ($size_bytes bytes)"

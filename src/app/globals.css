@@ -1,10 +1,10 @@
 @import "tailwindcss";
 
-/* Yazı tipleri çalışma **ve derleme** anında yereldir (denetim P6A-4).
-   Önceki uzak font yükleyicisi temiz build'de Google'a çıkıyordu. IBM'nin sürümü
-   kilitli resmî paketlerindeki `complete` WOFF2 yüzleri Türkçe glifleri tek
-   dosyada taşır. Standart CSS tanımları paket dosyalarını doğrudan bağlar;
-   derleme zamanı font ağı/metadata yolu yoktur. */
+/* Fonts are local at both runtime **and build time** (audit P6A-4).
+   The previous remote loader contacted Google during a clean build. IBM's locked
+   official package includes `complete` WOFF2 faces with the supported glyphs.
+   Standard CSS declarations reference package files directly; no font network or
+   metadata path is used during the build. */
 @font-face {
   font-family: "IBM Plex Sans Local";
   font-style: normal;
@@ -75,48 +75,45 @@
 
 /* ═══════════════════════════════════════════════════════════════════════
    INDUSTRIAL EDITORIAL WORKSPACE
-   Faaliyet Raporlama Sistemi — tasarım sistemi (19.08.2026, sıfırdan)
+   Activity Reporting System — design system (19.08.2026, built from scratch)
    ═══════════════════════════════════════════════════════════════════════
 
-   İki dünyanın birleşimi:
+   A combination of two worlds:
 
-   • Üretim ortamı — iş emri, kayıt defteri, teknik föy, vardiya panosu.
-     Buradan gelen: köşeli şekil dili, kural çizgileri, kenar işaretleri,
-     sıra numarası şeridi, sayıların monospace hizası.
+   • Industrial operations — work orders, logbooks, technical sheets, and shift
+     boards. This contributes squared shapes, rule lines, edge marks, serial-number
+     strips, and monospaced numeric alignment.
 
-   • Editoryal yayın — tipografik ritim, boşluk, uzun metin okunabilirliği.
-     Buradan gelen: ölçülü başlık ölçeği, kontrollü satır uzunluğu,
-     bölüm numaraları, ince kural çizgileriyle kurulan hiyerarşi.
+   • Editorial publishing — typographic rhythm, whitespace, and long-form
+     readability. This contributes a measured heading scale, controlled line
+     length, section numbers, and hierarchy built with fine rule lines.
 
-   ── Üç yapısal karar ──────────────────────────────────────────────────
+   ── Three structural decisions ────────────────────────────────────────
 
-   1. YÜZEY, KUTU DEĞİL ÇİZGİDİR. Paneller birbirinden gölge ve yuvarlak
-      köşeyle değil, kural çizgisi ve yüzey farkıyla ayrılır. Gölge yalnız
-      gerçekten üstte duran katmanlara (menü, dialog, toast) ayrılmıştır.
-      Sebep: gün boyu açık kalan, uzun listeler barındıran bir ekranda
-      kutu koleksiyonu görsel gürültü üretir.
+   1. SURFACE, NOT BOX. Panels are separated by rule lines and surface contrast,
+      not shadows and rounded corners. Shadows are reserved for layers that truly
+      sit above the page (menus, dialogs, toasts). A collection of boxes creates
+      visual noise on a screen kept open all day with long lists.
 
-   2. SICAK MİNERAL ZEMİN. Saf beyaz ve soğuk gri yerine kâğıt/kireç
-      tonları (hue 75, çok düşük kroma). Uzun okuma seansında soğuk beyaz
-      yorucudur; kâğıt tonu kayıt defteri karakterini de taşır.
+   2. WARM MINERAL GROUND. Paper/lime tones (hue 75, very low chroma) replace
+      pure white and cool gray. Cool white is tiring during long reading sessions;
+      the paper tone also carries the character of a logbook.
 
-   3. PAS TURUNCUSU BİRİNCİL EYLEM. Üretim bağlamını çağrıştırır ama
-      "tehlike" diye bağırmaz — o yüzden doygunluğu ölçülü ve açıklığı
-      düşük tutuldu. Tehlike rengi ondan belirgin biçimde ayrışır (daha
-      kırmızı ton, daha yüksek kroma).
+   3. RUST-ORANGE PRIMARY ACTION. It suggests industrial operations without
+      shouting "danger", so saturation is restrained and lightness is low. The
+      danger color is clearly distinct (redder hue, higher chroma).
 
-   ── Erişilebilirlik ──────────────────────────────────────────────────
+   ── Accessibility ─────────────────────────────────────────────────────
 
-   Metin renkleri kendi zeminlerinde WCAG 2.2 AA'yı sağlar; ölçülen
-   değerler aşağıda her rolün yanında yazılıdır. Durum **hiçbir yerde
-   yalnız renkle** anlatılmaz: her durumun metni ve ikonu vardır, kritik
-   olanların ayrıca kenar işareti bulunur. */
+   Text colors meet WCAG 2.2 AA on their surfaces; measured values are listed next
+   to each role below. Status is **never conveyed by color alone**: every status has
+   text and an icon, with an edge mark for critical states. */
 
 @theme {
-  /* ── Tipografi aileleri ────────────────────────────────────────────
-     IBM Plex: Türkçe karakterleri eksiksiz, açık kaynak, endüstriyel
-     karakterli. Sürümü kilitli yerel WOFF2 dosyaları uygulamayla birlikte
-     servis edilir; çalışma ve derleme anında dış isteğe çıkılmaz. */
+  /* ── Typography families ───────────────────────────────────────────
+     IBM Plex is open source and industrial in character, with complete glyph
+     coverage for supported locales. Locked local WOFF2 files ship with the app;
+     runtime and build time make no external font requests. */
   --font-sans:
     var(--font-plex-sans), system-ui, -apple-system, "Segoe UI", Roboto,
     sans-serif;
@@ -124,62 +121,61 @@
     var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, Consolas,
     monospace;
 
-  /* ── Yüzeyler: sıcak mineral/kâğıt rampası (hue 75) ────────────────
-     canvas  — uygulama zemini, en koyu yüzey
-     surface — okunacak yüzey; en açık olan burasıdır
-     raised  — zeminden yükselen şerit (kabuk, tablo başlığı)
-     inset   — içeri gömülü alan (kod, alıntı, seçili satır) */
+  /* ── Surfaces: warm mineral/paper ramp (hue 75) ───────────────────
+     canvas  — application ground, darkest surface
+     surface — reading surface; the lightest surface
+     raised  — strip lifted from the ground (shell, table header)
+     inset   — recessed area (code, quote, selected row) */
   --color-canvas: oklch(0.955 0.008 75);
   --color-surface: oklch(0.988 0.005 78);
   --color-raised: oklch(0.972 0.007 75);
   --color-inset: oklch(0.935 0.011 75);
   --color-surface-hover: oklch(0.945 0.012 70);
 
-  /* ── Çizgiler: kural çizgisi bu sistemin ana ayırıcısıdır ───────── */
+  /* ── Lines: the rule line is this system's primary separator ────── */
   --color-line: oklch(0.885 0.012 72);
   --color-line-strong: oklch(0.76 0.018 70);
 
-  /* ── Mürekkep: orman kömürü, hafif sıcak ─────────────────────────
-     Oranlar CSS Color 4 matrisiyle elle hesaplanmıştır (DESIGN-IS-2026-09-02,
-     Görev 15.4) — önceki yorumdaki "4.6:1" iddiası yanlıştı, gerçek değer
-     4.42:1 idi ve AA eşiğinin (4.5:1) altındaydı. `faint` L 0.565 → 0.55
-     koyultuldu; üç kademenin sırası (ink < muted < faint < surface) korunur.
-     ink       16.95:1 on surface — gövde metni
-     muted      7.06:1 on surface — ikincil metin
-     faint      4.70:1 on surface — üçüncül; artık AA'nın güvenli üstünde */
+  /* ── Ink: charcoal with a slight warmth ──────────────────────────
+     Ratios were calculated by hand with the CSS Color 4 matrix (DESIGN-IS-2026-09-02,
+     Task 15.4). The earlier comment claimed "4.6:1", but the real value was 4.42:1,
+     below the AA threshold of 4.5:1. `faint` was darkened from L 0.565 to 0.55;
+     the three-step order (ink < muted < faint < surface) is preserved.
+     ink       16.95:1 on surface — body text
+     muted      7.06:1 on surface — secondary text
+     faint      4.70:1 on surface — tertiary text, safely above AA */
   --color-ink: oklch(0.215 0.014 60);
   --color-muted: oklch(0.455 0.016 60);
   --color-faint: oklch(0.55 0.014 62);
 
-  /* ── Birincil eylem: pas/oksit ───────────────────────────────────
-     primary  5.1:1 on surface — düğme zemini olarak beyaz metinle 5.0:1 */
+  /* ── Primary action: rust/oxide ──────────────────────────────────
+     primary  5.1:1 on surface — 5.0:1 with white button text */
   --color-primary: oklch(0.505 0.135 45);
   --color-primary-hover: oklch(0.455 0.135 43);
   --color-primary-pressed: oklch(0.4 0.12 42);
   --color-primary-soft: oklch(0.955 0.028 55);
   --color-primary-line: oklch(0.845 0.065 50);
 
-  /* ── İkincil vurgu: petrol / derin turkuaz ───────────────────────
-     Yalnız bilgilendirme ve ikincil işaretlerde; eylem rengi değildir. */
+  /* ── Secondary accent: petroleum / deep teal ─────────────────────
+     Reserved for information and secondary marks; it is not an action color. */
   --color-accent: oklch(0.475 0.085 215);
   --color-accent-soft: oklch(0.955 0.022 215);
   --color-accent-line: oklch(0.845 0.05 215);
 
-  /* ── Odak halkası: hiçbir zeminde kaybolmayacak kadar ayrık ────── */
+  /* ── Focus ring: distinct on every surface ─────────────────────── */
   --color-focus: oklch(0.48 0.16 250);
 
-  /* ── Durum ailesi ────────────────────────────────────────────────
-     Hepsi aynı açıklık/kroma mantığını paylaşır: metin ~0.44–0.50 L,
-     yumuşak zemin ~0.955 L, çizgi ~0.83 L. Yan yana geldiklerinde biri
-     diğerinden yüksek sesli olmaz. Ton (hue) ayırır, ama ayrımın tek
-     taşıyıcısı ton değildir — her durumun metni ve ikonu vardır.
+  /* ── Status family ───────────────────────────────────────────────
+     All share the same lightness/chroma logic: text ~0.44–0.50 L, soft surface
+     ~0.955 L, line ~0.83 L. None is louder than another side by side. Hue helps
+     distinguish them, but is not the only carrier; every status has text and icon.
 
-     success    onaylandı, sağlıklı, kapandı
-     waiting    onay bekliyor, cevap bekleniyor, kuyrukta
-     correction düzeltme istendi, yaklaşan takip, gecikme uyarısı
-     danger     uygun bulunmadı, başarısız, hata
-     cancelled  iptal edildi, pasif, artık geçerli değil
-     info       nötr bilgilendirme */
+     success    approved, healthy, closed
+     waiting    approval pending, answer pending, queued
+     correction changes requested, upcoming follow-up, overdue warning
+     danger     rejected, failed, error
+     cancelled  cancelled, inactive, no longer valid
+     info       neutral information */
   --color-success: oklch(0.45 0.105 150);
   --color-success-soft: oklch(0.955 0.03 150);
   --color-success-line: oklch(0.83 0.075 150);
@@ -196,10 +192,10 @@
   --color-danger-soft: oklch(0.955 0.04 22);
   --color-danger-line: oklch(0.83 0.09 22);
 
-  /* Baş harf rozetinin tonları (Görev 11.5).
-     Kişinin kimliğinden türetilir ve değişmez; renk bir işaret olsun diye.
-     Hepsi aynı açıklık ve kroma seviyesinde — biri diğerinden daha "önemli"
-     görünmemeli. Beyaz metinle kontrast oranı 4.5:1 üstünde (WCAG AA). */
+  /* Initial-letter avatar tones (Task 11.5).
+     They derive deterministically from the person's identity so color is a stable
+     marker. All share the same lightness and chroma; none should look more
+     "important" than another. Contrast with white text is above 4.5:1 (WCAG AA). */
   --color-avatar-0: oklch(0.47 0.085 25);
   --color-avatar-1: oklch(0.47 0.085 85);
   --color-avatar-2: oklch(0.47 0.085 145);
@@ -215,18 +211,18 @@
   --color-info-soft: oklch(0.955 0.022 215);
   --color-info-line: oklch(0.845 0.05 215);
 
-  /* ── Tipografi ölçeği ────────────────────────────────────────────
-     Yedi seviye. Gövde 15px: editoryal okunabilirlik için 14'ten büyük,
-     ama yoğun listeyi şişirmeyecek kadar ölçülü. Mobil form girdileri
-     ayrıca 16px'e sabitlenir (aşağıda) — iOS yakınlaştırmasın diye. */
-  --text-2xs: 11.5px; /* zaman damgası, mikro etiket */
-  --text-xs: 12.5px;  /* rozet, tablo üst bilgisi */
-  --text-sm: 13.5px;  /* ikincil metin, yoğun satır */
-  --text-base: 15px;  /* gövde */
-  --text-lg: 17px;    /* vurgulu gövde, kart başlığı */
-  --text-xl: 21px;    /* bölüm başlığı */
-  --text-2xl: 27px;   /* sayfa başlığı */
-  --text-3xl: 34px;   /* yalnız giriş ekranı manifestosu */
+  /* ── Typography scale ────────────────────────────────────────────
+     Seven levels. Body text is 15px: larger than 14px for editorial readability,
+     but restrained enough for dense lists. Mobile form inputs are fixed at 16px
+     below so iOS does not zoom the page. */
+  --text-2xs: 11.5px; /* timestamp, micro label */
+  --text-xs: 12.5px;  /* badge, table metadata */
+  --text-sm: 13.5px;  /* secondary text, dense row */
+  --text-base: 15px;  /* body */
+  --text-lg: 17px;    /* emphasized body, card title */
+  --text-xl: 21px;    /* section heading */
+  --text-2xl: 27px;   /* page heading */
+  --text-3xl: 34px;   /* login manifesto only */
 
   --leading-tight: 1.2;
   --leading-snug: 1.35;
@@ -235,50 +231,48 @@
 
   --tracking-tight: -0.015em;
   --tracking-normal: 0;
-  --tracking-wide: 0.06em;   /* bölüm etiketleri, versal metin */
+  --tracking-wide: 0.06em;   /* section labels, all-caps text */
 
-  /* Uzun metin satır uzunluğu: 68 karakter editoryal okuma için ölçülü. */
+  /* Long-form line length: 68 characters for measured editorial reading. */
   --container-prose: 68ch;
 
-  /* ── Boşluk ritmi ────────────────────────────────────────────────
-     Tek ölçek; 4px tabanlı ama editoryal ritim için 6/10/18 gibi ara
-     adımlar da var — her şeyin 8'in katı olması gerekmez.
+  /* ── Spacing rhythm ──────────────────────────────────────────────
+     One scale based on 4px, with intermediate 6/10/18 steps for editorial
+     rhythm; not everything needs to be a multiple of eight.
 
-     **İki katman, kasıtlı (DESIGN-IS-2026-09-02, Görev 15.3):**
-     1. Bu token'lar — sayfa/bölüm düzeyinde editoryal ritim (etiket↔girdi,
-        liste satırı, blok, bölüm, sayfa üst/alt). Elle ayarlanmış, sabit
-        sayıda adım.
-     2. Bileşen içi ince boşluk (ikon-metin arası, kart dolgusu, buton
-        yüksekliği) Tailwind'in **doğal** 4px ölçeğiyle (`gap-2`, `px-4`,
-        `py-2.5` gibi) yazılır — bu ayrı bir "keyfi" sistem değil, Tailwind'in
-        kendi tutarlı ölçeğinin bağlama göre kullanılması. Bileşen ölçeğini
-        bu token'lara zorlamak (örn. `gap-2`'yi `gap-(--spacing-field)`
-        yapmak) sıkı gruplamaları gevşetip anlamsız kılardı. */
-  --spacing-field: 10px;   /* etiket ↔ girdi */
-  --spacing-row: 14px;     /* liste satırı iç boşluğu */
-  --spacing-block: 22px;   /* bölüm içi bloklar */
-  --spacing-section: 36px; /* bölümler arası */
-  --spacing-page: 56px;    /* sayfa üst/alt */
+     **Two deliberate layers (DESIGN-IS-2026-09-02, Task 15.3):**
+     1. These tokens provide page/section rhythm (label↔input, list row, block,
+        section, page top/bottom) through a small fixed set of hand-tuned steps.
+     2. Fine component spacing (icon-to-text, card padding, button height) uses
+        Tailwind's **native** 4px scale (`gap-2`, `px-4`, `py-2.5`, etc.). This is
+        not a separate arbitrary system; it is the context-appropriate use of
+        Tailwind's consistent scale. Forcing component spacing into these tokens
+        would loosen tight groups and make them meaningless. */
+  --spacing-field: 10px;   /* label ↔ input */
+  --spacing-row: 14px;     /* list row inner spacing */
+  --spacing-block: 22px;   /* section blocks */
+  --spacing-section: 36px; /* section gaps */
+  --spacing-page: 56px;    /* page top/bottom */
 
-  /* ── Ölçüler ─────────────────────────────────────────────────── */
-  --spacing-spine: 244px;      /* masaüstü sol omurga */
-  --spacing-spine-narrow: 68px;/* tablet dar omurga */
-  --spacing-control: 40px;     /* düğme/girdi yüksekliği */
-  --spacing-control-lg: 46px;  /* birincil eylem, mobil hedef */
-  --spacing-touch: 44px;       /* asgari dokunma hedefi */
-  --spacing-topbar: 54px;      /* mobil bağlam çubuğu */
-  --spacing-tabbar: 58px;      /* mobil alt gezinme */
+  /* ── Dimensions ───────────────────────────────────────────────── */
+  --spacing-spine: 244px;      /* desktop left spine */
+  --spacing-spine-narrow: 68px;/* narrow tablet spine */
+  --spacing-control: 40px;     /* button/input height */
+  --spacing-control-lg: 46px;  /* primary action, mobile target */
+  --spacing-touch: 44px;       /* minimum touch target */
+  --spacing-topbar: 54px;      /* mobile context bar */
+  --spacing-tabbar: 58px;      /* mobile bottom navigation */
 
-  /* ── Şekil: köşeli ve hassas ────────────────────────────────────
-     Hiçbir şey hap değildir. En büyük yarıçap 6px; rozetler bile
-     dikdörtgendir — durumu şekil değil metin+ikon taşır. */
+  /* ── Shape: squared and precise ──────────────────────────────────
+     Nothing is pill-shaped. The largest radius is 6px; even badges are
+     rectangular because status is carried by text and icon, not shape. */
   --radius-xs: 2px;
   --radius-sm: 3px;
   --radius-md: 5px;
   --radius-lg: 6px;
 
-  /* ── Yükselti: yalnız geçici üst katmanlar ──────────────────────
-     Kartlar ve paneller gölge kullanmaz. */
+  /* ── Elevation: temporary layers only ─────────────────────────────
+     Cards and panels do not use shadows. */
   --shadow-menu: 0 2px 4px oklch(0.215 0.014 60 / 0.08),
     0 8px 24px oklch(0.215 0.014 60 / 0.1);
   --shadow-dialog: 0 4px 8px oklch(0.215 0.014 60 / 0.1),
@@ -293,9 +287,9 @@
   --duration-slow: 260ms;
 }
 
-/* ── Z-index katmanları ──────────────────────────────────────────
-   Tailwind'in z-* yardımcıları yerine adlandırılmış katmanlar: hangi
-   şeyin neyin üstünde olduğu sayıdan değil adından okunur. */
+/* ── Z-index layers ───────────────────────────────────────────────
+   Named layers replace Tailwind z-* utilities so stacking order is read from
+   names rather than unexplained numbers. */
 @layer base {
   :root {
     --z-spine: 30;
@@ -309,7 +303,7 @@
 
   html {
     -webkit-text-size-adjust: 100%;
-    /* Sticky başlıklar bağlantıyla gelindiğinde çubuğun altında kalmasın. */
+    /* Keep sticky headings from sitting under the bar when opened from a link. */
     scroll-padding-top: calc(var(--spacing-topbar) + 8px);
   }
 
@@ -317,8 +311,8 @@
     @apply bg-canvas text-ink antialiased;
     font-size: var(--text-base);
     line-height: var(--leading-normal);
-    /* Kâğıt zeminde çok ince bir doku: düz renk yerine derinlik verir,
-       ama desen olarak okunmaz. */
+    /* A very fine texture gives the paper ground depth without reading as a
+       visible pattern. */
     background-image: radial-gradient(
       oklch(0.215 0.014 60 / 0.018) 0.5px,
       transparent 0.5px
@@ -326,15 +320,15 @@
     background-size: 4px 4px;
   }
 
-  /* Klavyeyle gezen kullanıcı nerede olduğunu görmeli. Halka her zeminde
-     görünür: koyu mavi, iki katman (dış beyaz ayırıcı + iç renk). */
+  /* Keyboard users need to see where they are. The ring remains visible on every
+     surface: dark blue with two layers (outer white separator and inner color). */
   :focus-visible {
     outline: 2px solid var(--color-focus);
     outline-offset: 2px;
     border-radius: var(--radius-xs);
   }
 
-  /* Sayılar hizalansın; sistem verisi monospace ailesinden gelsin. */
+  /* Align numbers and render system data with the monospaced family. */
   table,
   time,
   .tabular {
@@ -360,8 +354,8 @@
     text-wrap: pretty;
   }
 
-  /* Mobilde form girdisi 16px altına düşmesin: iOS aksi hâlde odakta
-     sayfayı yakınlaştırır ve kullanıcı düzeni kaybeder. */
+  /* Keep mobile form inputs at or above 16px; otherwise iOS zooms on focus and
+     users lose the page layout. */
   @media (max-width: 767px) {
     input,
     select,
@@ -370,8 +364,8 @@
     }
   }
 
-  /* Hareket azaltma tercihi: geçişler kapanır, bilgi hiçbir zaman
-     animasyona bağlı değildir. */
+  /* Reduced-motion preference: transitions close, and information never depends
+     on animation. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -385,7 +379,7 @@
 }
 
 @layer components {
-  /* Bölüm etiketi: kayıt defteri karakterinin taşıyıcısı. */
+  /* Section label: carries the logbook character. */
   .section-label {
     font-family: var(--font-mono);
     font-size: var(--text-2xs);
@@ -395,18 +389,18 @@
     color: var(--color-faint);
   }
 
-  /* Kenar işareti: durum taşıyan satırların sol kuralı. Renkle birlikte
-     her zaman metin de bulunur; bu yalnız tarama hızını artırır. */
+  /* Edge mark: the left rule for rows carrying status. Text always accompanies
+     color; the mark only improves scanning speed. */
   .edge-mark {
     border-inline-start: 3px solid currentColor;
   }
 
-  /* Okuma yüzeyi: uzun metin kontrollü satır uzunluğunda. */
+  /* Reading surface: long text has a controlled line length. */
   .prose-measure {
     max-width: var(--container-prose);
   }
 
-  /* Ekran okuyucuya görünür, göze görünmez. */
+  /* Visible to screen readers, invisible to sighted users. */
   .sr-only-focusable:not(:focus):not(:focus-within) {
     position: absolute;
     width: 1px;

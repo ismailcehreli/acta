@@ -10,11 +10,14 @@ import { AdminNav } from "@/components/shell/admin-nav";
 import { toShellUser } from "@/components/shell/shell-user";
 import { ButtonLink } from "@/components/ui/button";
 import { Page, PageHeader } from "@/components/ui/page";
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import { UserForm, type UnitChoice } from "../user-form";
 
-export const metadata = { title: "Yeni kullanıcı — Yönetim" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.users.newUser");
+}
 
 function toChoices(nodes: OrgUnitNode[], depth = 0): UnitChoice[] {
   return nodes.flatMap((node) => [
@@ -28,13 +31,14 @@ function toChoices(nodes: OrgUnitNode[], depth = 0): UnitChoice[] {
 export default async function NewUserAdminPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
 
   const manageable = await manageableUnitIds(prisma, user.id);
   if (manageable.length === 0) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Yeni kullanıcı eklemek için sistem yöneticisi ya da birim yöneticisi yetkisi gerekir."
+        message={t("screens.users.newPermission")}
       />
     );
   }
@@ -47,23 +51,23 @@ export default async function NewUserAdminPage() {
 
   return (
     <AppShell user={await toShellUser(user)}>
-      <Page isaret="kullanici-ekle">
+      <Page marker="new-user">
         <PageHeader
-          title="Yeni kullanıcı"
-          description="Hesap açın, bağlı olduğu birimi seçin ve gerekirse rolünü belirleyin."
+          title={t("screens.users.newUser")}
+          description={t("screens.users.newDescription")}
           breadcrumbs={[
-            { label: "Yönetim" },
-            { label: "Kullanıcılar", href: "/admin/users" },
-            { label: "Yeni kullanıcı" },
+            { label: t("screens.users.administration") },
+            { label: t("screens.users.pageTitle"), href: "/admin/users" },
+            { label: t("screens.users.newUser") },
           ]}
-          action={<ButtonLink href="/admin/users">Listeye dön</ButtonLink>}
+          action={<ButtonLink href="/admin/users">{t("screens.users.listBack")}</ButtonLink>}
         />
 
         <AdminNav isRoot={user.isRoot} />
 
         <UserForm
           units={units}
-          sistemYoneticisi={canManageOrganization(user)}
+          isSystemAdmin={canManageOrganization(user)}
         />
       </Page>
     </AppShell>

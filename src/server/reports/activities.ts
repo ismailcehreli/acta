@@ -7,6 +7,8 @@ import type { ReportDb } from "./db";
 import { dateOnlyString, type ReportPeriodRange } from "./range";
 import { rollupByOrgUnit } from "./rollup";
 import type { ActivityReport } from "./types";
+import { compareLocalized } from "@/shared/format/locale";
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n";
 
 interface ActivityCounters {
   total: number;
@@ -57,6 +59,7 @@ function activityUnitRows(
   scope: ReportScope,
   direct: Map<string, ActivityCounters>,
   directPeople: Map<string, number>,
+  locale: Locale,
 ): ActivityReport["units"] {
   const totals = rollupByOrgUnit(scope.units, scope.rootOrgUnitId, direct, {
     createEmpty: emptyActivityCounters,
@@ -69,7 +72,7 @@ function activityUnitRows(
       const total = totals.get(unit.id);
       return Boolean(total && (total.people.size > 0 || total.total > 0));
     })
-    .sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name, "tr"))
+    .sort((a, b) => a.depth - b.depth || compareLocalized(a.name, b.name, locale))
     .map((unit) => {
       const total = totals.get(unit.id) ?? emptyActivityCounters();
       const own = direct.get(unit.id) ?? emptyActivityCounters();
@@ -93,6 +96,7 @@ export async function readActivityReport(
   scope: ReportScope,
   range: ReportPeriodRange,
   now: Date,
+  locale: Locale = DEFAULT_LOCALE,
 ): Promise<ActivityReport> {
   const where: Prisma.ActivityWhereInput = {
     authorId: { in: scope.userIds },
@@ -198,6 +202,6 @@ export async function readActivityReport(
     cancelled,
     approvalRate: approvalRate({ approved, changesRequested, rejected }),
     pendingOlderThanSevenDays,
-    units: activityUnitRows(scope, direct, directPeople),
+    units: activityUnitRows(scope, direct, directPeople, locale),
   };
 }

@@ -1,22 +1,30 @@
 import { ButtonLink } from "@/components/ui/button";
-import { BulunamadiIkonu, StatusPage } from "@/components/system/status-page";
+import { NotFoundIcon, StatusPage } from "@/components/system/status-page";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
-// 404 yüzeyi (Görev 10.1).
+
 //
-// Metin **bilerek belirsiz**: "kayıt yok" ile "kaydı görme yetkiniz yok"
-// aynı cevabı verir (§8.2, §18.4). Ayrım yapmak, görülemeyen bir kaydın
-// varlığını ele verirdi.
 
-export const metadata = { title: "Sayfa bulunamadı" };
 
-export default function NotFound() {
+
+
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.errors.notFoundTitle");
+}
+
+export default async function NotFound() {
+  const t = await getTranslations();
   return (
     <StatusPage
-      icon={<BulunamadiIkonu />}
-      title="Bu sayfa yok"
-      description="Aradığınız kayıt bulunamadı ya da görüntüleme yetkiniz yok. Bağlantı eski olabilir."
-      marker="Bulunamadı"
-      actions={<ButtonLink href="/" variant="primary">Ana ekrana dön</ButtonLink>}
+      icon={<NotFoundIcon />}
+      title={t("screens.errors.notFoundTitle")}
+      description={t("screens.errors.notFoundDescription")}
+      marker={t("screens.errors.notFoundMarker")}
+      actions={
+        <ButtonLink href="/" variant="primary">
+          {t("screens.errors.backToDashboard")}
+        </ButtonLink>
+      }
     />
   );
 }

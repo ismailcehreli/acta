@@ -21,13 +21,14 @@ import { savedAtLabel } from "@/shared/drafts/activity-draft";
 
 import { saveDraftAction } from "@/app/drafts/actions";
 import { emptyDraftState } from "@/app/drafts/form-state";
+import { useLocale, useTranslations } from "@/components/i18n/provider";
 
 import { createActivityAction, updateActivityAction } from "./actions";
 import { emptyActivityFormState } from "./form-state";
 import type { ActivityTextLimits } from "@/shared/schemas/activity";
 
-// Giriş hızlı olmalı (§18.6: 30 saniye ölçütü). Bu yüzden alan sayısı tasarımda
-// sayılanla sınırlıdır ve tarih varsayılan olarak bugüne gelir.
+
+
 
 export interface ActivityFormValues {
   id?: string;
@@ -35,48 +36,51 @@ export interface ActivityFormValues {
   title: string;
   description: string;
   targetDepartmentIds: string[];
-  /** Taslaktan geliniyorsa kimliği; gönderim sonrası taslak silinsin diye. */
+  /** The draft identity, if the activity came from a draft. */
   draftId?: string;
-  /** Taslakta ya da mevcut faaliyette daha önce kaydedilmiş ekler. */
+
   attachments?: AttachmentPickerItem[];
   openFollowUp?: boolean;
 }
 
-/**
- * Yarım kalmış metin şeridi (Görev 10.2).
- *
- * Metin **kendiliğinden geri gelmez**; kullanıcı ister. Sessizce doldurmak,
- * kullanıcının yazdığını sandığı şeyle ekrandaki şeyi ayrıştırır — özellikle
- * araya yeni bir kayıt girmişse.
- */
+
 function DraftBanner({
   savedAt,
   onRestore,
   onDiscard,
+  locale,
+  t,
 }: {
   savedAt: string;
   onRestore: () => void;
   onDiscard: () => void;
+  locale: Parameters<typeof savedAtLabel>[2];
+  t: ReturnType<typeof useTranslations>;
 }) {
+  const relativeTime = savedAtLabel(savedAt, new Date(), locale, {
+    justNow: t("activities.justNow"),
+    minutesAgo: (count) => t("activities.minutesAgo", { count }),
+    hoursAgo: (count) => t("activities.hoursAgo", { count }),
+  });
+
   return (
     <div
-      data-test="yarim-kalan"
+      data-test="unfinished-draft"
       className="flex flex-wrap items-center justify-between gap-3 rounded-(--radius-sm) border border-waiting-line bg-waiting-soft px-3.5 py-3"
     >
       <p className="text-[length:var(--text-sm)] text-ink">
-        <span className="font-medium">Yarım kalmış bir metniniz var.</span>{" "}
+        <span className="font-medium">{t("activities.draftBanner")}</span>{" "}
         <span className="text-muted">
-          Bu cihazda {savedAtLabel(savedAt, new Date())} yazılmış. Bu kopyada
-          yalnız metin bulunur; sunucu taslağındaki ekler ayrıca korunur.
+          {t("activities.draftWrittenOnDevice", { date: relativeTime })}
         </span>
       </p>
 
       <span className="flex shrink-0 gap-2">
         <Button type="button" size="sm" variant="primary" onClick={onRestore}>
-          Geri getir
+          {t("activities.restoreDraft")}
         </Button>
         <Button type="button" size="sm" onClick={onDiscard}>
-          Sil
+          {t("activities.deleteDraft")}
         </Button>
       </span>
     </div>
@@ -95,49 +99,41 @@ export function ActivityForm({
   options: TargetOption[];
   values: ActivityFormValues;
   mode: "create" | "edit";
-  /**
-   * Ek dosya sınırları; metin sınırlarıyla aynı gerekçeyle sunucudan geliyor
-   * (bkz. `limits`). Kullanıcı reddedilmeden **önce** neyin kabul edildiğini
-   * görmeli: sınırı bilmeden 80 MB'lık video yüklemeye çalışmak, dosyayı
-   * gönderdikten sonra hata almak demekti.
-   */
+
   attachmentLimits: { maxSizeBytes: number; maxCount: number };
-  /**
-   * Metin uzunluk sınırları; sunucudaki doğrulamayla **aynı** kaynaktan
-   * geliyor (Görev 11.6). Ayrı okunsaydı form kabul ettiğini sunucu
-   * reddederdi.
-   */
+
   limits: ActivityTextLimits;
-  /** Kullanıcının bekleyen taslak sayısı; yeni faaliyet ekranında hatırlatılır. */
+
   draftCount?: number;
-  /**
-   * Yarım kalmış metnin saklanacağı anahtar (Görev 10.2). Kullanıcıya özeldir:
-   * ortak bir tarayıcıda birinin yazdığı metin diğerine teklif edilmemeli.
-   */
+
   draftKey: string;
 }) {
-  const [state, formAction, pending] = useActionState(
+  const t = useTranslations();
+  const locale = useLocale();
+  const [state, formAction, submitPending] = useActionState(
     mode === "create" ? createActivityAction : updateActivityAction,
     emptyActivityFormState,
   );
 
-  // "Taslak olarak kaydet" formu göndermez; formdaki alanları okuyup taslak
-  // eylemini **doğrudan** çağırır ve sonra Taslaklar sayfasına götürür.
+
+
   //
-  // Neden `formAction` ile ikinci bir gönderim değil: aynı form hem faaliyet
-  // eylemine hem taslak eylemine bağlanınca hangi düğmenin hangi eylemi
-  // çalıştırdığı tarayıcıya ve React sürümüne kalıyor. Burada belirsizlik
-  // olamaz — biri kaydı gönderiyor, diğeri göndermiyor.
+
+
+
+
   const router = useRouter();
-  const [taslakHatasi, setTaslakHatasi] = useState<string | null>(null);
-  const [taslakPending, setTaslakPending] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftPending, setDraftPending] = useState(false);
 
-  // Seçim React durumunda tutulur: arama kutusu listeyi süzdüğü için ekranda
-  // görünmeyen bir kutucuğun işaretli kalması gerekiyor. Forma giden değer
-  // gizli alanlardan gidiyor; sunucu tarafı hiç değişmedi.
-  const [secilen, setSecilen] = useState<string[]>(values.targetDepartmentIds);
 
-  const { formRef, bekleyen, geriGetir, sil, gonderildi } = useActivityDraft(
+
+
+  const [selectedDepartments, setSelectedDepartments] = useState<string[]>(
+    values.targetDepartmentIds,
+  );
+
+  const { formRef, pending: localDraft, restore, discard, submitted } = useActivityDraft(
     draftKey,
     {
       activityDate: values.activityDate,
@@ -145,39 +141,39 @@ export function ActivityForm({
       description: values.description,
       targetDepartmentIds: values.targetDepartmentIds,
     },
-    setSecilen,
+    setSelectedDepartments,
   );
 
-  const sunucuTaslagi = useServerDraft(formRef, values.draftId ?? null, mode === "create");
+  const serverDraft = useServerDraft(formRef, values.draftId ?? null, mode === "create");
 
-  const taslakKaydet = async () => {
+  const draftSave = async () => {
     const form = formRef.current;
-    if (!form || taslakPending) return;
+    if (!form || draftPending) return;
 
-    setTaslakPending(true);
-    setTaslakHatasi(null);
+    setDraftPending(true);
+    setDraftError(null);
 
     const data = new FormData(form);
-    data.set("draftId", sunucuTaslagi.draftId ?? "");
+    data.set("draftId", serverDraft.draftId ?? "");
     data.set("savedManually", "1");
 
     try {
-      const sonuc = await saveDraftAction(emptyDraftState, data);
+      const result = await saveDraftAction(emptyDraftState, data);
 
-      if (sonuc.error) {
-        setTaslakHatasi(sonuc.error);
+      if (result.error) {
+        setDraftError(result.error);
         return;
       }
 
-      // Taslak kaydedildi: yerel kopya ve otomatik kaydetme durdurulur,
-      // kullanıcı taslaklarına götürülür.
-      sunucuTaslagi.gonderiliyor();
-      sil();
-      router.push("/drafts?kayit=taslak");
+      // The server draft is now authoritative; stop the local copy and autosave.
+
+      serverDraft.submitting();
+      discard();
+      router.push("/drafts?record=draft");
     } catch {
-      setTaslakHatasi("Taslak kaydedilemedi. Bağlantınızı kontrol edin.");
+      setDraftError(t("activities.draftSaveError"));
     } finally {
-      setTaslakPending(false);
+      setDraftPending(false);
     }
   };
 
@@ -185,52 +181,51 @@ export function ActivityForm({
     <form
       ref={formRef}
       action={formAction}
-      // Gönderim başlarken saklanan metin silinir: kayıt tamamlandıktan sonra
-      // aynı metin yeniden teklif edilseydi mükerrer faaliyet üretirdi.
-      // Doğrulama hatası dönerse metin ekranda durmaya devam eder ve ilk
-      // dokunuşta yeniden saklanır.
+
+
+
+
       onSubmit={() => {
-        gonderildi();
-        sunucuTaslagi.gonderiliyor();
+        submitted();
+        serverDraft.submitting();
       }}
       className="flex flex-col gap-5"
     >
-      {/* Taslaktan gelindiyse kimliği taşınır: faaliyet gönderilince taslak
-          silinsin, listede kopyası kalmasın. */}
+
       <input
         type="hidden"
         name="draftId"
-        value={sunucuTaslagi.draftId ?? ""}
+        value={serverDraft.draftId ?? ""}
       />
 
-      {/* Bekleyen taslak hatırlatması: kullanıcı yeni bir kayıt yazmaya
-          başlamadan önce, yarım bıraktığı bir şey olduğunu bilmeli. */}
-      {mode === "create" && draftCount > 0 && !sunucuTaslagi.draftId ? (
+
+      {mode === "create" && draftCount > 0 && !serverDraft.draftId ? (
         <p
-          data-test="taslak-hatirlatma"
+          data-test="draft-reminder"
           className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-(--radius-sm) border border-line bg-inset px-3.5 py-2.5 text-[length:var(--text-sm)] text-muted"
         >
           <span>
-            Gönderilmemiş <strong className="font-semibold text-ink">{draftCount}</strong>{" "}
-            taslağınız var.
+            {t("activities.unsubmittedDrafts", { count: draftCount })}
           </span>
           <a href="/drafts" className="text-primary underline-offset-4 hover:underline">
-            Taslaklara git
+            {t("activities.goToDrafts")}
           </a>
         </p>
       ) : null}
-      {bekleyen ? (
+      {localDraft ? (
         <DraftBanner
-          savedAt={bekleyen.savedAt}
-          onRestore={geriGetir}
-          onDiscard={sil}
+          savedAt={localDraft.savedAt}
+          onRestore={restore}
+          onDiscard={discard}
+          locale={locale}
+          t={t}
         />
       ) : null}
 
       {values.id ? <input type="hidden" name="id" value={values.id} /> : null}
 
       <FormGrid columns={2}>
-        <Field htmlFor="activityDate" label="Tarih" required>
+        <Field htmlFor="activityDate" label={t("activities.activityDate")} required>
           <Input
             id="activityDate"
             name="activityDate"
@@ -242,10 +237,12 @@ export function ActivityForm({
 
         <Field
           htmlFor="title"
-          label="Başlık"
+          label={t("activities.formTitle")}
           required
           hint={
-            limits.titleMin > 1 ? `En az ${limits.titleMin} karakter` : undefined
+            limits.titleMin > 1
+              ? t("activities.titleHint", { count: limits.titleMin })
+              : undefined
           }
         >
           <Input
@@ -255,15 +252,15 @@ export function ActivityForm({
             minLength={limits.titleMin}
             maxLength={limits.titleMax}
             defaultValue={values.title}
-            placeholder="Örn. 3 numaralı preste kalıp arızası ve çözümü"
+            placeholder={t("activities.formTitlePlaceholder")}
           />
         </Field>
       </FormGrid>
 
       <Field
         htmlFor="description"
-        label="Açıklama"
-        hint="Yürütülen çalışma ve varılan tespitler; karşılaşılan bir sorun varsa ne olduğu ve nasıl çözüldüğü. Karar üst yönetime bırakılıyorsa bunu açıkça belirtin. Birkaç cümle yeterli — ayrıntı gerekirse bu kayıt üzerinden soru sorulur."
+        label={t("activities.formDescription")}
+        hint={t("activities.descriptionHint")}
         required
       >
         <Textarea
@@ -277,25 +274,25 @@ export function ActivityForm({
         />
         {limits.descriptionMin > 1 ? (
           <p className="mt-1 text-[length:var(--text-2xs)] text-faint">
-            En az {limits.descriptionMin} karakter yazılmalı.
+            {t("activities.descriptionMinimum", { count: limits.descriptionMin })}
           </p>
         ) : null}
       </Field>
 
       <fieldset className="flex flex-col gap-2.5 rounded-(--radius-sm) border border-line bg-inset/40 p-3.5">
         <legend className="px-1 text-[length:var(--text-sm)] font-medium text-ink">
-          İlgili departmanlar
+          {t("activities.relatedDepartments")}
         </legend>
         <p className="text-[length:var(--text-xs)] text-muted">
-          Bu konu hangi departmanları ilgilendiriyor? En fazla{" "}
-          {MAX_TARGET_DEPARTMENTS} departman seçebilirsiniz. Seçilen departmana
-          erişim vermez.
+          {t("activities.relatedDepartmentsHint", {
+            count: MAX_TARGET_DEPARTMENTS,
+          })}
         </p>
 
         <DepartmentPicker
           options={options}
-          selected={secilen}
-          onChange={setSecilen}
+          selected={selectedDepartments}
+          onChange={setSelectedDepartments}
           max={MAX_TARGET_DEPARTMENTS}
         />
       </fieldset>
@@ -303,12 +300,12 @@ export function ActivityForm({
       {mode === "create" ? (
         <Checkbox
           name="openFollowUp"
-          label="Bu konu açık kalsın"
-          description="Takip maddesi açılır: sizin sorumluluğunuza girer ve kapatırken not yazarsınız. Zorunlu değildir."
+          label={t("activities.keepTopicOpen")}
+          description={t("activities.keepTopicOpenDescription")}
         />
       ) : null}
 
-      <Field htmlFor="files" label="Ekler (isteğe bağlı)">
+      <Field htmlFor="files" label={t("activities.attachmentsOptional")}>
         <AttachmentPicker
           existingAttachments={values.attachments}
           maxCount={attachmentLimits.maxCount}
@@ -318,54 +315,46 @@ export function ActivityForm({
 
       <FormActions
         message={
-          state.error || taslakHatasi ? (
-            <div id="faaliyet-hatasi">
-              <Alert tone="danger">{state.error ?? taslakHatasi}</Alert>
+          state.error || draftError ? (
+            <div id="activity-error">
+              <Alert tone="danger">{state.error ?? draftError}</Alert>
             </div>
           ) : null
         }
       >
-        {/* "Kaydet" değil **"Gönder"**: kayıt kaydedildiği anda yöneticiye
-            düşüyor ve kapsamdaki kişilere görünüyor. "Taslak olarak kaydet"
-            ile arasındaki fark da tam olarak bu — biri gönderiyor, diğeri
-            göndermiyor. */}
-        <Button type="submit" variant="primary" disabled={pending}>
-          {pending
+        <Button type="submit" variant="primary" disabled={submitPending}>
+          {submitPending
             ? mode === "create"
-              ? "Gönderiliyor…"
-              : "Kaydediliyor…"
+              ? t("activities.submitting")
+              : t("common.saving")
             : mode === "create"
-              ? "Gönder"
-              : "Değişikliği kaydet"}
+              ? t("common.submit")
+              : t("common.save")}
         </Button>
 
-        {/* Taslak olarak kaydetmek **göndermek değildir**: kayıt kimseye
-            düşmez, yalnız Taslaklar sayfasında bekler. */}
         {mode === "create" ? (
-          <Button type="button" onClick={taslakKaydet} disabled={taslakPending}>
-            {taslakPending ? "Kaydediliyor…" : "Taslak olarak kaydet"}
+          <Button type="button" onClick={draftSave} disabled={draftPending}>
+            {draftPending ? t("activities.draftSaving") : t("activities.saveAsDraft")}
           </Button>
         ) : null}
 
         <ButtonLink href={values.id ? `/activities/${values.id}` : "/activities"}>
-          Vazgeç
+          {t("common.cancel")}
         </ButtonLink>
 
-        {/* Otomatik kaydetmenin durumu. Sessiz kalmak, kullanıcının
-            "kaydedildi mi acaba" diye tahmin etmesi demekti. */}
         {mode === "create" ? (
           <span
             role="status"
             aria-live="polite"
-            data-test="taslak-durumu"
+            data-test="draft-status"
             className="text-[length:var(--text-xs)] text-faint"
           >
-            {sunucuTaslagi.durum === "kaydediliyor"
-              ? "Taslak kaydediliyor…"
-              : sunucuTaslagi.durum === "kaydedildi"
-                ? "Taslak kaydedildi"
-                : sunucuTaslagi.durum === "hata"
-                  ? "Taslak kaydedilemedi — bağlantınızı kontrol edin."
+            {serverDraft.status === "saving"
+              ? t("activities.draftSaving")
+              : serverDraft.status === "saved"
+                ? t("activities.draftSaved")
+                : serverDraft.status === "error"
+                  ? t("activities.draftSaveError")
                   : ""}
           </span>
         ) : null}

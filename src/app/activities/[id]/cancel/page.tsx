@@ -9,11 +9,14 @@ import { Page, PageHeader } from "@/components/ui/page";
 import { canCancelActivity } from "@/server/activities/cancel";
 import { activityMaintenanceReader } from "@/server/authz/activity-repository";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { prisma } from "@/server/db";
 
 import { CancelForm } from "./cancel-form";
 
-export const metadata = { title: "Faaliyeti iptal et" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("activities.cancelActivity");
+}
 
 export default async function CancelActivityPage({
   params,
@@ -22,6 +25,7 @@ export default async function CancelActivityPage({
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
 
   const { id } = await params;
   const activity = await activityMaintenanceReader(prisma).findUnique({
@@ -35,7 +39,7 @@ export default async function CancelActivityPage({
     },
   });
 
-  // Yetkisi olmayan kişi faaliyetin varlığını da öğrenmez.
+
   if (
     !activity ||
     !(await canCancelActivity(prisma, activity, {
@@ -46,8 +50,8 @@ export default async function CancelActivityPage({
     notFound();
   }
 
-  // İptal yalnızca onaylanmış faaliyet için tanımlıdır (§5.4); diğer durumlar
-  // için ekran hiç açılmaz.
+
+
   if (
     activity.approvalStatus !== "APPROVED" &&
     activity.approvalStatus !== "CANCELLED"
@@ -62,19 +66,19 @@ export default async function CancelActivityPage({
       <AppShell user={shellUser}>
         <Page>
           <PageHeader
-            title="Faaliyet zaten iptal edilmiş"
+            title={t("activities.alreadyCancelled")}
             breadcrumbs={[
-              { label: "Ana ekran", href: "/" },
-              { label: "Faaliyetlerim", href: "/activities" },
-              { label: "İptal" },
+              { label: "Dashboard", href: "/" },
+              { label: "My activities", href: "/activities" },
+              { label: t("common.cancel") },
             ]}
           />
           <Alert tone="info">
-            Bu kayıt daha önce iptal edilmiş. İptal geri alınamaz.
+            {t("activities.alreadyCancelledDescription")}
           </Alert>
           <div>
             <ButtonLink href={`/activities/${activity.id}`}>
-              Faaliyete dön
+              {t("common.back")}
             </ButtonLink>
           </div>
         </Page>
@@ -86,23 +90,21 @@ export default async function CancelActivityPage({
     <AppShell user={shellUser}>
       <Page>
         <PageHeader
-          title="Faaliyeti iptal et"
+          title={t("activities.cancelActivity")}
           breadcrumbs={[
-            { label: "Ana ekran", href: "/" },
-            { label: "Faaliyetlerim", href: "/activities" },
+            { label: "Dashboard", href: "/" },
+            { label: "My activities", href: "/activities" },
             { label: activity.title, href: `/activities/${activity.id}` },
-            { label: "İptal" },
+            { label: t("common.cancel") },
           ]}
         />
 
-        <Alert tone="correction" title="İptal geri alınamaz.">
-          Kayıt silinmez; üstü çizili olarak kalır ve gerekçesiyle birlikte
-          görünür. Faaliyetin cevap bekleyen soruları varsa kapatılır ve
-          taraflara bildirilir.
+        <Alert tone="correction" title={t("activities.cancellationIrreversible")}>
+          {t("activities.cancellationDescription")}
         </Alert>
 
         <Card>
-          <CardHeader title="İptal edilecek kayıt" />
+          <CardHeader title={t("activities.recordToCancel")} />
           <CardBody>
             <p className="font-medium text-ink">{activity.title}</p>
             <p className="mt-1.5 whitespace-pre-line text-[length:var(--text-sm)] text-muted">
@@ -112,7 +114,7 @@ export default async function CancelActivityPage({
         </Card>
 
         <Card>
-          <CardHeader title="Gerekçe" />
+          <CardHeader title={t("activities.cancelReason")} />
           <CardBody>
             <CancelForm activityId={activity.id} />
           </CardBody>

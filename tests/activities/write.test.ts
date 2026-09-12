@@ -6,8 +6,8 @@ import { SETTING_KEYS } from "@/server/settings/system-settings";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §5: faaliyet girişi, düzeltme ve revizyon. Zaman her testte sahte: gerçek
-// saate bağlı test, gece yarısı kırılan testtir.
+// §5: activity creation, editing, and revisions. Time is mocked in all tests:
+// tests relying on wall clock fail around midnight.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 const TODAY = "2026-08-17";
@@ -21,15 +21,15 @@ afterAll(async () => {
 });
 
 async function setup() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
   const department = await createOrgUnit({
-    name: "Kalıphane",
-    type: "Departman",
+    name: "Tooling Workshop",
+    type: "Department",
     parentId: root.id,
   });
   const other = await createOrgUnit({
-    name: "Planlama",
-    type: "Departman",
+    name: "Planning",
+    type: "Department",
     parentId: root.id,
   });
   const user = await createUser(department.id);
@@ -49,15 +49,15 @@ async function setup() {
 function input(overrides: Partial<Parameters<typeof createActivity>[2]> = {}) {
   return {
     activityDate: TODAY,
-    title: "Kalıp bakımı yapıldı",
-    description: "Çatlak tespit edildi, onarım planlandı.",
+    title: "Tooling maintenance completed",
+    description: "Crack detected, repair scheduled.",
     targetDepartmentIds: [] as string[],
     ...overrides,
   };
 }
 
-describe("faaliyet girişi", () => {
-  it("onaya tabi olmayan kademede kayıt doğrudan onaylı doğar (§5.4)", async () => {
+describe("activity creation", () => {
+  it("creates activity directly as approved when unit does not require approval (§5.4)", async () => {
     const { author, department } = await setup();
 
     const result = await createActivity(
@@ -72,13 +72,10 @@ describe("faaliyet girişi", () => {
     expect(result.activity.approvalStatus).toBe("APPROVED");
   });
 
-  it("onaya tabi kademede kayıt onay bekleyerek doğar (§5.4)", async () => {
-    // Onay akışı ürün sahibi kararıyla Sürüm 1'e alındı (19.08.2026); bu test
-    // eskiden girişin **reddedildiğini** doğruluyordu. Artık kayıt üretiliyor
-    // ve müdürün önüne düşüyor.
+  it("creates activity in pending approval status when unit requires approval", async () => {
     const { author, department, root } = await setup();
-    const mudur = await createUser(root.id, {
-      fullName: "Genel Müdür",
+    const manager = await createUser(root.id, {
+      fullName: "General Manager",
       isUnitManager: true,
     });
 
@@ -92,24 +89,21 @@ describe("faaliyet girişi", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.activity.approvalStatus).toBe("PENDING_APPROVAL");
-    expect(result.activity.approverId).toBe(mudur.id);
+    expect(result.activity.approverId).toBe(manager.id);
   });
 
-  it("birim yöneticisinin kaydı onaya tabi birimde de doğrudan onaylı doğar (§4.3)", async () => {
-    // §4.3: "müdür ve üstü onaya tabi değildir". Bayrak birim düğümünde
-    // durduğu için departmanın onay bayrağı müdürü de kapsıyordu ve müdürün
-    // kendi kaydı bir üst kademenin kuyruğuna düşüyordu — süzgeç kendi kendini
-    // süzemez. Yöneticinin kaydı doğrudan onaylı doğar ve yukarı akar (§7.4).
+  it("creates unit manager activity directly as approved even in units requiring approval", async () => {
+    // Unit managers do not require approval for their own activities.
     const { department, root } = await setup();
-    await createUser(root.id, { fullName: "Genel Müdür", isUnitManager: true });
-    const mudur = await createUser(department.id, {
-      fullName: "Kalıphane Müdürü",
+    await createUser(root.id, { fullName: "General Manager", isUnitManager: true });
+    const manager = await createUser(department.id, {
+      fullName: "Tooling Manager",
       isUnitManager: true,
     });
 
     const result = await createActivity(
       testDb,
-      { id: mudur.id, orgUnitId: department.id, requiresApproval: true },
+      { id: manager.id, orgUnitId: department.id, requiresApproval: true },
       input({ targetDepartmentIds: [department.id] }),
       NOW,
     );
@@ -119,19 +113,18 @@ describe("faaliyet girişi", () => {
     expect(result.activity.approvalStatus).toBe("APPROVED");
     expect(result.activity.approverId).toBeNull();
 
-    // Onay turu da açılmaz: açık tur "iş birinin önünde bekliyor" demektir.
-    const turlar = await testDb.approvalRound.count({
+    const rounds = await testDb.approvalRound.count({
       where: { activityId: result.activity.id },
     });
-    expect(turlar).toBe(0);
+    expect(rounds).toBe(0);
 
-    const uygunlar = await testDb.activityApprover.count({
+    const approvers = await testDb.activityApprover.count({
       where: { activityId: result.activity.id },
     });
-    expect(uygunlar).toBe(0);
+    expect(approvers).toBe(0);
   });
 
-  it("yazarın birimi yazım anında dondurulur (§4.6)", async () => {
+  it("freezes author org unit at time of creation (§4.6)", async () => {
     const { author, department, root } = await setup();
 
     const result = await createActivity(
@@ -143,7 +136,7 @@ describe("faaliyet girişi", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    // Kişi sonradan başka birime geçse de faaliyet yazıldığı birimle kalır.
+    // Even if user transfers units later, activity retains unit it was authored under.
     await testDb.user.update({
       where: { id: author.id },
       data: { orgUnitId: root.id },
@@ -155,7 +148,7 @@ describe("faaliyet girişi", () => {
     expect(stored.authorOrgUnitId).toBe(department.id);
   });
 
-  it("ilk kayıt bir revizyon üretir", async () => {
+  it("initial creation produces first revision", async () => {
     const { author, department } = await setup();
 
     const result = await createActivity(
@@ -176,8 +169,8 @@ describe("faaliyet girişi", () => {
   });
 });
 
-describe("muhatap departman kuralları (§5.3)", () => {
-  it("beş departman seçilebilir", async () => {
+describe("target department rules (§5.3)", () => {
+  it("allows selecting up to five departments", async () => {
     const { author, root } = await setup();
     const ids: string[] = [];
     for (let i = 0; i < 5; i += 1) {
@@ -197,7 +190,7 @@ describe("muhatap departman kuralları (§5.3)", () => {
     expect(count).toBe(5);
   });
 
-  it("altıncı departman veritabanınca reddedilir", async () => {
+  it("sixth department is rejected by database constraint", async () => {
     const { author, root } = await setup();
     const ids: string[] = [];
     for (let i = 0; i < 6; i += 1) {
@@ -205,14 +198,13 @@ describe("muhatap departman kuralları (§5.3)", () => {
       ids.push(unit.id);
     }
 
-    // Zod da altıncıyı reddeder; burada veritabanı kısıtının da tuttuğunu
-    // görüyoruz — şema doğrulaması atlansa bile sınır aşılamaz.
+    // Database constraint holds even if schema validation is bypassed.
     await expect(
       createActivity(testDb, author, input({ targetDepartmentIds: ids }), NOW),
     ).rejects.toThrow(/ACTIVITY_TARGET_LIMIT/);
   });
 
-  it("akranın departmanı da muhatap seçilebilir", async () => {
+  it("peer department can also be selected as target", async () => {
     const { author, other } = await setup();
 
     const result = await createActivity(
@@ -225,7 +217,7 @@ describe("muhatap departman kuralları (§5.3)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("pasif departman muhatap seçilemez", async () => {
+  it("rejects inactive department as target", async () => {
     const { author, root } = await setup();
     const passive = await createOrgUnit({ parentId: root.id });
     await testDb.orgUnit.update({
@@ -245,7 +237,7 @@ describe("muhatap departman kuralları (§5.3)", () => {
     expect(result.error).toBe("inactive_department");
   });
 
-  it("olmayan departman reddedilir", async () => {
+  it("rejects non-existent department as target", async () => {
     const { author } = await setup();
 
     const result = await createActivity(
@@ -263,8 +255,8 @@ describe("muhatap departman kuralları (§5.3)", () => {
   });
 });
 
-describe("geçmişe dönük giriş sınırı (§5.6)", () => {
-  it("dünkü faaliyet girilebilir (varsayılan 1 gün)", async () => {
+describe("retroactive entry limits (§5.6)", () => {
+  it("permits yesterday's activity (default 1 day)", async () => {
     const { author, department } = await setup();
 
     const result = await createActivity(
@@ -277,7 +269,7 @@ describe("geçmişe dönük giriş sınırı (§5.6)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("iki gün öncesi reddedilir", async () => {
+  it("rejects activity from two days ago", async () => {
     const { author, department } = await setup();
 
     const result = await createActivity(
@@ -292,7 +284,7 @@ describe("geçmişe dönük giriş sınırı (§5.6)", () => {
     expect(result.error).toBe("date_too_old");
   });
 
-  it("ileri tarih reddedilir", async () => {
+  it("rejects future dates", async () => {
     const { author, department } = await setup();
 
     const result = await createActivity(
@@ -307,14 +299,14 @@ describe("geçmişe dönük giriş sınırı (§5.6)", () => {
     expect(result.error).toBe("future_date");
   });
 
-  it("sınır sistem ayarından okunur, koda gömülü değildir", async () => {
+  it("reads boundary from system settings, not hardcoded", async () => {
     const { author, department } = await setup();
 
     await testDb.systemSetting.create({
       data: {
         key: SETTING_KEYS.retroactiveEntryDays,
         value: "7",
-        description: "Geçmişe dönük giriş penceresi (gün)",
+        description: "Retroactive entry window (days)",
       },
     });
 

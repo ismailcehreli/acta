@@ -1,22 +1,20 @@
 import { z } from "zod";
 import { formatInstant } from "@/shared/format/date-time";
+import {
+  createTranslator,
+  DEFAULT_LOCALE,
+  type Locale,
+} from "@/shared/i18n";
 
-// Yarım kalmış faaliyet metni (Görev 10.2).
-//
-// **"Taslak" denmiyor.** Veritabanındaki `DRAFT` onay durumuyla karışır; bu
-// tamamen farklı bir şey: henüz hiç kaydedilmemiş, yalnız **cihazda** duran
-// metin. Sunucuya gitmez.
-//
-// Bu dosya saf: DOM'a dokunmaz, tarayıcı API'si kullanmaz. Karar kuralları
-// (bu taslak anlamlı mı, kaydedilmiş olandan farklı mı) burada durur ve
-// testten geçer; React tarafı yalnız okuyup yazar.
+// Unfinished activity text stored locally on the device. It is distinct from
+// the database DRAFT status and never reaches the server until submitted.
 
 export const activityDraftSchema = z.object({
   activityDate: z.string().max(20),
   title: z.string().max(150),
   description: z.string().max(10_000),
   targetDepartmentIds: z.array(z.string().uuid()).max(20),
-  /** Kullanıcıya "ne zaman yazmıştım" demek için. */
+  /** Used to tell the user when the local copy was written. */
   savedAt: z.string().datetime(),
 });
 
@@ -30,10 +28,8 @@ export interface DraftFields {
 }
 
 /**
- * Depodan okunan metni doğrular. **Doğrulanmadan kullanılmaz:** yerel depo
- * kullanıcının elinin altındadır, başka bir sürümün bıraktığı eski biçim de
- * olabilir. Bozuk kayıt sessizce yok sayılır — bu bir iş kuralı değil, bir
- * kolaylık özelliğidir; hata döndürüp kullanıcıyı durdurmak orantısız olurdu.
+ * Validates data read from local storage before using it. A malformed local
+ * copy is ignored because it is optional convenience data, not a business rule.
  */
 export function parseDraft(raw: string | null): ActivityDraft | null {
   if (!raw) return null;
@@ -46,17 +42,15 @@ export function parseDraft(raw: string | null): ActivityDraft | null {
   }
 }
 
-/** Kaydetmeye değer mi? Boş ya da yalnız boşluk olan metin saklanmaz. */
+/** Whether the draft contains text worth saving. */
 export function hasContent(fields: DraftFields): boolean {
   return fields.title.trim() !== "" || fields.description.trim() !== "";
 }
 
 /**
- * Geri getirmeyi **teklif etmeye** değer mi?
+ * Whether restoring the draft should be offered.
  *
- * Formda zaten aynı metin varsa teklif etmek anlamsız: kullanıcı düzeltme
- * ekranını açtığında "yarım kalmış kaydınız var" uyarısı görür ve o uyarı
- * kendi kaydettiği metinden bahsediyor olurdu.
+ * Offering it when the form already contains the same text would be confusing.
  */
 export function differsFromCurrent(
   draft: DraftFields,
@@ -71,16 +65,37 @@ export function differsFromCurrent(
   return a.length !== b.length || a.some((id, i) => id !== b[i]);
 }
 
-/** Ne zaman yazıldığını insan diliyle söyler. */
-export function savedAtLabel(savedAt: string, now: Date): string {
-  const fark = now.getTime() - new Date(savedAt).getTime();
-  const dakika = Math.floor(fark / 60_000);
+export interface SavedAtLabels {
+  justNow: string;
+  minutesAgo: (count: number) => string;
+  hoursAgo: (count: number) => string;
+}
 
-  if (dakika < 1) return "az önce";
-  if (dakika < 60) return `${dakika} dakika önce`;
+function defaultSavedAtLabels(locale: Locale): SavedAtLabels {
+  const t = createTranslator(locale);
+  return {
+    justNow: t("notifications.relativeTime.justNow"),
+    minutesAgo: (count) => t("notifications.relativeTime.minutes", { count }),
+    hoursAgo: (count) => t("notifications.relativeTime.hours", { count }),
+  };
+}
 
-  const saat = Math.floor(dakika / 60);
-  if (saat < 24) return `${saat} saat önce`;
+/** Formats the time at which a local draft was saved. */
+export function savedAtLabel(
+  savedAt: string,
+  now: Date,
+  locale: Locale = DEFAULT_LOCALE,
+  labels?: SavedAtLabels,
+): string {
+  const resolvedLabels = labels ?? defaultSavedAtLabels(locale);
+  const diff = now.getTime() - new Date(savedAt).getTime();
+  const minutes = Math.floor(diff / 60_000);
 
-  return formatInstant(new Date(savedAt));
+  if (minutes < 1) return resolvedLabels.justNow;
+  if (minutes < 60) return resolvedLabels.minutesAgo(minutes);
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return resolvedLabels.hoursAgo(hours);
+
+  return formatInstant(new Date(savedAt), locale);
 }

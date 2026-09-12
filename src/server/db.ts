@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 
-// Next.js geliştirme modunda modüller yeniden yüklendiğinde her seferinde yeni
-// bir bağlantı havuzu açılmasın diye istemci global nesnede tutulur.
+
+
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };

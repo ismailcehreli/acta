@@ -31,8 +31,8 @@ async function createPeriod(
   });
 }
 
-describe('"faaliyet beklenmiyor" dönemi kısıtları', () => {
-  it("bitiş tarihi başlangıçtan önce olamaz", async () => {
+describe("no activity period constraints", () => {
+  it("end date cannot be before start date", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
     const manager = await createUser(unit.id);
@@ -42,7 +42,7 @@ describe('"faaliyet beklenmiyor" dönemi kısıtları', () => {
     ).rejects.toThrow(/NoActivityPeriod_valid_range/);
   });
 
-  it("aynı kullanıcı için çakışan aralık eklenemez", async () => {
+  it("cannot add overlapping range for same user", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
     const manager = await createUser(unit.id);
@@ -54,7 +54,7 @@ describe('"faaliyet beklenmiyor" dönemi kısıtları', () => {
     ).rejects.toThrow(/NoActivityPeriod_no_overlap/);
   });
 
-  it("bitişik ama çakışmayan aralıklar eklenebilir", async () => {
+  it("allows contiguous non-overlapping ranges", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
     const manager = await createUser(unit.id);
@@ -70,7 +70,7 @@ describe('"faaliyet beklenmiyor" dönemi kısıtları', () => {
     expect(second.startDate.toISOString()).toBe("2026-08-22T00:00:00.000Z");
   });
 
-  it("farklı kullanıcıların aralıkları çakışabilir", async () => {
+  it("ranges for different users can overlap", async () => {
     const unit = await createOrgUnit();
     const first = await createUser(unit.id);
     const second = await createUser(unit.id);
@@ -88,11 +88,11 @@ describe('"faaliyet beklenmiyor" dönemi kısıtları', () => {
   });
 });
 
-describe("çalışma takvimi tek kayıt kısıtı", () => {
-  it("şirket takvimi kurulabilir", async () => {
+describe("work calendar singleton constraint", () => {
+  it("allows creating company work calendar", async () => {
     const calendar = await testDb.workCalendar.create({
       data: {
-        // Pazartesi–Cuma, 08:30–18:00 (yerel saat, dakika cinsinden).
+        // Monday-Friday, 08:30-18:00 (local time in minutes)
         workingDays: [1, 2, 3, 4, 5],
         workStartMinute: 510,
         workEndMinute: 1080,
@@ -102,7 +102,7 @@ describe("çalışma takvimi tek kayıt kısıtı", () => {
     expect(calendar.id).toBe(1);
   });
 
-  it("ikinci bir takvim kaydı yazılamaz", async () => {
+  it("rejects second work calendar record", async () => {
     await testDb.workCalendar.create({
       data: { workingDays: [1, 2, 3, 4, 5], workStartMinute: 510, workEndMinute: 1080 },
     });
@@ -120,69 +120,65 @@ describe("çalışma takvimi tek kayıt kısıtı", () => {
   });
 });
 
-// İZİN DÖNEMİ SİLİNMEZ, İPTAL EDİLİR (denetim 21.08.2026, bulgu 7).
-//
-// Kural veritabanında durur çünkü değeri tam olarak orada: vekilin geçmiş
-// görünürlüğü bu satırdan türüyor (§4.5) ve uygulama katmanındaki bir hata
-// satırı silerse, vekil vekâlet ettiği dönemin kayıtlarını sessizce kaybeder.
-describe("dönem satırı fiziksel silinemez", () => {
-  it("silme denemesi veritabanı tarafından reddedilir", async () => {
-    const birim = await createOrgUnit({ name: "Kalıphane" });
-    const kisi = await createUser(birim.id, { email: "kisi@ornek.test" });
-    const donem = await createPeriod(kisi.id, kisi.id, "2026-08-18", "2026-08-22");
+// Leave periods are not physically deleted; they are cancelled (audit 21.08.2026, finding 7).
+describe("leave period physical deletion forbidden", () => {
+  it("rejects physical deletion at database level", async () => {
+    const unit = await createOrgUnit({ name: "Workshop" });
+    const user = await createUser(unit.id, { email: "user@example.test" });
+    const period = await createPeriod(user.id, user.id, "2026-08-18", "2026-08-22");
 
     await expect(
-      testDb.noActivityPeriod.delete({ where: { id: donem.id } }),
+      testDb.noActivityPeriod.delete({ where: { id: period.id } }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
 
     expect(
-      await testDb.noActivityPeriod.count({ where: { id: donem.id } }),
+      await testDb.noActivityPeriod.count({ where: { id: period.id } }),
     ).toBe(1);
   });
 
-  it("iptal alanları eksik yazılamaz", async () => {
-    const birim = await createOrgUnit({ name: "Kalıphane" });
-    const kisi = await createUser(birim.id, { email: "kisi@ornek.test" });
-    const donem = await createPeriod(kisi.id, kisi.id, "2026-08-18", "2026-08-22");
+  it("requires complete cancellation fields", async () => {
+    const unit = await createOrgUnit({ name: "Workshop" });
+    const user = await createUser(unit.id, { email: "user@example.test" });
+    const period = await createPeriod(user.id, user.id, "2026-08-18", "2026-08-22");
 
-    // Gerekçesiz iptal: "bu dönem neden yok" sorusunu cevaplayamaz.
+    // Cancellation without reason rejected
     await expect(
       testDb.noActivityPeriod.update({
-        where: { id: donem.id },
-        data: { cancelledAt: new Date(), cancelledById: kisi.id },
+        where: { id: period.id },
+        data: { cancelledAt: new Date(), cancelledById: user.id },
       }),
     ).rejects.toThrow(/NoActivityPeriod_cancellation_complete/);
 
-    // Boşluktan ibaret gerekçe de sayılmaz.
+    // Whitespace only reason rejected
     await expect(
       testDb.noActivityPeriod.update({
-        where: { id: donem.id },
+        where: { id: period.id },
         data: {
           cancelledAt: new Date(),
-          cancelledById: kisi.id,
+          cancelledById: user.id,
           cancellationReason: "   ",
         },
       }),
     ).rejects.toThrow(/NoActivityPeriod_cancellation_complete/);
   });
 
-  it("iptal edilmiş dönem çakışma kısıtına girmez", async () => {
-    const birim = await createOrgUnit({ name: "Kalıphane" });
-    const kisi = await createUser(birim.id, { email: "kisi@ornek.test" });
-    const donem = await createPeriod(kisi.id, kisi.id, "2026-08-18", "2026-08-22");
+  it("cancelled period does not conflict with exclusion constraint", async () => {
+    const unit = await createOrgUnit({ name: "Workshop" });
+    const user = await createUser(unit.id, { email: "user@example.test" });
+    const period = await createPeriod(user.id, user.id, "2026-08-18", "2026-08-22");
 
     await testDb.noActivityPeriod.update({
-      where: { id: donem.id },
+      where: { id: period.id },
       data: {
         cancelledAt: new Date(),
-        cancelledById: kisi.id,
-        cancellationReason: "yanlış tarih",
+        cancelledById: user.id,
+        cancellationReason: "wrong date",
       },
     });
 
-    // Aynı tarihlere doğrusu girilebilmeli.
+    // Can now insert same dates again
     await expect(
-      createPeriod(kisi.id, kisi.id, "2026-08-18", "2026-08-22"),
+      createPeriod(user.id, user.id, "2026-08-18", "2026-08-22"),
     ).resolves.toBeTruthy();
   });
 });

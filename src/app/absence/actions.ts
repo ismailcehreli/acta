@@ -8,24 +8,27 @@ import {
 } from "@/server/absence/service";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import { localizeServiceMessage } from "@/shared/i18n/message";
 
 import type { AbsenceFormState } from "./form-state";
 
-// Kişinin kendi "faaliyet beklenmiyor" dönemi (Görev 11.8).
+
 //
-// Kimin adına kayıt açıldığı **oturumdan** gelir; formdan değil. Başkasının
-// adına dönem açan bir istek burada hiç kurulamaz.
+
+
 
 export async function markOwnAbsenceAction(
   _previous: AbsenceFormState,
   formData: FormData,
 ): Promise<AbsenceFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı.", success: null };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound"), success: null };
 
   const rawDeputy = formData.get("deputyId");
 
-  const sonuc = await markOwnNoActivityPeriod(
+  const result = await markOwnNoActivityPeriod(
     prisma,
     user.id,
     {
@@ -38,15 +41,20 @@ export async function markOwnAbsenceAction(
     new Date(),
   );
 
-  if (!sonuc.ok) return { error: sonuc.message, success: null };
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "absence", result),
+      success: null,
+    };
+  }
 
   revalidatePath("/absence");
   return {
     error: null,
     success:
-      sonuc.status === "PENDING"
-        ? "Talebiniz gönderildi. Yöneticiniz onaylayana kadar bu günler geçerli sayılmaz."
-        : "Kaydedildi. Bu günlerde hatırlatma gitmeyecek ve katılım hesabında beklenen gün sayılmayacaksınız.",
+      result.status === "PENDING"
+        ? t("screens.absence.requestSubmitted")
+        : t("screens.absence.saved"),
   };
 }
 
@@ -55,9 +63,10 @@ export async function cancelOwnAbsenceAction(
   formData: FormData,
 ): Promise<AbsenceFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı.", success: null };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound"), success: null };
 
-  const sonuc = await cancelNoActivityPeriod(
+  const result = await cancelNoActivityPeriod(
     prisma,
     user.id,
     String(formData.get("id") ?? ""),
@@ -65,8 +74,13 @@ export async function cancelOwnAbsenceAction(
     new Date(),
   );
 
-  if (!sonuc.ok) return { error: sonuc.message, success: null };
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "absence", result),
+      success: null,
+    };
+  }
 
   revalidatePath("/absence");
-  return { error: null, success: "Kayıt iptal edildi." };
+  return { error: null, success: t("screens.absence.recordCancelled") };
 }

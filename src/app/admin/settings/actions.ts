@@ -29,23 +29,30 @@ import { saveSettings } from "@/server/settings/system-settings";
 import { smtpSettingsSchema, testEmailSchema } from "@/shared/schemas/settings";
 import { classifyLegacyDemoOriginsSchema } from "@/shared/schemas/demo";
 import { createSmtpTransport } from "@/worker/notifications/transport";
+import { getTranslations } from "@/server/i18n/server";
+import type { TranslateFunction } from "@/shared/i18n";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 
 import { findSettingsSection } from "./settings-sections";
 import type { SettingsFormState } from "./form-state";
 
-// Ayar değişikliği yalnız sistem yöneticisinindir (§15.1). Ekranın gizlenmesi
-// güvenlik değildir; asıl kontrol burada.
+
+
 
 export async function saveSettingsAction(
   _previous: SettingsFormState,
   formData: FormData,
 ): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const sectionSlug = String(formData.get("section") ?? "");
   const section = findSettingsSection(sectionSlug);
   if (!section || section.groups.length === 0) {
-    return { error: "Ayar bölümü bulunamadı.", success: null };
+    return { error: t("screens.settingsPage.actions.sectionNotFound"), success: null };
   }
 
   const values: Record<string, string> = {};
@@ -54,7 +61,7 @@ export async function saveSettingsAction(
     section.groups.some((group) => group === item.group),
   )) {
     if (definition.type === "boolean") {
-      // İşaretlenmemiş kutu form verisinde hiç yer almaz; "kapalı" demektir.
+
       values[definition.key] = formData.get(definition.key) === "on" ? "true" : "false";
       continue;
     }
@@ -64,17 +71,24 @@ export async function saveSettingsAction(
     values[definition.key] = raw;
   }
 
-  const sonuc = await saveSettings(prisma, values, me.id);
-  if (!sonuc.ok) return { error: sonuc.message, success: null };
+  const result = await saveSettings(prisma, values, me.id);
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "settings", result),
+      success: null,
+    };
+  }
 
   revalidatePath("/admin/settings", "layout");
 
   return {
     error: null,
     success:
-      sonuc.changed.length === 0
-        ? "Değişiklik yok."
-        : `${sonuc.changed.length} ayar güncellendi. Yeni değerler hemen geçerli.`,
+      result.changed.length === 0
+        ? t("screens.settingsPage.actions.noChanges")
+        : t("screens.settingsPage.actions.settingsUpdated", {
+            count: result.changed.length,
+          }),
   };
 }
 
@@ -83,6 +97,7 @@ export async function saveSmtpAction(
   formData: FormData,
 ): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const rawPassword = formData.get("password");
   const parsed = smtpSettingsSchema.safeParse({
@@ -90,13 +105,16 @@ export async function saveSmtpAction(
     port: formData.get("port"),
     secure: formData.get("secure") === "on",
     user: formData.get("user") ?? "",
-    // Boş parola "değiştirme" demektir, "sil" değil.
+    // An empty password means "keep the current value", not "delete it".
     password: typeof rawPassword === "string" && rawPassword !== "" ? rawPassword : undefined,
     from: formData.get("from"),
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz", success: null };
+    return {
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
+      success: null,
+    };
   }
 
   await saveSmtpSettings(prisma, parsed.data, undefined, me.id);
@@ -104,40 +122,43 @@ export async function saveSmtpAction(
 
   return {
     error: null,
-    success:
-      "SMTP ayarları kaydedildi. İşleyici en geç bir tur içinde yeni ayarla çalışır.",
+    success: t("screens.settingsPage.actions.smtpSaved"),
   };
 }
 
 export async function clearSmtpPasswordAction(): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   await clearSmtpPassword(prisma, me.id);
   revalidatePath("/admin/settings", "layout");
 
-  return { error: null, success: "Kayıtlı SMTP parolası silindi." };
+  return { error: null, success: t("screens.settingsPage.actions.smtpPasswordDeleted") };
 }
 
 /**
- * Sınama e-postası. Ayarların **gerçekten çalıştığını** kaydetmeden önce
- * görmek gerekir: yanlış bir sunucu adresi yüzünden bildirimlerin sessizce
- * birikmesi, fark edilmesi en zor arızalardan biridir (§12.4).
+ * Test email. Settings must be verified without waiting for a notification to
+ * accumulate silently because of a wrong server address (§12.4).
  */
 export async function sendTestEmailAction(
   _previous: SettingsFormState,
   formData: FormData,
 ): Promise<SettingsFormState> {
   await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = testEmailSchema.safeParse({ to: formData.get("to") });
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz", success: null };
+    return {
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
+      success: null,
+    };
   }
 
   const settings = await readSmtpSettings(prisma);
   if (!settings) {
     return {
-      error: "SMTP ayarları eksik; önce sunucu adresi ve gönderen adresini kaydedin.",
+      error: t("screens.settingsPage.actions.smtpIncomplete"),
       success: null,
     };
   }
@@ -146,62 +167,71 @@ export async function sendTestEmailAction(
     const transport = createSmtpTransport(settings);
     await transport.send({
       to: parsed.data.to,
-      subject: "Faaliyet Raporlama Sistemi — sınama e-postası",
-      text:
-        "Bu bir sınama e-postasıdır. Bu iletiyi aldıysanız SMTP ayarları " +
-        "çalışıyor demektir.\n\nFaaliyet Raporlama Sistemi",
+      subject: t("screens.settingsPage.actions.testEmailSubject"),
+      text: t("screens.settingsPage.actions.testEmailBody"),
     });
   } catch (error) {
-    // Hata yutulmaz: BT sorumlusu neyin yanlış olduğunu görmeli. Ama ham
-    // Node hatası çoğu zaman ne yapılacağını söylemez; tanıdığımız
-    // arızaları çevirip **ne yapılacağını** yazıyoruz.
-    const mesaj = error instanceof Error ? error.message : String(error);
-    return { error: smtpHatasi(mesaj, settings.host), success: null };
+    // Do not swallow errors: IT support needs to know what failed. Keep the raw
+    // Raw Node errors often omit the next step, so translate known failures into
+    // actionable guidance.
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: translateSmtpError(message, settings.host, t), success: null };
   }
 
-  return { error: null, success: `Sınama e-postası ${parsed.data.to} adresine gönderildi.` };
+  return {
+    error: null,
+    success: t("screens.settingsPage.actions.testEmailSent", {
+      address: parsed.data.to,
+    }),
+  };
 }
 
 /**
- * Bilinen SMTP arızalarını ne yapılacağını söyleyen bir cümleye çevirir.
+ * Translate known SMTP failures into actionable messages.
  *
- * Ham hata metni de korunuyor: çeviremediğimiz bir arızada BT sorumlusu
- * yine de aslını görmeli. Sessizce "gönderilemedi" demek, arızayı gizlemek
- * olurdu.
+ * The raw error text is also preserved: when a failure cannot be translated, IT support
+ * still needs to see the original. Silently saying "could not send" would hide
+ * the failure.
  */
-function smtpHatasi(mesaj: string, host: string): string {
-  // Sertifika, sunucu adının başka bir alan adına ait olduğunu söylüyor.
-  // En sık sebebi yanlış yazılmış sunucu adresi.
-  const altName = mesaj.match(/is not in the cert's altnames:\s*(.+)$/);
-  if (mesaj.includes("does not match certificate") && altName) {
-    const dogrular = [...altName[1].matchAll(/DNS:([^\s,]+)/g)]
-      .map((eslesme) => eslesme[1])
-      .filter((ad) => !ad.startsWith("*."));
+function translateSmtpError(
+  message: string,
+  host: string,
+  t: TranslateFunction,
+): string {
+  // The certificate says the server name belongs to another domain.
+  // The most common cause is a mistyped server address.
+  const subName = message.match(/is not in the cert's altnames:\s*(.+)$/);
+  if (message.includes("does not match certificate") && subName) {
+    const validAddresses = [...subName[1].matchAll(/DNS:([^\s,]+)/g)]
+      .map((match) => match[1])
+      .filter((name) => !name.startsWith("*."));
 
-    const oneri =
-      dogrular.length > 0
-        ? ` Sunucunun sertifikası şu adresler için geçerli: ${dogrular.join(", ")}. Sunucu adresini bunlardan biriyle değiştirin.`
+    const suggestion =
+      validAddresses.length > 0
+        ? t("screens.settingsPage.actions.smtpCertificateSuggestion", {
+            addresses: validAddresses.join(", "),
+          })
         : "";
 
-    return (
-      `Sunucu adresi "${host}" ile sunucunun sertifikası uyuşmuyor; ` +
-      `bağlantı güvenli olmadığı için reddedildi.${oneri} ` +
-      `(Ham hata: ${mesaj})`
-    );
+    return t("screens.settingsPage.actions.smtpCertificateMismatch", {
+      host,
+      suggestion,
+      message,
+    });
   }
 
-  if (mesaj.includes("Invalid login") || mesaj.includes("535")) {
-    return `Kullanıcı adı ya da parola kabul edilmedi. (Ham hata: ${mesaj})`;
+  if (message.includes("Invalid login") || message.includes("535")) {
+    return t("screens.settingsPage.actions.smtpCredentialsRejected", { message });
   }
 
-  if (mesaj.includes("ECONNREFUSED") || mesaj.includes("ETIMEDOUT")) {
-    return (
-      `"${host}" adresine bağlanılamadı. Sunucu adresi, port ve güvenlik ` +
-      `duvarı kurallarını kontrol edin. (Ham hata: ${mesaj})`
-    );
+  if (message.includes("ECONNREFUSED") || message.includes("ETIMEDOUT")) {
+    return t("screens.settingsPage.actions.smtpConnectionFailed", {
+      host,
+      message,
+    });
   }
 
-  return `Gönderilemedi: ${mesaj}`;
+  return t("screens.settingsPage.actions.smtpSendFailed", { message });
 }
 
 export async function saveBrandingAction(
@@ -209,81 +239,94 @@ export async function saveBrandingAction(
   formData: FormData,
 ): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
-  // İkisi de **zorunlu değil**: boş bırakılırsa varsayılana dönülür. Sekme
-  // başlığı ve alt şerit her sayfada göründüğü için bir değer hep bulunmalı.
-  const baslik = String(formData.get("pageTitle") ?? "").trim();
-  const altSerit = String(formData.get("footerText") ?? "").trim();
+  // Neither field is required: an empty value falls back to the default. The
+  // tab title and footer appear on every page, so a value must always exist.
+  const title = String(formData.get("pageTitle") ?? "").trim();
+  const subStrip = String(formData.get("footerText") ?? "").trim();
 
-  if (baslik.length > 100) {
-    return { error: "Sayfa başlığı en fazla 100 karakter olabilir.", success: null };
+  if (title.length > 100) {
+    return { error: t("screens.settingsPage.actions.pageTitleTooLong"), success: null };
   }
-  if (altSerit.length > 200) {
-    return { error: "Alt şerit metni en fazla 200 karakter olabilir.", success: null };
+  if (subStrip.length > 200) {
+    return { error: t("screens.settingsPage.actions.footerTooLong"), success: null };
   }
 
   await saveBrandingTexts(
     prisma,
     {
-      pageTitle: baslik || DEFAULT_PAGE_TITLE,
-      footerText: altSerit || DEFAULT_FOOTER_TEXT,
+      pageTitle: title || DEFAULT_PAGE_TITLE,
+      footerText: subStrip || DEFAULT_FOOTER_TEXT,
     },
     me.id,
   );
 
-  const dosya = formData.get("logo");
-  if (dosya instanceof File && dosya.size > 0) {
-    const sonuc = await saveLogo(
+  const file = formData.get("logo");
+  if (file instanceof File && file.size > 0) {
+    const result = await saveLogo(
       prisma,
-      { type: dosya.type, content: Buffer.from(await dosya.arrayBuffer()) },
+      { type: file.type, content: Buffer.from(await file.arrayBuffer()) },
       me.id,
     );
 
-    if (!sonuc.ok) return { error: sonuc.message, success: null };
+    if (!result.ok) {
+      return {
+        error: localizeServiceMessage(t, "branding", result),
+        success: null,
+      };
+    }
   }
 
   revalidatePath("/", "layout");
 
-  return { error: null, success: "Özelleştirme ayarları kaydedildi." };
+  return { error: null, success: t("screens.settingsPage.actions.customizationSaved") };
 }
 
 export async function removeLogoAction(): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   await removeLogo(prisma, me.id);
   revalidatePath("/", "layout");
 
-  return { error: null, success: "Logo kaldırıldı." };
+  return { error: null, success: t("screens.settingsPage.actions.logoRemoved") };
 }
 
 
 /**
- * Tarayıcı bildirimleri kurulumu (Görev 5.3b).
+ * Browser notification setup (Task 5.3b).
  *
- * **İki ayrı iş, tek düğmede toplanmıyor:** iletişim adresini değiştirmek
- * zararsız, anahtarları yenilemek bütün abonelikleri öldürüyor. Eskiden ikisi
- * aynı yoldan geçiyordu ve adres değiştirmek fiilen imkânsızdı — kod "zaten
- * anahtar var" diye reddediyordu (21.08.2026, ürün sahibi bildirdi).
+ * **Two separate operations stay separate:** changing the contact address is
+ * harmless, while rotating keys invalidates every subscription. Previously both
+ * used the same path, making address changes impossible because the code rejected
+ * them when a key already existed (21.08.2026, reported by the product owner).
  */
 export async function saveVapidAction(
   _previous: SettingsFormState,
   formData: FormData,
 ): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
   const subject = String(formData.get("subject") ?? "");
 
-  // Kurulu sistemde "Kaydet" yalnız adresi günceller.
-  const mevcut = await readVapidView(prisma);
-  if (mevcut.configured && formData.get("replace") !== "on") {
-    const adres = await saveVapidSubject(prisma, subject, me.id);
+  // On an installed system, "Save" changes only the contact address.
+  const currentVapid = await readVapidView(prisma);
+  if (currentVapid.configured && formData.get("replace") !== "on") {
+    const address = await saveVapidSubject(prisma, subject, me.id);
 
-    if (!adres.ok) return { error: adres.message, success: null };
+    if (!address.ok) {
+      return {
+        error: localizeServiceMessage(t, "push", address),
+        success: null,
+      };
+    }
 
     revalidatePath("/admin/settings", "layout");
-    return { error: null, success: "İletişim adresi kaydedildi.", };
+    return { error: null, success: t("screens.settingsPage.actions.contactSaved") };
   }
 
-  const sonuc = await generateVapidKeys(
+  const result = await generateVapidKeys(
     prisma,
     {
       subject,
@@ -292,39 +335,44 @@ export async function saveVapidAction(
     me.id,
   );
 
-  if (!sonuc.ok) return { error: sonuc.message, success: null };
+  if (!result.ok) {
+    return {
+      error: localizeServiceMessage(t, "push", result),
+      success: null,
+    };
+  }
 
   revalidatePath("/admin/settings", "layout");
 
   return {
     error: null,
-    success: sonuc.replaced
-      ? "Yeni anahtar çifti üretildi. Mevcut abonelikler geçersizleşti; kullanıcıların bildirimi yeniden açması gerekiyor."
-      : "Anahtar çifti üretildi. Kullanıcılar profil sayfalarından bildirimi açabilir.",
+    success: result.replaced
+      ? t("screens.settingsPage.actions.vapidKeysReplaced")
+      : t("screens.settingsPage.actions.vapidKeysGenerated"),
   };
 }
 
-// ── Örnek veri ────────────────────────────────────────────────────────
+// ── Demo data ────────────────────────────────────────────────────────
 //
-// Boş bir sistemde ekranların çalıştığı görülemez. Bu iki eylem, uygulamanın
-// bütün özelliklerini kapsayan bir örnek şirket kurar ve gerektiğinde temizler.
+// An empty system cannot demonstrate whether the screens work. These two actions
+// install a sample company covering the application's features and can clean it up.
 //
-// **Silme, projedeki "fiziksel silme yok" kuralının dar bir istisnasıdır**
-// (ürün sahibi kararı, 20.08.2026) ve yalnızca `@example.test` damgalı satırlara
-// dokunur. Demo bir kayda gerçek veri bağlanmışsa yabancı anahtar işlemi
-// reddeder ve hiçbir şey silinmez.
+// **Deletion is a narrow exception to the project's "no physical deletion" rule**
+// (product-owner decision, 20.08.2026) and touches only rows marked with
+// `@example.test`. If real data references a demo record, the foreign key rejects
+// the operation and nothing is deleted.
 
 export async function installDemoAction(): Promise<SettingsFormState> {
   await requireSystemAdmin();
+  const t = await getTranslations();
 
-  const sonuc = await installDemoData(prisma, {
+  const result = await installDemoData(prisma, {
     password: process.env.DEMO_PASSWORD ?? DEMO_DEFAULT_PASSWORD,
   });
 
-  if (!sonuc.ok) {
+  if (!result.ok) {
     return {
-      error:
-        "Kök birim yok; örnek veri kurulamadı. Önce organizasyon ağacının kökü oluşturulmalı.",
+      error: t("screens.settingsPage.actions.demoNoRoot"),
       success: null,
     };
   }
@@ -332,9 +380,9 @@ export async function installDemoAction(): Promise<SettingsFormState> {
   revalidatePath("/admin/settings", "layout");
   return {
     error: null,
-    success: `Örnek veri kuruldu. Örnek hesapların parolası: ${
-      process.env.DEMO_PASSWORD ?? DEMO_DEFAULT_PASSWORD
-    }`,
+    success: t("screens.settingsPage.actions.demoInstalled", {
+      password: process.env.DEMO_PASSWORD ?? DEMO_DEFAULT_PASSWORD,
+    }),
   };
 }
 
@@ -343,44 +391,55 @@ export async function purgeDemoAction(
   formData: FormData,
 ): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
-  // Yazarak onay: tek tıkla geri alınamaz bir temizlik yapılmaz.
-  const onay = String(formData.get("onay") ?? "").trim();
-  const upper = onay.toUpperCase();
-  if (upper !== "DELETE" && onay.toLocaleUpperCase("tr-TR") !== "SİL") {
+  // Require typed confirmation; one click must not trigger irreversible cleanup.
+  const confirmation = String(formData.get("confirmation") ?? "").trim();
+  const upper = confirmation.toUpperCase();
+  if (upper !== "DELETE") {
     return {
-      error: "Silmek için onay kutusuna SİL veya DELETE yazmalısınız.",
+      error: t("screens.settingsPage.actions.deleteConfirmation"),
       success: null,
     };
   }
 
-  const sonuc = await purgeDemoData(prisma, me.id);
+  const result = await purgeDemoData(prisma, me.id);
 
-  if (!sonuc.ok && sonuc.error === "nothing_to_purge") {
-    return { error: "Silinecek örnek veri bulunamadı.", success: null };
+  if (!result.ok && result.error === "nothing_to_purge") {
+    return { error: t("screens.settingsPage.actions.noDemoData"), success: null };
   }
 
-  if (!sonuc.ok && sonuc.error === "legacy_demo_origin_unknown") {
+  if (!result.ok && result.error === "legacy_demo_origin_unknown") {
     return {
-      error:
-        "Eski örnek kurulumundaki birimlerin kökeni belirsiz. Önce aşağıdaki her birimi sınıflandırın; hiçbir şey silinmedi.",
+      error: t("screens.settingsPage.actions.legacyOriginUnknown"),
       success: null,
     };
   }
 
-  if (!sonuc.ok) {
-    console.error("[örnek veri] Temizleme engellendi:", sonuc.detail);
+  if (!result.ok) {
+    console.error("[demo data] Purge blocked:", result.detail);
     return {
-      error: `Örnek veri silinemedi, hiçbir şey silinmedi. Örnek kayıtlara gerçek veri bağlanmış: ${sonuc.detail}`,
+      error: t("screens.settingsPage.actions.demoPurgeBlocked", {
+        detail: result.detail,
+      }),
       success: null,
     };
   }
 
   revalidatePath("/admin/settings", "layout");
-  const o = sonuc.summary;
+  const o = result.summary;
   return {
     error: null,
-    success: `Örnek veri silindi: ${o.users} kullanıcı, ${o.activities} faaliyet, ${o.conversations} konuşma, ${o.followUps} takip maddesi, ${o.helpArticles} yardım yazısı, ${o.notifications} bildirim, ${o.orgUnits} birim, ${o.files} dosya.`,
+    success: t("screens.settingsPage.actions.demoPurged", {
+      users: o.users,
+      activities: o.activities,
+      conversations: o.conversations,
+      followUps: o.followUps,
+      helpArticles: o.helpArticles,
+      notifications: o.notifications,
+      orgUnits: o.orgUnits,
+      files: o.files,
+    }),
   };
 }
 
@@ -389,6 +448,7 @@ export async function classifyLegacyDemoOriginsAction(
   formData: FormData,
 ): Promise<SettingsFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const ids = formData
     .getAll("orgUnitId")
@@ -402,23 +462,26 @@ export async function classifyLegacyDemoOriginsAction(
   if (!parsed.success) {
     return {
       error:
-        parsed.error.issues[0]?.message ??
-        "Her birim için bir köken seçmelisiniz.",
+        localizeValidationIssue(
+          t,
+          parsed.error.issues[0],
+          "screens.settingsPage.actions.selectOriginEveryUnit",
+        ),
       success: null,
     };
   }
 
-  const sonuc = await classifyLegacyDemoOrgUnits(
+  const result = await classifyLegacyDemoOrgUnits(
     prisma,
     me.id,
     parsed.data.selections,
   );
-  if (!sonuc.ok) {
+  if (!result.ok) {
     return {
       error:
-        sonuc.error === "candidate_set_changed"
-          ? "Birim listesi bu form açıldıktan sonra değişti. Sayfayı yenileyip bütün birimleri yeniden sınıflandırın."
-          : "Geçersiz köken seçimi.",
+        result.error === "candidate_set_changed"
+          ? t("screens.settingsPage.actions.candidateSetChanged")
+          : t("screens.settingsPage.actions.invalidOrigin"),
       success: null,
     };
   }
@@ -426,6 +489,8 @@ export async function classifyLegacyDemoOriginsAction(
   revalidatePath("/admin/settings", "layout");
   return {
     error: null,
-    success: `${sonuc.classified} birimin kökeni kaydedildi. Örnek veriyi artık güvenle silebilirsiniz.`,
+    success: t("screens.settingsPage.actions.originsSaved", {
+      count: result.classified,
+    }),
   };
 }

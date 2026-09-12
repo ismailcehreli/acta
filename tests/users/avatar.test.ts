@@ -15,15 +15,9 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Profil resmi (Görev 11.5).
-//
-// İki kural pazarlığa kapalı:
-//
-//   1. Tür **içerik imzasından** doğrulanır, uzantıdan değil (§15.4). Uzantısı
-//      `.png` olan bir SVG ya da çalıştırılabilir buradan geçemez.
-//   2. SVG **kabul edilmez.** Marka logosunda kabul ediliyor çünkü onu tek bir
-//      sistem yöneticisi yüklüyor; avatarı herkes yüklüyor ve SVG betik
-//      taşıyabilir.
+// Avatar image validation and storage:
+// 1. File type is verified from magic bytes, not filename extension.
+// 2. SVG is rejected for avatars to prevent stored XSS attacks.
 
 const PNG = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489" +
@@ -38,161 +32,152 @@ const SVG = Buffer.from(
   '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
 );
 
-let depo: string;
+let storageDir: string;
 
 beforeEach(async () => {
   await resetDatabase();
-  depo = await mkdtemp(path.join(tmpdir(), "avatar-testi-"));
-  process.env.AVATAR_STORAGE_DIR = depo;
+  storageDir = await mkdtemp(path.join(tmpdir(), "avatar-test-"));
+  process.env.AVATAR_STORAGE_DIR = storageDir;
 });
 
 afterEach(async () => {
-  await rm(depo, { recursive: true, force: true });
+  await rm(storageDir, { recursive: true, force: true });
   delete process.env.AVATAR_STORAGE_DIR;
 });
 
-async function kisi() {
-  const unit = await createOrgUnit({ name: "Kalıphane", type: "Kök" });
-  return createUser(unit.id, { fullName: "Kadir Usta" });
+async function createUserHelper() {
+  const unit = await createOrgUnit({ name: "Workshop", type: "Root" });
+  return createUser(unit.id, { fullName: "Lead Craftsman" });
 }
 
-describe("tür doğrulaması", () => {
-  it("PNG kabul edilir ve uzantı kaydedilir", async () => {
-    const kadir = await kisi();
+describe("file type validation", () => {
+  it("accepts PNG and stores extension", async () => {
+    const user = await createUserHelper();
 
-    const sonuc = await saveAvatar(testDb, kadir.id, PNG);
+    const result = await saveAvatar(testDb, user.id, PNG);
 
-    expect(sonuc.ok).toBe(true);
-    const guncel = await testDb.user.findUnique({ where: { id: kadir.id } });
-    expect(guncel?.avatarExtension).toBe("png");
+    expect(result.ok).toBe(true);
+    const updated = await testDb.user.findUnique({ where: { id: user.id } });
+    expect(updated?.avatarExtension).toBe("png");
   });
 
-  it("JPEG kabul edilir", async () => {
-    const kadir = await kisi();
+  it("accepts JPEG", async () => {
+    const user = await createUserHelper();
 
-    expect((await saveAvatar(testDb, kadir.id, JPEG)).ok).toBe(true);
+    expect((await saveAvatar(testDb, user.id, JPEG)).ok).toBe(true);
   });
 
-  // SVG betik taşıyabilir ve avatarı herkes yüklüyor.
-  it("SVG reddedilir", async () => {
-    const kadir = await kisi();
+  it("rejects SVG", async () => {
+    const user = await createUserHelper();
 
-    const sonuc = await saveAvatar(testDb, kadir.id, SVG);
+    const result = await saveAvatar(testDb, user.id, SVG);
 
-    expect(sonuc.ok).toBe(false);
-    const guncel = await testDb.user.findUnique({ where: { id: kadir.id } });
-    expect(guncel?.avatarExtension).toBeNull();
+    expect(result.ok).toBe(false);
+    const updated = await testDb.user.findUnique({ where: { id: user.id } });
+    expect(updated?.avatarExtension).toBeNull();
   });
 
-  // Tür uzantıdan değil içerik imzasından okunuyor: dosyanın adı ne olursa
-  // olsun içeriği ne ise o geçerli.
-  it("resim olmayan içerik reddedilir", async () => {
-    const kadir = await kisi();
+  it("rejects non-image content", async () => {
+    const user = await createUserHelper();
 
-    const sonuc = await saveAvatar(testDb, kadir.id, Buffer.from("MZ\x90\x00"));
+    const result = await saveAvatar(testDb, user.id, Buffer.from("MZ\x90\x00"));
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 
-  it("boş dosya reddedilir", async () => {
-    const kadir = await kisi();
+  it("rejects empty file", async () => {
+    const user = await createUserHelper();
 
-    expect((await saveAvatar(testDb, kadir.id, Buffer.alloc(0))).ok).toBe(false);
+    expect((await saveAvatar(testDb, user.id, Buffer.alloc(0))).ok).toBe(false);
   });
 
-  it("boyut sınırını aşan dosya reddedilir", async () => {
-    const kadir = await kisi();
-    const buyuk = Buffer.concat([PNG, Buffer.alloc(AVATAR_MAX_BYTES)]);
+  it("rejects file exceeding size limit", async () => {
+    const user = await createUserHelper();
+    const oversized = Buffer.concat([PNG, Buffer.alloc(AVATAR_MAX_BYTES)]);
 
-    const sonuc = await saveAvatar(testDb, kadir.id, buyuk);
+    const result = await saveAvatar(testDb, user.id, oversized);
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 });
 
-describe("saklama", () => {
-  it("yüklenen dosya geri okunur", async () => {
-    const kadir = await kisi();
-    await saveAvatar(testDb, kadir.id, PNG);
+describe("storage management", () => {
+  it("reads back uploaded file", async () => {
+    const user = await createUserHelper();
+    await saveAvatar(testDb, user.id, PNG);
 
-    const okunan = await readAvatar(kadir.id, "png");
+    const read = await readAvatar(user.id, "png");
 
-    expect(okunan?.equals(PNG)).toBe(true);
+    expect(read?.equals(PNG)).toBe(true);
   });
 
-  // Yeni resim eskisinin yerine geçer; depoda iki dosya birikmez.
-  it("ikinci yükleme eskisini değiştirir", async () => {
-    const kadir = await kisi();
-    await saveAvatar(testDb, kadir.id, PNG);
-    await saveAvatar(testDb, kadir.id, JPEG);
+  it("replaces old file when new avatar is uploaded", async () => {
+    const user = await createUserHelper();
+    await saveAvatar(testDb, user.id, PNG);
+    await saveAvatar(testDb, user.id, JPEG);
 
-    const guncel = await testDb.user.findUnique({ where: { id: kadir.id } });
-    expect(guncel?.avatarExtension).toBe("jpg");
-    // Eski uzantıyla dosya kalmamalı.
-    await expect(readFile(path.join(depo, `${kadir.id}.png`))).rejects.toThrow();
+    const updated = await testDb.user.findUnique({ where: { id: user.id } });
+    expect(updated?.avatarExtension).toBe("jpg");
+    await expect(readFile(path.join(storageDir, `${user.id}.png`))).rejects.toThrow();
   });
 
-  it("kaldırılınca alan boşalır ve dosya silinir", async () => {
-    const kadir = await kisi();
-    await saveAvatar(testDb, kadir.id, PNG);
+  it("clears field and deletes file on removal", async () => {
+    const user = await createUserHelper();
+    await saveAvatar(testDb, user.id, PNG);
 
-    await removeAvatar(testDb, kadir.id);
+    await removeAvatar(testDb, user.id);
 
-    const guncel = await testDb.user.findUnique({ where: { id: kadir.id } });
-    expect(guncel?.avatarExtension).toBeNull();
-    expect(await readAvatar(kadir.id, "png")).toBeNull();
+    const updated = await testDb.user.findUnique({ where: { id: user.id } });
+    expect(updated?.avatarExtension).toBeNull();
+    expect(await readAvatar(user.id, "png")).toBeNull();
   });
 
-  // Yol, kullanıcı kimliğinden üretiliyor; yine de kök dışına çıkılamamalı.
-  it("kimlik yerine yol parçası verilirse okuma yapılmaz", async () => {
+  it("prevents path traversal attempts in user ID", async () => {
     expect(await readAvatar("../../etc/passwd", "png")).toBeNull();
   });
 });
 
-describe("baş harfler", () => {
-  it("ad ve soyadın baş harflerini verir", () => {
-    expect(initials("Ahmet Yılmaz")).toBe("AY");
+describe("initials extraction", () => {
+  it("extracts first letter of first and last name", () => {
+    expect(initials("John Doe")).toBe("JD");
   });
 
-  it("tek kelimelik adda tek harf verir", () => {
-    expect(initials("Ahmet")).toBe("A");
+  it("returns single letter for single-word name", () => {
+    expect(initials("John")).toBe("J");
   });
 
-  it("üç kelimede ilk ve son kelimeyi kullanır", () => {
-    expect(initials("Ahmet Can Yılmaz")).toBe("AY");
+  it("uses first and last word for three-word names", () => {
+    expect(initials("John Michael Doe")).toBe("JD");
   });
 
-  it("Türkçe harfleri büyütürken bozmaz", () => {
-    // "ışık" → "I", İngilizce büyütme "i" için yanlış harf üretir.
+  it("preserves Turkish characters when capitalizing", () => {
     expect(initials("ışık ırmak")).toBe("II");
     expect(initials("İnci Şahin")).toBe("İŞ");
   });
 
-  it("boş adda boş metin döner, çökmez", () => {
+  it("handles empty name gracefully", () => {
     expect(initials("")).toBe("");
     expect(initials("   ")).toBe("");
   });
 });
 
-describe("baş harf rengi", () => {
-  // Renk kimlikten türetiliyor: aynı kişi her ekranda aynı renkte görünmeli,
-  // yoksa göz onu bir işaret olarak kullanamaz.
-  it("aynı kimlik her zaman aynı tonu verir", () => {
+describe("avatar tone index", () => {
+  it("produces deterministic tone for the same ID", () => {
     const a = avatarToneIndex("3f2a9c1e-0000-4000-8000-000000000001");
     const b = avatarToneIndex("3f2a9c1e-0000-4000-8000-000000000001");
 
     expect(a).toBe(b);
   });
 
-  it("ton sayısı sınırların içinde kalır", () => {
+  it("keeps tone index within defined bounds", () => {
     for (const id of ["a", "bb", "ccc", "3f2a9c1e-0000-4000-8000-000000000009"]) {
-      const ton = avatarToneIndex(id);
-      expect(ton).toBeGreaterThanOrEqual(0);
-      expect(ton).toBeLessThan(6);
+      const tone = avatarToneIndex(id);
+      expect(tone).toBeGreaterThanOrEqual(0);
+      expect(tone).toBeLessThan(6);
     }
   });
 
-  it("boş kimlikte de geçerli bir ton verir", () => {
+  it("returns valid tone index for empty ID", () => {
     expect(avatarToneIndex("")).toBe(0);
   });
 });

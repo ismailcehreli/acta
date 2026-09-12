@@ -20,10 +20,8 @@ import {
 } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Onay akışı (§5.4 durum modeli, §8.2 yetki matrisi).
-//
-// Ürün sahibi kararı (19.08.2026): müdür süzgeç olur, süzülmemiş içerik üst
-// yönetime akmaz.
+// Approval workflow (state machine and permission matrix).
+// Unapproved content does not flow to upper management until approved by the manager.
 
 const NOW = new Date("2026-08-18T09:00:00.000Z");
 
@@ -35,156 +33,158 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const gm = await createOrgUnit({ name: "Genel Müdürlük", parentId: root.id });
-  const kaliphane = await createOrgUnit({
-    name: "Kalıphane",
-    parentId: gm.id,
-    // Bu birimin faaliyetleri onaya tabidir (§4.3).
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "ROOT" });
+  const executive = await createOrgUnit({ name: "Executive Directorate", parentId: root.id });
+  const tooling = await createOrgUnit({
+    name: "Tooling Department",
+    parentId: executive.id,
     requiresApproval: true,
   });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: gm.id });
+  const planning = await createOrgUnit({ name: "Planning Department", parentId: executive.id });
 
-  const baskan = await createUser(root.id, {
-    fullName: "YK Başkanı",
+  const boardChair = await createUser(root.id, {
+    fullName: "Board Chair",
     isUnitManager: true,
   });
-  const genelMudur = await createUser(gm.id, {
-    fullName: "Genel Müdür",
+  const ceo = await createUser(executive.id, {
+    fullName: "General Manager",
     isUnitManager: true,
   });
-  const mudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const manager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const calisan = await createUser(kaliphane.id, { fullName: "Kalıpçı" });
-  const akran = await createUser(planlama.id, {
-    fullName: "Planlama Müdürü",
+  const employee = await createUser(tooling.id, { fullName: "Tooling Specialist" });
+  const peerManager = await createUser(planning.id, {
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
 
-  return { baskan, genelMudur, mudur, calisan, akran, kaliphane };
+  return { boardChair, ceo, manager, employee, peerManager, tooling };
 }
 
-function girdi(baslik = "Kalıp bakımı") {
+function activityInput(title = "Tooling maintenance") {
   return {
     activityDate: "2026-08-18",
-    title: baslik,
-    description: "Haftalık bakım yapıldı.",
+    title,
+    description: "Weekly maintenance completed.",
     targetDepartmentIds: [] as string[],
   };
 }
 
-async function yaz(calisan: { id: string; orgUnitId: string }, baslik?: string) {
-  const sonuc = await createActivity(
+async function createPendingActivity(
+  user: { id: string; orgUnitId: string },
+  title?: string,
+) {
+  const result = await createActivity(
     testDb,
-    { id: calisan.id, orgUnitId: calisan.orgUnitId, requiresApproval: true },
-    girdi(baslik),
+    { id: user.id, orgUnitId: user.orgUnitId, requiresApproval: true },
+    activityInput(title),
     NOW,
   );
-  if (!sonuc.ok) throw new Error(`kurulum: ${sonuc.message}`);
-  return sonuc.activity;
+  if (!result.ok) throw new Error(`setup failed: ${result.message}`);
+  return result.activity;
 }
 
-describe("kaydın doğduğu durum (§5.4)", () => {
-  it("onaya tabi birimde onay bekleyerek doğar ve onaylayıcısı müdürdür", async () => {
-    const { calisan, mudur } = await sirket();
+describe("initial record state", () => {
+  it("creates activity in pending approval state when unit requires approval", async () => {
+    const { employee, manager } = await setupCompany();
 
-    const activity = await yaz(calisan);
+    const activity = await createPendingActivity(employee);
 
     expect(activity.approvalStatus).toBe("PENDING_APPROVAL");
-    expect(activity.approverId).toBe(mudur.id);
+    expect(activity.approverId).toBe(manager.id);
   });
 
-  it("onaya tabi olmayan birimde doğrudan onaylı doğar", async () => {
-    const { akran } = await sirket();
+  it("creates activity directly as approved when unit does not require approval", async () => {
+    const { peerManager } = await setupCompany();
 
-    const sonuc = await createActivity(
+    const result = await createActivity(
       testDb,
-      { id: akran.id, orgUnitId: akran.orgUnitId, requiresApproval: false },
-      girdi(),
+      { id: peerManager.id, orgUnitId: peerManager.orgUnitId, requiresApproval: false },
+      activityInput(),
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.activity.approvalStatus).toBe("APPROVED");
-    expect(sonuc.activity.approverId).toBeNull();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.activity.approvalStatus).toBe("APPROVED");
+    expect(result.activity.approverId).toBeNull();
   });
 
-  it("yöneticisi yoksa kayıt kaybolmaz, hata durumunda bekler (§4.4)", async () => {
-    const yalniz = await createOrgUnit({ name: "Yalnız", type: "Kök" });
-    const kisi = await createUser(yalniz.id, { fullName: "Tek Kişi" });
+  it("sets status to MANAGER_NOT_FOUND when user has no manager", async () => {
+    const isolatedUnit = await createOrgUnit({ name: "Isolated", type: "ROOT" });
+    const soloUser = await createUser(isolatedUnit.id, { fullName: "Solo User" });
 
-    const sonuc = await createActivity(
+    const result = await createActivity(
       testDb,
-      { id: kisi.id, orgUnitId: kisi.orgUnitId, requiresApproval: true },
-      girdi(),
+      { id: soloUser.id, orgUnitId: soloUser.orgUnitId, requiresApproval: true },
+      activityInput(),
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.activity.approvalStatus).toBe("MANAGER_NOT_FOUND");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.activity.approvalStatus).toBe("MANAGER_NOT_FOUND");
   });
 
-  it("onay bekleyen kayıt onaylayıcısına bildirim üretir", async () => {
-    const { calisan, mudur } = await sirket();
+  it("enqueues notification for the assigned manager when pending approval", async () => {
+    const { employee, manager } = await setupCompany();
 
-    const activity = await yaz(calisan);
+    const activity = await createPendingActivity(employee);
 
-    const kuyruk = await testDb.notificationQueue.findMany({
+    const queue = await testDb.notificationQueue.findMany({
       where: { eventType: NOTIFICATION_EVENTS.approvalPending },
     });
-    expect(kuyruk).toHaveLength(1);
-    expect(kuyruk[0].userId).toBe(mudur.id);
-    expect(kuyruk[0].payload).toMatchObject({ activityId: activity.id });
+    expect(queue).toHaveLength(1);
+    expect(queue[0].userId).toBe(manager.id);
+    expect(queue[0].payload).toMatchObject({ activityId: activity.id });
   });
 });
 
-describe("§8.2 — onay sürecindeki kaydı kim görür", () => {
-  it("yalnız yazan ve onaylayıcı görür; üst kademeler ve akran görmez", async () => {
-    const { calisan, mudur, genelMudur, baskan, akran } = await sirket();
-    const activity = await yaz(calisan);
+describe("visibility during approval workflow", () => {
+  it("only allows author and approver to view; peers and higher managers cannot see", async () => {
+    const { employee, manager, ceo, boardChair, peerManager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    const bakis = async (id: string, isSystemAdmin = false) =>
+    const checkView = async (id: string, isSystemAdmin = false) =>
       canViewActivity(testDb, { id, isSystemAdmin }, activity);
 
-    expect(await bakis(calisan.id)).toBe("full");
-    expect(await bakis(mudur.id)).toBe("full");
+    expect(await checkView(employee.id)).toBe("full");
+    expect(await checkView(manager.id)).toBe("full");
 
-    // Asıl iddia: süzülmemiş içerik yukarı akmıyor.
-    expect(await bakis(genelMudur.id)).toBe("none");
-    expect(await bakis(baskan.id)).toBe("none");
-    expect(await bakis(akran.id)).toBe("none");
+    // Unapproved content does not flow up the hierarchy
+    expect(await checkView(ceo.id)).toBe("none");
+    expect(await checkView(boardChair.id)).toBe("none");
+    expect(await checkView(peerManager.id)).toBe("none");
   });
 
-  it("onaylandıktan sonra üst kademeler görür", async () => {
-    const { calisan, mudur, genelMudur, baskan } = await sirket();
-    const activity = await yaz(calisan);
+  it("allows higher management to view after activity is approved", async () => {
+    const { employee, manager, ceo, boardChair } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    await approveActivity(testDb, mudur.id, activity.id, NOW);
-    const guncel = await testDb.activity.findUniqueOrThrow({
+    await approveActivity(testDb, manager.id, activity.id, NOW);
+    const updated = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
 
-    for (const viewer of [genelMudur, baskan]) {
+    for (const viewer of [ceo, boardChair]) {
       expect(
-        await canViewActivity(testDb, { id: viewer.id, isSystemAdmin: false }, guncel),
+        await canViewActivity(testDb, { id: viewer.id, isSystemAdmin: false }, updated),
       ).toBe("full");
     }
   });
 });
 
-describe("onaylama", () => {
-  it("müdür onaylar; durum ve karar anı yazılır", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
+describe("approving activities", () => {
+  it("allows manager to approve, setting approval status and timestamp", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    const sonuc = await approveActivity(testDb, mudur.id, activity.id, NOW);
+    const result = await approveActivity(testDb, manager.id, activity.id, NOW);
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
@@ -192,16 +192,15 @@ describe("onaylama", () => {
     expect(stored.approvalDecidedAt).toEqual(NOW);
   });
 
-  it("onayı ona düşmeyen kişi onaylayamaz", async () => {
-    const { calisan, genelMudur, akran } = await sirket();
-    const activity = await yaz(calisan);
+  it("prevents unauthorized users from approving", async () => {
+    const { employee, ceo, peerManager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    for (const kisi of [genelMudur, akran, calisan]) {
-      const sonuc = await approveActivity(testDb, kisi.id, activity.id, NOW);
-      expect(sonuc.ok).toBe(false);
-      if (sonuc.ok) return;
-      // Kaydın varlığı da ele verilmez.
-      expect(sonuc.error).toBe("not_found");
+    for (const actor of [ceo, peerManager, employee]) {
+      const result = await approveActivity(testDb, actor.id, activity.id, NOW);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe("not_found");
     }
 
     const stored = await testDb.activity.findUniqueOrThrow({
@@ -210,160 +209,156 @@ describe("onaylama", () => {
     expect(stored.approvalStatus).toBe("PENDING_APPROVAL");
   });
 
-  it("ikinci onay reddedilir", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
+  it("rejects duplicate approval attempts", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    await approveActivity(testDb, mudur.id, activity.id, NOW);
-    const ikinci = await approveActivity(testDb, mudur.id, activity.id, NOW);
+    await approveActivity(testDb, manager.id, activity.id, NOW);
+    const second = await approveActivity(testDb, manager.id, activity.id, NOW);
 
-    expect(ikinci.ok).toBe(false);
-    if (ikinci.ok) return;
-    expect(ikinci.error).toBe("wrong_status");
+    expect(second.ok).toBe(false);
+    if (second.ok) return;
+    expect(second.error).toBe("wrong_status");
   });
 
-  it("onay denetim izine ve yazana bildirime düşer", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
+  it("creates audit log and enqueues notification on approval", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    await approveActivity(testDb, mudur.id, activity.id, NOW);
+    await approveActivity(testDb, manager.id, activity.id, NOW);
 
-    const kayit = await testDb.auditLog.findMany({
+    const audit = await testDb.auditLog.findMany({
       where: { action: AUDIT_ACTIONS.activityApproved },
     });
-    expect(kayit).toHaveLength(1);
-    expect(kayit[0].userId).toBe(mudur.id);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].userId).toBe(manager.id);
 
-    const bildirim = await testDb.notificationQueue.findMany({
+    const notifications = await testDb.notificationQueue.findMany({
       where: { eventType: NOTIFICATION_EVENTS.activityApproved },
     });
-    expect(bildirim).toHaveLength(1);
-    expect(bildirim[0].userId).toBe(calisan.id);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].userId).toBe(employee.id);
   });
 });
 
-describe("düzeltme isteme ve yeniden gönderme", () => {
-  it("gerekçesiyle düzeltme istenir", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
+describe("requesting changes and resubmitting", () => {
+  it("allows requesting changes with a predefined reason", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    const gerekce = await createApprovalReason("CHANGES_REQUESTED", "Eksik bilgi");
+    const reason = await createApprovalReason("CHANGES_REQUESTED", "Incomplete information");
 
-    const sonuc = await requestChanges(
+    const result = await requestChanges(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: gerekce.id, note: "Hangi kalıplar olduğunu yaz." },
+      { reasonId: reason.id, note: "Please specify mold IDs." },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
     expect(stored.approvalStatus).toBe("CHANGES_REQUESTED");
-    expect(stored.approvalReasonId).toBe(gerekce.id);
-    expect(stored.approvalReasonNote).toBe("Hangi kalıplar olduğunu yaz.");
+    expect(stored.approvalReasonId).toBe(reason.id);
+    expect(stored.approvalReasonNote).toBe("Please specify mold IDs.");
   });
 
-  it("kategori zorunludur", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
+  it("requires a valid category", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    const sonuc = await requestChanges(
+    const result = await requestChanges(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: "11111111-1111-4111-8111-111111111111", note: "Bir şeyler" },
+      { reasonId: "11111111-1111-4111-8111-111111111111", note: "Some note" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("reason_required");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("reason_required");
   });
 
-  it("açıklama isteğe bağlıdır", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("CHANGES_REQUESTED");
+  it("allows optional explanatory note", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("CHANGES_REQUESTED");
 
-    const sonuc = await requestChanges(
+    const result = await requestChanges(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: gerekce.id },
+      { reasonId: reason.id },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
     expect(stored.approvalReasonNote).toBeNull();
   });
 
-  it("başka türün gerekçesi kullanılamaz", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    // Ret gerekçesiyle düzeltme istenemez; veritabanı da bileşik yabancı
-    // anahtarla engelliyor.
-    const retGerekcesi = await createApprovalReason("REJECTED");
+  it("cannot use reason from another decision category", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const rejectionReason = await createApprovalReason("REJECTED");
 
-    const sonuc = await requestChanges(
+    const result = await requestChanges(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: retGerekcesi.id },
+      { reasonId: rejectionReason.id },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 
-  it("pasif gerekçe seçilemez", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    // İki gerekçe: türün son aktif gerekçesi pasifleştirilemez (veritabanı
-    // değişmezi, bulgu 11). Katalog boşalırsa o karar hiç verilemez.
-    const gerekce = await createApprovalReason("CHANGES_REQUESTED");
+  it("cannot select an inactive reason", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("CHANGES_REQUESTED");
     await createApprovalReason("CHANGES_REQUESTED");
     await testDb.approvalReason.update({
-      where: { id: gerekce.id },
+      where: { id: reason.id },
       data: { isActive: false },
     });
 
-    const sonuc = await requestChanges(
+    const result = await requestChanges(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: gerekce.id },
+      { reasonId: reason.id },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
   });
 
-  it("yazan düzeltip kaydedince iş yeniden müdüre düşer", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("CHANGES_REQUESTED");
-    await requestChanges(testDb, mudur.id, activity.id, { reasonId: gerekce.id }, NOW);
+  it("resubmits to manager queue when author edits and saves", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("CHANGES_REQUESTED");
+    await requestChanges(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
-    const sonuc = await updateActivity(
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
         id: activity.id,
         activityDate: "2026-08-18",
-        title: "Kalıp bakımı",
-        description: "Üç numaralı kalıpta erken aşınma tespit edildi.",
+        title: "Tooling maintenance",
+        description: "Early wear identified on mold #3.",
         targetDepartmentIds: [],
       },
       new Date(NOW.getTime() + 60_000),
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
@@ -372,389 +367,369 @@ describe("düzeltme isteme ve yeniden gönderme", () => {
     expect(stored.approvalReasonNote).toBeNull();
   });
 
-  it("düzeltme penceresi kuralı düzeltme istenmiş kayıtta işlemez", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce2 = await createApprovalReason("CHANGES_REQUESTED");
-    await requestChanges(testDb, mudur.id, activity.id, { reasonId: gerekce2.id }, NOW);
+  it("bypasses the standard edit window when changes are requested", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("CHANGES_REQUESTED");
+    await requestChanges(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
-    // 15 dakikalık pencere çoktan kapandı; yine de düzeltilebilmeli, aksi
-    // hâlde müdürün talebi baştan uygulanamaz olurdu.
-    const cokSonra = new Date(NOW.getTime() + 5 * 60 * 60 * 1000);
-    const sonuc = await updateActivity(
+    const muchLater = new Date(NOW.getTime() + 5 * 60 * 60 * 1000);
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
         id: activity.id,
         activityDate: "2026-08-18",
-        title: "Kalıp bakımı",
-        description: "Gerekçeye göre düzeltildi.",
+        title: "Tooling maintenance",
+        description: "Updated per manager feedback.",
         targetDepartmentIds: [],
       },
-      cokSonra,
+      muchLater,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
-  it("müdür düzeltme istedikten günler sonra (geçmişe dönük sınırı aşsa da) tarih korunursa düzeltilebilir", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("CHANGES_REQUESTED");
-    await requestChanges(testDb, mudur.id, activity.id, { reasonId: gerekce.id }, NOW);
+  it("allows resubmission days later if date is preserved even past retroactive entry limit", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("CHANGES_REQUESTED");
+    await requestChanges(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
-    // 1 günlük geçmişe dönük sınır ayarı var
     await testDb.systemSetting.create({
       data: {
         key: SETTING_KEYS.retroactiveEntryDays,
         value: "1",
-        description: "Geçmişe dönük giriş sınırı (gün)",
+        description: "Retroactive entry limit in days",
       },
     });
 
-    // 4 gün sonra çalışan düzeltiyor (tarih aynı kalıyor)
-    const dortGunSonra = new Date(NOW.getTime() + 4 * 24 * 60 * 60 * 1000);
-    const sonuc = await updateActivity(
+    const fourDaysLater = new Date(NOW.getTime() + 4 * 24 * 60 * 60 * 1000);
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
         id: activity.id,
         activityDate: "2026-08-18",
-        title: "Kalıp bakımı - güncellendi",
-        description: "Düzeltmeler tamamlandı.",
+        title: "Tooling maintenance - updated",
+        description: "Changes completed.",
         targetDepartmentIds: [],
       },
-      dortGunSonra,
+      fourDaysLater,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.activity.title).toBe("Kalıp bakımı - güncellendi");
-    expect(sonuc.activity.approvalStatus).toBe("PENDING_APPROVAL");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.activity.title).toBe("Tooling maintenance - updated");
+    expect(result.activity.approvalStatus).toBe("PENDING_APPROVAL");
   });
 
-  it("düzeltme kaydedildiğinde müdürün okundu kaydı silinir ve müdür için tekrar okunmamış olur", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("CHANGES_REQUESTED");
+  it("clears manager read receipt upon resubmission so it appears unread again", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("CHANGES_REQUESTED");
 
-    // Müdür faaliyeti inceleyip okudu ve düzeltme istedi
     await testDb.readReceipt.create({
-      data: { activityId: activity.id, userId: mudur.id },
+      data: { activityId: activity.id, userId: manager.id },
     });
-    await requestChanges(testDb, mudur.id, activity.id, { reasonId: gerekce.id }, NOW);
+    await requestChanges(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
     expect(
-      await testDb.readReceipt.count({ where: { activityId: activity.id, userId: mudur.id } }),
+      await testDb.readReceipt.count({ where: { activityId: activity.id, userId: manager.id } }),
     ).toBe(1);
 
-    // Çalışan düzeltip yeniden onaya sunar
-    const sonuc = await updateActivity(
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
         id: activity.id,
         activityDate: "2026-08-18",
-        title: "Düzeltilmiş faaliyet",
-        description: "Açıklama yenilendi.",
+        title: "Revised activity",
+        description: "Updated description.",
         targetDepartmentIds: [],
       },
       new Date(NOW.getTime() + 60_000),
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
 
-    // Müdürün okundu kaydı silinmiş olmalı ki müdürün ekranında "okunmamış" görünsün
     expect(
-      await testDb.readReceipt.count({ where: { activityId: activity.id, userId: mudur.id } }),
+      await testDb.readReceipt.count({ where: { activityId: activity.id, userId: manager.id } }),
     ).toBe(0);
   });
 
-  it("onay bekleyen kayıt pencere içinde yazan tarafından düzeltilebilir (§8.2)", async () => {
-    const { calisan } = await sirket();
-    const activity = await yaz(calisan);
+  it("allows author to edit activity while pending within time window", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    const sonuc = await updateActivity(
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
         id: activity.id,
         activityDate: "2026-08-18",
-        title: "Gizlice değiştirildi",
-        description: "Müdür bakarken içerik değişmemeli.",
+        title: "Edited within window",
+        description: "Updated details before manager review.",
         targetDepartmentIds: [],
       },
       new Date(NOW.getTime() + 60_000),
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.activity.title).toBe("Gizlice değiştirildi");
-    expect(sonuc.activity.approvalStatus).toBe("PENDING_APPROVAL");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.activity.title).toBe("Edited within window");
+    expect(result.activity.approvalStatus).toBe("PENDING_APPROVAL");
 
-    // Onay turu korunur: yeni bir karar turu ancak müdür düzeltme istediğinde
-    // açılır. Bu düzenleme aynı onay işinin güncellenmesidir.
     expect(
       await testDb.approvalRound.count({ where: { activityId: activity.id } }),
     ).toBe(1);
   });
 
-  it("onay bekleyen kayıtta pencere ayara göre kapanır", async () => {
-    const { calisan } = await sirket();
-    const activity = await yaz(calisan);
+  it("closes edit window for pending activity based on system setting", async () => {
+    const { employee } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    const sonuc = await updateActivity(
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
-        ...girdi(),
+        ...activityInput(),
         id: activity.id,
-        title: "Geç düzeltme",
+        title: "Late update",
       },
       new Date(NOW.getTime() + 16 * 60_000),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("window_closed");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("window_closed");
   });
 
-  it("onay bekleyen kaydı müdür okuduysa yazar düzeltemez", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
+  it("prevents author from editing pending activity once manager has read it", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
     await markActivityAsRead(
       testDb,
-      { id: mudur.id, isSystemAdmin: false },
+      { id: manager.id, isSystemAdmin: false },
       activity.id,
       3_000,
       new Date(NOW.getTime() + 2 * 60_000),
     );
 
-    const sonuc = await updateActivity(
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
-        ...girdi(),
+        ...activityInput(),
         id: activity.id,
-        title: "Okunduktan sonra değişmemeli",
+        title: "Cannot edit after being read",
       },
       new Date(NOW.getTime() + 3 * 60_000),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("already_read");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("already_read");
   });
 });
 
-describe("onay kutusu", () => {
-  it("yalnız kendi önündeki işleri listeler", async () => {
-    const { calisan, mudur, akran } = await sirket();
-    const birinci = await yaz(calisan, "Birinci");
-    await yaz(calisan, "İkinci");
+describe("pending approvals queue", () => {
+  it("only lists pending items assigned to the current approver", async () => {
+    const { employee, manager, peerManager } = await setupCompany();
+    const first = await createPendingActivity(employee, "First");
+    await createPendingActivity(employee, "Second");
 
-    await approveActivity(testDb, mudur.id, birinci.id, NOW);
+    await approveActivity(testDb, manager.id, first.id, NOW);
 
-    const mudurunku = await listPendingApprovals(testDb, mudur.id);
-    expect(mudurunku.map((i) => i.title)).toEqual(["İkinci"]);
+    const managerQueue = await listPendingApprovals(testDb, manager.id);
+    expect(managerQueue.map((i) => i.title)).toEqual(["Second"]);
 
-    // Akranın kutusu boş: onay ona düşmüyor.
-    expect(await listPendingApprovals(testDb, akran.id)).toEqual([]);
+    expect(await listPendingApprovals(testDb, peerManager.id)).toEqual([]);
   });
 });
 
-describe("reddetme (ürün sahibi kararı, 19.08.2026)", () => {
-  it("müdür gerekçesiyle reddeder, kayıt kapanır", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("REJECTED", "Mükerrer kayıt");
+describe("rejecting activities", () => {
+  it("allows manager to reject activity with a categorized reason", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("REJECTED", "Duplicate record");
 
-    const sonuc = await rejectActivity(
+    const result = await rejectActivity(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: gerekce.id, note: "Aynı iş dün de yazılmıştı." },
+      { reasonId: reason.id, note: "Same work logged yesterday." },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
     expect(stored.approvalStatus).toBe("REJECTED");
-    expect(stored.approvalReasonId).toBe(gerekce.id);
-    expect(stored.approvalReasonNote).toBe("Aynı iş dün de yazılmıştı.");
-    // Karar kimin verdiği kayıtta durur.
-    expect(stored.approverId).toBe(mudur.id);
+    expect(stored.approvalReasonId).toBe(reason.id);
+    expect(stored.approvalReasonNote).toBe("Same work logged yesterday.");
+    expect(stored.approverId).toBe(manager.id);
   });
 
-  it("reddedilen kayıt üst kademeye akmaz", async () => {
-    const { calisan, mudur, genelMudur, baskan } = await sirket();
-    const activity = await yaz(calisan, "Reddedilen iş");
-    const gerekce = await createApprovalReason("REJECTED");
+  it("prevents rejected activities from flowing up the hierarchy", async () => {
+    const { employee, manager, ceo, boardChair } = await setupCompany();
+    const activity = await createPendingActivity(employee, "Rejected activity");
+    const reason = await createApprovalReason("REJECTED");
 
-    await rejectActivity(testDb, mudur.id, activity.id, { reasonId: gerekce.id }, NOW);
+    await rejectActivity(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
-    const kayit = await testDb.activity.findUniqueOrThrow({
+    const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
 
-    // Süzgecin bütün amacı bu: uygun bulunmayan içerik yukarı gitmez.
-    for (const ust of [genelMudur, baskan]) {
+    for (const upper of [ceo, boardChair]) {
       expect(
-        await canViewActivity(testDb, { id: ust.id, isSystemAdmin: false }, kayit),
+        await canViewActivity(testDb, { id: upper.id, isSystemAdmin: false }, stored),
       ).toBe("none");
     }
 
-    // Yazan ve kararı veren görmeye devam eder.
     expect(
-      await canViewActivity(testDb, { id: calisan.id, isSystemAdmin: false }, kayit),
+      await canViewActivity(testDb, { id: employee.id, isSystemAdmin: false }, stored),
     ).toBe("full");
     expect(
-      await canViewActivity(testDb, { id: mudur.id, isSystemAdmin: false }, kayit),
+      await canViewActivity(testDb, { id: manager.id, isSystemAdmin: false }, stored),
     ).toBe("full");
   });
 
-  it("reddedilen kayıt düzenlenemez", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("REJECTED");
-    await rejectActivity(testDb, mudur.id, activity.id, { reasonId: gerekce.id }, NOW);
+  it("prevents rejected activities from being edited", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("REJECTED");
+    await rejectActivity(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
-    const sonuc = await updateActivity(
+    const result = await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
         id: activity.id,
         activityDate: "2026-08-18",
-        title: "Yeniden deneme",
-        description: "Reddedilen kaydı düzeltmeye çalışıyorum.",
+        title: "Retry",
+        description: "Attempting to edit rejected activity.",
         targetDepartmentIds: [],
       },
       new Date(NOW.getTime() + 60_000),
     );
 
-    // Reddetme bir **son** durumdur; düzeltilebilseydi "düzeltme iste"den
-    // farkı kalmazdı.
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("rejected");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("rejected");
   });
 
-  it("düzeltme istenmiş kayıt da reddedilebilir", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const duzeltme = await createApprovalReason("CHANGES_REQUESTED");
-    await requestChanges(testDb, mudur.id, activity.id, { reasonId: duzeltme.id }, NOW);
+  it("allows rejecting an activity that had changes requested", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const changeReason = await createApprovalReason("CHANGES_REQUESTED");
+    await requestChanges(testDb, manager.id, activity.id, { reasonId: changeReason.id }, NOW);
 
-    const ret = await createApprovalReason("REJECTED");
-    const sonuc = await rejectActivity(
+    const rejectionReason = await createApprovalReason("REJECTED");
+    const result = await rejectActivity(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: ret.id },
+      { reasonId: rejectionReason.id },
       NOW,
     );
 
-    // Yazan kaydı hiç düzeltmezse, bu çıkış olmadan kayıt sonsuza kadar
-    // askıda kalırdı: ne kapanabilir ne yukarı akabilirdi.
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
     expect(stored.approvalStatus).toBe("REJECTED");
-    expect(stored.approvalReasonId).toBe(ret.id);
+    expect(stored.approvalReasonId).toBe(rejectionReason.id);
   });
 
-  it("onaylayıcı olmayan reddedemez", async () => {
-    const { calisan, genelMudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("REJECTED");
+  it("prevents non-approver from rejecting activity", async () => {
+    const { employee, ceo } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("REJECTED");
 
-    const sonuc = await rejectActivity(
+    const result = await rejectActivity(
       testDb,
-      genelMudur.id,
+      ceo.id,
       activity.id,
-      { reasonId: gerekce.id },
+      { reasonId: reason.id },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    // Kaydın varlığı da bildirilmez.
-    expect(sonuc.error).toBe("not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("not_found");
   });
 
-  it("onaylanmış kayıt reddedilemez", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    await approveActivity(testDb, mudur.id, activity.id, NOW);
-    const gerekce = await createApprovalReason("REJECTED");
+  it("prevents rejecting an already approved activity", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    await approveActivity(testDb, manager.id, activity.id, NOW);
+    const reason = await createApprovalReason("REJECTED");
 
-    const sonuc = await rejectActivity(
+    const result = await rejectActivity(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
-      { reasonId: gerekce.id },
+      { reasonId: reason.id },
       NOW,
     );
 
-    // Yayımlanmış kaydın yolu iptaldir, ret değil.
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("wrong_status");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("wrong_status");
   });
 
-  it("kategori zorunludur", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
+  it("requires a reason category when rejecting", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
 
-    const sonuc = await rejectActivity(
+    const result = await rejectActivity(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
       { reasonId: "11111111-1111-4111-8111-111111111111" },
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("reason_required");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("reason_required");
   });
 
-  it("yazana bildirim gider ve karar denetim izine yazılır", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("REJECTED");
+  it("sends notification to author and logs rejection in audit trail", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("REJECTED");
 
-    await rejectActivity(testDb, mudur.id, activity.id, { reasonId: gerekce.id }, NOW);
+    await rejectActivity(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
-    const bildirim = await testDb.notificationQueue.findFirst({
+    const notification = await testDb.notificationQueue.findFirst({
       where: {
-        userId: calisan.id,
+        userId: employee.id,
         eventType: NOTIFICATION_EVENTS.activityRejected,
       },
     });
-    expect(bildirim).not.toBeNull();
+    expect(notification).not.toBeNull();
 
-    const iz = await testDb.auditLog.findFirst({
+    const audit = await testDb.auditLog.findFirst({
       where: { objectId: activity.id, action: AUDIT_ACTIONS.activityRejected },
     });
-    expect(iz).not.toBeNull();
-    // Kategori ize girer (raporlanan odur); serbest açıklama içeriktir, girmez.
-    expect(JSON.stringify(iz?.detail)).toContain(gerekce.id);
+    expect(audit).not.toBeNull();
+    expect(JSON.stringify(audit?.detail)).toContain(reason.id);
   });
 
-  it("reddedilen kayıt onay kutusundan düşer", async () => {
-    const { calisan, mudur } = await sirket();
-    const activity = await yaz(calisan);
-    const gerekce = await createApprovalReason("REJECTED");
+  it("removes rejected activity from pending approvals queue", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    const reason = await createApprovalReason("REJECTED");
 
-    expect((await listPendingApprovals(testDb, mudur.id)).length).toBe(1);
+    expect((await listPendingApprovals(testDb, manager.id)).length).toBe(1);
 
-    await rejectActivity(testDb, mudur.id, activity.id, { reasonId: gerekce.id }, NOW);
+    await rejectActivity(testDb, manager.id, activity.id, { reasonId: reason.id }, NOW);
 
-    expect((await listPendingApprovals(testDb, mudur.id)).length).toBe(0);
+    expect((await listPendingApprovals(testDb, manager.id)).length).toBe(0);
   });
 });

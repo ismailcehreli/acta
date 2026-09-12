@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-# Yedekleme (§15.6). Veritabanı ve dosya deposu **tutarlı bir anlık görüntü**
-# olarak birlikte alınır, şifrelenir ve tek dosyaya paketlenir.
+# Backup (§15.6). The database and file stores are captured as one **consistent
+# snapshot**, encrypted, and packaged into a single file.
 #
-# Sıra önemlidir: önce veritabanı, sonra dosyalar. Ekler asla silinmediği için
-# (§15.4) dump'tan sonra eklenen bir dosya yedekte fazladan durur — zararsız.
-# Ters sırada olsaydı dump'ta kaydı olan ama dosyası yedeklenmemiş ek çıkardı.
+# Order matters: the database is captured first, followed by the files. Because
+# attachments are never deleted (§15.4), a file added after the dump may appear
+# in the backup as an extra, which is harmless. The reverse order could produce
+# an attachment row whose file is missing from the backup.
 #
-# Kullanım:
-#   scripts/backup.sh [hedef-dizin]
+# Usage:
+#   scripts/backup.sh [destination-directory]
 #
-# Gerekli ortam değişkenleri `.env` dosyasından okunur. Şifreleme parolası
-# BACKUP_PASSPHRASE'dir; tanımlı değilse betik **çalışmaz** — şifresiz yedek
-# §15.6'ya aykırıdır.
+# Required environment variables are read from `.env`. The encryption passphrase
+# is `BACKUP_PASSPHRASE`; the script **refuses to run** without it because an
+# unencrypted backup violates §15.6.
 
 set -euo pipefail
 umask 077
 
-KOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$KOK"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 if [[ -f .env ]]; then
   set -a
@@ -26,212 +27,213 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-HEDEF_DIZIN="${1:-${BACKUP_DIR:-$KOK/yedek}}"
-DAMGA="$(date +%Y%m%d-%H%M%S)"
-KILIT_DOSYASI="${BACKUP_LOCK_FILE:-${BACKUP_RUNNER_LOCK_FILE:-$KOK/.faaliyet-backup.lock}}"
+TARGET_DIR="${1:-${BACKUP_DIR:-$PROJECT_ROOT/backups}}"
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+LOCK_FILE="${BACKUP_LOCK_FILE:-${BACKUP_RUNNER_LOCK_FILE:-$PROJECT_ROOT/.acta-backup.lock}}"
 
-CALISMA=""
-KILIT_ALINDI=0
-APP_CALISIYORDU=0
-WORKER_CALISIYORDU=0
-APP_DURDURMA_DENENDI=0
-WORKER_DURDURMA_DENENDI=0
-APP_GERI_ACILDI=0
-WORKER_GERI_ACILDI=0
-SERVISLERI_GERI_AC=1
+WORK_DIR=""
+LOCK_ACQUIRED=0
+APP_WAS_RUNNING=0
+WORKER_WAS_RUNNING=0
+APP_STOP_ATTEMPTED=0
+WORKER_STOP_ATTEMPTED=0
+APP_RESTARTED=0
+WORKER_RESTARTED=0
+RESTART_SERVICES=1
 
 if [[ "${BACKUP_KEEP_SERVICES_STOPPED:-0}" == "1" ]]; then
-  # Başlangıca dönüş gibi daha geniş bir bakım işlemi, yedek bittikten sonra
-  # servisleri kendisi yönetir. Yedek burada açılırsa reset öncesi kısa bir
-  # yazma penceresi oluşur.
-  SERVISLERI_GERI_AC=0
+  # A broader maintenance operation such as an application reset manages the
+  # services after the backup. Restarting them here would create a short write
+  # window before the reset.
+  RESTART_SERVICES=0
 fi
 
-hata() {
-  echo "[yedek] HATA: $*" >&2
+fail() {
+  echo "[backup] ERROR: $*" >&2
   exit 1
 }
 
 log() {
-  echo "[yedek] $*"
+  echo "[backup] $*"
 }
 
-servis_calisiyor() {
-  local servis="$1"
-  local kimlik
+service_is_running() {
+  local service="$1"
+  local container_id
 
-  if ! kimlik="$(docker compose ps --status running -q "$servis")"; then
-    hata "$servis servisinin başlangıç durumu okunamadı."
+  if ! container_id="$(docker compose ps --status running -q "$service")"; then
+    fail "Could not read the initial state of the $service service."
   fi
 
-  [[ -n "$kimlik" ]]
+  [[ -n "$container_id" ]]
 }
 
-# Yalnız yedek başında çalışan ve durdurulması denenmiş servisleri geri açar.
-# Başlangıçta kapalı olan bir servisin işletim kararını yedek değiştirmez.
-servisleri_geri_ac() {
-  local baslatma_hatasi=0
+# Restart only services that were running and that the backup tried to stop.
+# The backup does not change the operating decision for an initially stopped service.
+restart_services() {
+  local restart_error=0
 
-  if [[ "$SERVISLERI_GERI_AC" == "0" ]]; then
+  if [[ "$RESTART_SERVICES" == "0" ]]; then
     return 0
   fi
 
-  if [[ "$APP_CALISIYORDU" == "1" && "$APP_DURDURMA_DENENDI" == "1" && "$APP_GERI_ACILDI" == "0" ]]; then
+  if [[ "$APP_WAS_RUNNING" == "1" && "$APP_STOP_ATTEMPTED" == "1" && "$APP_RESTARTED" == "0" ]]; then
     if docker compose start app >/dev/null 2>&1; then
-      APP_GERI_ACILDI=1
+      APP_RESTARTED=1
     else
-      echo "[yedek] HATA: app servisi yeniden başlatılamadı." >&2
-      baslatma_hatasi=1
+      echo "[backup] ERROR: could not restart the app service." >&2
+      restart_error=1
     fi
   fi
 
-  if [[ "$WORKER_CALISIYORDU" == "1" && "$WORKER_DURDURMA_DENENDI" == "1" && "$WORKER_GERI_ACILDI" == "0" ]]; then
+  if [[ "$WORKER_WAS_RUNNING" == "1" && "$WORKER_STOP_ATTEMPTED" == "1" && "$WORKER_RESTARTED" == "0" ]]; then
     if docker compose start worker >/dev/null 2>&1; then
-      WORKER_GERI_ACILDI=1
+      WORKER_RESTARTED=1
     else
-      echo "[yedek] HATA: worker servisi yeniden başlatılamadı." >&2
-      baslatma_hatasi=1
+      echo "[backup] ERROR: could not restart the worker service." >&2
+      restart_error=1
     fi
   fi
 
-  return "$baslatma_hatasi"
+  return "$restart_error"
 }
 
-# Tek çıkış işleyicisi: ikinci bir `trap ... EXIT` birincisini zincirlemez,
-# **ezer**. Servis kurtarma ve açık metin çalışma dizini temizliği bu yüzden
-# aynı yerde durur (denetim 24.08.2026, P4-R2-1/P4-R2-3).
-cikis_temizligi() {
-  local onceki_kod=$?
-  local temizlik_hatasi=0
+# One exit handler: a second `trap ... EXIT` does not chain the first one; it
+# **replaces it**. Service recovery and cleanup of the plain-text working
+# directory therefore live in the same handler (audit 2026-08-24, P4-R2-1/P4-R2-3).
+exit_cleanup() {
+  local previous_code=$?
+  local cleanup_error=0
   trap - EXIT
   set +e
 
-  servisleri_geri_ac || temizlik_hatasi=1
+  restart_services || cleanup_error=1
 
-  if [[ -n "$CALISMA" && -d "$CALISMA" ]]; then
-    rm -rf -- "$CALISMA" || {
-      echo "[yedek] HATA: geçici çalışma dizini temizlenemedi: $CALISMA" >&2
-      temizlik_hatasi=1
+  if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
+    rm -rf -- "$WORK_DIR" || {
+      echo "[backup] ERROR: could not remove temporary working directory: $WORK_DIR" >&2
+      cleanup_error=1
     }
   fi
 
-  if [[ "$KILIT_ALINDI" == "1" ]]; then
-    flock -u 9 || temizlik_hatasi=1
+  if [[ "$LOCK_ACQUIRED" == "1" ]]; then
+    flock -u 9 || cleanup_error=1
     exec 9>&-
   fi
 
-  if [[ "$onceki_kod" == "0" && "$temizlik_hatasi" != "0" ]]; then
-    onceki_kod=1
+  if [[ "$previous_code" == "0" && "$cleanup_error" != "0" ]]; then
+    previous_code=1
   fi
-  exit "$onceki_kod"
+  exit "$previous_code"
 }
 
-[[ -n "${BACKUP_PASSPHRASE:-}" ]] || hata "BACKUP_PASSPHRASE tanımlı değil; şifresiz yedek alınmaz (§15.6)."
-[[ -n "${POSTGRES_USER:-}" && -n "${POSTGRES_DB:-}" ]] || hata "POSTGRES_USER / POSTGRES_DB tanımlı değil."
+[[ -n "${BACKUP_PASSPHRASE:-}" ]] || fail "BACKUP_PASSPHRASE is not set; refusing to create an unencrypted backup (§15.6)."
+[[ -n "${POSTGRES_USER:-}" && -n "${POSTGRES_DB:-}" ]] || fail "POSTGRES_USER / POSTGRES_DB are not set."
 
-command -v docker >/dev/null || hata "docker bulunamadı."
-command -v openssl >/dev/null || hata "openssl bulunamadı."
-command -v flock >/dev/null || hata "flock bulunamadı (util-linux paketi gerekli)."
+command -v docker >/dev/null || fail "docker was not found."
+command -v openssl >/dev/null || fail "openssl was not found."
+command -v flock >/dev/null || fail "flock was not found (the util-linux package is required)."
 
 if [[ "${BACKUP_LOCK_HELD:-0}" != "1" ]]; then
-  # Yedek, servisleri durdurduğu için bütün çalışma ağacı için tekil
-  # olmalıdır. Runner'lar bu kilidi kendi işlemleri boyunca tutar; böylece
-  # yedek bittikten sonra başlayan başlangıca dönüş işlemiyle çakışmaz.
-  exec 9>"$KILIT_DOSYASI"
+  # Because the backup stops services, it must be exclusive for the whole
+  # application tree. Runners hold this lock for their entire operation so a
+  # reset cannot start between the backup and the reset itself.
+  exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
-    hata "Başka bir yedek veya bakım işlemi çalışıyor; ikinci işlem başlatılmadı."
+    fail "Another backup or maintenance operation is running; the second operation was not started."
   fi
-  KILIT_ALINDI=1
+  LOCK_ACQUIRED=1
 fi
 
-CALISMA="$(mktemp -d)"
-trap cikis_temizligi EXIT
+WORK_DIR="$(mktemp -d)"
+trap exit_cleanup EXIT
 
-mkdir -p "$HEDEF_DIZIN"
+mkdir -p "$TARGET_DIR"
 
-if servis_calisiyor app; then APP_CALISIYORDU=1; fi
-if servis_calisiyor worker; then WORKER_CALISIYORDU=1; fi
+if service_is_running app; then APP_WAS_RUNNING=1; fi
+if service_is_running worker; then WORKER_WAS_RUNNING=1; fi
 
-# **Yazmasız bakım penceresi** (denetim 24.08.2026, P4-2).
+# **Write-free maintenance window** (audit 2026-08-24, P4-2).
 #
-# Veritabanı dökümü ile dosya arşivleri ayrı adımlardır; arada uygulama yazmaya
-# açık kalırsa yedek **tutarlı bir anlık görüntü olmaz**. Avatar iki parçalı
-# bir mutasyondur (dosya + `User.avatarExtension`): dump `png` değerini aldıktan
-# sonra kullanıcı resmini kaldırırsa arşivde dosya bulunmaz ve geri yüklemede o
-# profil 404 döner. Sıralamayı değiştirmek iki parçalı mutasyonu atomik
-# yapmıyor; tek çözüm pencereyi kapatmak.
+# The database dump and file archives are separate steps; if the application can
+# write between them, the backup is **not a consistent snapshot**. An avatar is
+# a two-part mutation (file + `User.avatarExtension`): if the picture is removed
+# after the dump records `png`, the archive has no file and the restored profile
+# returns 404. Reordering the steps does not make the mutation atomic; closing
+# the window is the only solution.
 #
-# Postgres ayakta kalıyor (dökümü o veriyor); yalnız **başlangıçta çalışan**
-# yazan süreçler durur. Kurtarma tuzağı stop'tan önce kurulmuştur: iki stop
-# çağrısından biri başarısız olsa bile ilk durdurulan servis geri açılır.
-log "yazmasız pencere açılıyor"
-if [[ "$APP_CALISIYORDU" == "1" ]]; then
-  APP_DURDURMA_DENENDI=1
-  docker compose stop app >/dev/null 2>&1 || hata "app servisi durdurulamadı."
+# Postgres remains running because it serves the dump; only **initially running**
+# writers are stopped. Recovery is armed before stopping: even if the second
+# stop call fails, the first service is restarted.
+log "opening write-free window"
+if [[ "$APP_WAS_RUNNING" == "1" ]]; then
+  APP_STOP_ATTEMPTED=1
+  docker compose stop app >/dev/null 2>&1 || fail "could not stop the app service."
 fi
-if [[ "$WORKER_CALISIYORDU" == "1" ]]; then
-  WORKER_DURDURMA_DENENDI=1
-  docker compose stop worker >/dev/null 2>&1 || hata "worker servisi durdurulamadı."
+if [[ "$WORKER_WAS_RUNNING" == "1" ]]; then
+  WORKER_STOP_ATTEMPTED=1
+  docker compose stop worker >/dev/null 2>&1 || fail "could not stop the worker service."
 fi
 
-# 1. Veritabanı. `--clean --if-exists` geri yüklemeyi tekrarlanabilir yapar.
-log "veritabanı alınıyor: $POSTGRES_DB"
+# 1. Database. `--clean --if-exists` makes restore repeatable.
+log "capturing database: $POSTGRES_DB"
 docker compose exec -T postgres pg_dump \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
   --format=custom \
   --clean --if-exists \
-  > "$CALISMA/veritabani.dump" || hata "pg_dump başarısız."
+  > "$WORK_DIR/database.dump" || fail "pg_dump failed."
 
-[[ -s "$CALISMA/veritabani.dump" ]] || hata "Veritabanı dökümü boş."
+[[ -s "$WORK_DIR/database.dump" ]] || fail "The database dump is empty."
 
-# 2. Dosya depoları. Uygulama durduğu için birimler **tek seferlik yardımcı
-#    konteynerden** okunuyor: `exec` çalışan konteyner ister, `run` ise aynı
-#    birimleri bağlayıp okumaya yeter.
+# 2. File stores. Because the application is stopped, volumes are read through
+#    a **one-time helper container**: `exec` requires a running container, while
+#    `run` can mount the same volumes for reading.
 #
-#    **İki ayrı depo var**: ekler ve profil resimleri. Avatarlar yedeğe hiç
-#    girmiyordu; geri yükleme sonrası veritabanındaki `avatarExtension` kalıp
-#    dosya gelmediği için bütün profil resimleri 404 dönerdi (bulgu 5).
-log "dosya depoları alınıyor"
+#    **There are two separate stores**: attachments and profile pictures. Avatars
+#    used to be omitted from backups; after restore, `avatarExtension` remained
+#    in the database while the file was missing, so every profile returned 404.
+log "capturing file stores"
 docker compose run --rm --no-deps --entrypoint sh app -c \
   'mkdir -p /veri/ekler /veri/avatarlar && tar -C /veri -cf - ekler' \
-  > "$CALISMA/ekler.tar" || hata "Ek dosyaları alınamadı."
+  > "$WORK_DIR/attachments.tar" || fail "Could not capture attachments."
 
 docker compose run --rm --no-deps --entrypoint sh app -c \
   'tar -C /veri -cf - avatarlar' \
-  > "$CALISMA/avatarlar.tar" || hata "Profil resimleri alınamadı."
+  > "$WORK_DIR/avatars.tar" || fail "Could not capture profile pictures."
 
-log "yazmasız pencere kapanıyor: app ve worker başlatılıyor"
-servisleri_geri_ac || hata "Servisler yeniden başlatılamadı."
+log "closing write-free window: starting app and worker"
+restart_services || fail "Could not restart services."
 
-# 3. Paketle ve şifrele. Parola ortamdan okunur; komut satırına yazılmaz,
-#    çünkü süreç listesinde görünürdü.
-log "paketleniyor ve şifreleniyor"
-tar -C "$CALISMA" -czf "$CALISMA/paket.tar.gz" veritabani.dump ekler.tar avatarlar.tar
+# 3. Package and encrypt. The passphrase is read from the environment and is
+#    not placed on the command line, where it would appear in the process list.
+log "packaging and encrypting"
+tar -C "$WORK_DIR" -czf "$WORK_DIR/archive.tar.gz" database.dump attachments.tar avatars.tar
 
-CIKTI="$HEDEF_DIZIN/faaliyet-$DAMGA.tar.gz.enc"
+OUTPUT="$TARGET_DIR/acta-$TIMESTAMP.tar.gz.enc"
 openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
-  -in "$CALISMA/paket.tar.gz" \
-  -out "$CIKTI" \
-  -pass env:BACKUP_PASSPHRASE || hata "Şifreleme başarısız."
+  -in "$WORK_DIR/archive.tar.gz" \
+  -out "$OUTPUT" \
+  -pass env:BACKUP_PASSPHRASE || fail "Encryption failed."
 
-BOYUT="$(du -h "$CIKTI" | cut -f1)"
-log "hazır: $CIKTI ($BOYUT)"
+SIZE="$(du -h "$OUTPUT" | cut -f1)"
+log "ready: $OUTPUT ($SIZE)"
 
-# 4. Nabız. Yedek başarısızsa buraya hiç gelinmez; `backup` işi gecikmiş
-#    görünür ve mevcut alarm yolu (§12.4) sistem yöneticisine e-posta atar.
-#    Ayrı bir izleme kurmaya gerek yok.
+# 4. Heartbeat. A failed backup never reaches this point; the `backup` job is
+#    considered delayed and the existing alert path (§12.4) emails the system
+#    administrator. No separate monitor is needed.
 docker compose exec -T postgres psql \
   --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --quiet \
   --command "INSERT INTO \"ScheduledJobStatus\" (\"jobName\", \"lastSuccessAt\", \"lastError\", \"expectedIntervalMinutes\", \"updatedAt\")
              VALUES ('backup', now(), NULL, 1440, now())
              ON CONFLICT (\"jobName\") DO UPDATE
              SET \"lastSuccessAt\" = now(), \"lastError\" = NULL, \"updatedAt\" = now();" \
-  >/dev/null || log "UYARI: nabız yazılamadı; yedek alındı ama izlemede görünmeyecek."
+  >/dev/null || log "WARNING: heartbeat could not be written; the backup exists but will not appear in monitoring."
 
-# 5. Eski yedekleri temizle (varsayılan: 30 gün).
-GUN="${BACKUP_RETENTION_DAYS:-30}"
-find "$HEDEF_DIZIN" -name 'faaliyet-*.tar.gz.enc' -type f -mtime "+$GUN" -print -delete \
-  | sed 's/^/[yedek] silindi (eski): /' || true
+# 5. Remove old backups (default: 30 days).
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
+find "$TARGET_DIR" \( -name 'acta-*.tar.gz.enc' -o -name 'faaliyet-*.tar.gz.enc' \) \
+  -type f -mtime "+$RETENTION_DAYS" -print -delete \
+  | sed 's/^/[backup] removed (old): /' || true
 
-log "bitti. Sunucu dışında ikinci bir kopya tutmayı unutmayın (§15.6)."
+log "finished. Keep a second copy outside the server (§15.6)."

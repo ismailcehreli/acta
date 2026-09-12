@@ -10,6 +10,8 @@ import {
 } from "./range";
 import { rollupByOrgUnit } from "./rollup";
 import type { AbsenceReport } from "./types";
+import { compareLocalized } from "@/shared/format/locale";
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n";
 
 interface AbsenceCounters {
   periods: number;
@@ -52,6 +54,7 @@ function addAbsenceCounters(
 function absenceUnitRows(
   scope: ReportScope,
   direct: Map<string, AbsenceCounters>,
+  locale: Locale,
 ): AbsenceReport["units"] {
   const totals = rollupByOrgUnit(scope.units, scope.rootOrgUnitId, direct, {
     createEmpty: emptyAbsenceCounters,
@@ -61,7 +64,7 @@ function absenceUnitRows(
 
   return scope.units
     .filter((unit) => (totals.get(unit.id)?.people.size ?? 0) > 0)
-    .sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name, "tr"))
+    .sort((a, b) => a.depth - b.depth || compareLocalized(a.name, b.name, locale))
     .map((unit) => {
       const total = totals.get(unit.id) ?? emptyAbsenceCounters();
       return {
@@ -81,6 +84,7 @@ export async function readAbsenceReport(
   db: ReportDb,
   scope: ReportScope,
   range: ReportPeriodRange,
+  locale: Locale = DEFAULT_LOCALE,
 ): Promise<AbsenceReport> {
   const rows = await db.noActivityPeriod.findMany({
     where: {
@@ -141,6 +145,6 @@ export async function readAbsenceReport(
     cancelled: all.reduce((sum, item) => sum + item.cancelled, 0),
     approvedDays: all.reduce((sum, item) => sum + item.approvedDays, 0),
     pendingDays: all.reduce((sum, item) => sum + item.pendingDays, 0),
-    units: absenceUnitRows(scope, direct),
+    units: absenceUnitRows(scope, direct, locale),
   };
 }

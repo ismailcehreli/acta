@@ -1,114 +1,112 @@
-import { dayanikliGoto } from "./gezinme";
-import { expect, test, type Page } from "./test-tabani";
+import { resilientGoto } from "./navigation";
+import { expect, test, type Page } from "./test-base";
 
 import { E2E_ADMIN, E2E_WORKER, e2ePassword } from "./global-setup";
 
-// Tarayıcı bildirimleri (Görev 5.3b).
+// Browser notifications (Task 5.3b).
 //
-// Gerçek push gönderimi tarayıcı otomasyonuyla sınanamaz (push servisi dış
-// sistemdir). Burada sınanan **kurulum akışı**: anahtar yokken kullanıcıya ne
-// söylendiği, sistem yöneticisinin anahtarı üretmesi ve ondan sonra düğmenin
-// çıkması. Gerçek bildirim ürün sahibinin elle doğrulayacağı kalemdir.
+// Real push delivery cannot be tested with browser automation because the push
+// service is external. This covers the **setup flow**: the message shown when
+// keys are missing, key generation by a system administrator, and the control
+// that appears afterwards. Real delivery remains a manual product-owner check.
 
 test.describe.configure({ mode: "serial" });
 
-// **Sınır:** bu ortamdaki Chromium bildirim iznini kesin olarak reddediyor
-// (`Notification.permission === "denied"`); `grantPermissions` de değiştirmiyor.
-// Firefox ve WebKit ise izni "sorulmamış" bırakıyor. Yani izin durumu
-// tarayıcıdan tarayıcıya değişiyor ve testler ona **yaslanmaz**. "İzin
-// verilmiş" dalı hiçbir tarayıcıda koşturulamıyor; buradaki testler onu
-// koşturuyormuş gibi yapmıyor. Gerçek bildirim, planın "Bitti kanıtı"nda
-// yazdığı gibi ürün sahibinin elle doğrulayacağı kalemdir.
+// **Boundary:** Chromium in this environment always denies notification
+// permission (`Notification.permission === "denied"`), and `grantPermissions`
+// does not change it. Firefox and WebKit leave permission "not requested".
+// Permission therefore varies by browser and the tests do not **depend on it**.
+// The "granted" branch cannot run in any browser here; these tests do not
+// pretend otherwise. As stated in the plan's "proof of completion", real
+// delivery is a manual product-owner check.
 
-async function girisYap(page: Page, email: string): Promise<void> {
+async function signIn(page: Page, email: string): Promise<void> {
   await page.context().clearCookies();
-  await dayanikliGoto(page, "/login");
-  await page.getByLabel("E-posta", { exact: true }).fill(email);
-  await page.getByLabel("Parola", { exact: true }).fill(e2ePassword());
-  await page.getByRole("button", { name: "Giriş yap" }).click();
+  await resilientGoto(page, "/login");
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(e2ePassword());
+  await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page).toHaveURL(/\/$/);
 }
 
-async function profilAc(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Hesap menüsü" }).click();
-  await page.getByRole("menuitem", { name: "Profilim" }).click();
+async function openProfile(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Account menu" }).click();
+  await page.getByRole("menuitem", { name: "My Profile" }).click();
   await expect(page).toHaveURL(/\/users\//);
 }
 
-test("anahtar kurulmadan kullanıcıya ne yapması gerektiği söylenir", async ({
+test("the user is told what to do before keys are configured", async ({
   page,
 }) => {
-  await girisYap(page, E2E_WORKER.email);
-  await profilAc(page);
+  await signIn(page, E2E_WORKER.email);
+  await openProfile(page);
 
-  // Sessiz bir boşluk değil, ne yapılacağını söyleyen bir uyarı olmalı.
+  // Show an actionable warning rather than a silent empty space.
   await expect(
-    page.getByText("Tarayıcı bildirimleri henüz kurulmadı."),
+    page.getByText("Browser notifications are not configured yet."),
   ).toBeVisible();
-  await expect(page.locator('[data-test="push-anahtari"]')).toHaveCount(0);
+  await expect(page.locator('[data-test="push-toggle"]')).toHaveCount(0);
 });
 
-test("sistem yöneticisi anahtar üretir; kullanıcının gördüğü değişir", async ({
+test("a system administrator generates keys and the user-facing state changes", async ({
   page,
 }) => {
-  await girisYap(page, E2E_ADMIN.email);
-  await dayanikliGoto(page, "/admin/settings/delivery");
+  await signIn(page, E2E_ADMIN.email);
+  await resilientGoto(page, "/admin/settings/delivery");
 
-  // Ayar sayfasında birden çok form var; push bölümüne daraltılır.
-  const form = page.locator('[data-test="push-kurulumu"]');
-  await expect(form.getByText("Henüz kurulmadı.")).toBeVisible();
+  // The settings page has several forms; scope assertions to the push section.
+  const form = page.locator('[data-test="push-setup"]');
+  await expect(form.getByText("Not configured.")).toBeVisible();
 
-  await form.getByLabel("İletişim adresi", { exact: true }).fill("mailto:bt@ornek.test");
-  await form.getByRole("button", { name: "Anahtar üret ve kur" }).click();
-  await expect(form.getByText("Anahtar çifti üretildi.")).toBeVisible();
+  await form.getByLabel("Contact address", { exact: true }).fill("mailto:bt@example.test");
+  await form.getByRole("button", { name: "Generate keys and configure" }).click();
+  await expect(form.getByText(/A (new )?key pair was generated\./)).toBeVisible();
 
-  // Kurulumdan sonra iletişim adresi **değiştirilebilmeli** ve bu anahtarlara
-  // dokunmamalı (21.08.2026). Eskiden "Kaydet" düğmesi "zaten anahtar var"
-  // diye reddediyordu; adresi değiştirmenin tek yolu bütün abonelikleri
-  // öldüren "yenile" seçeneğiydi.
-  await dayanikliGoto(page, "/admin/settings/delivery");
-  const guncelForm = page.locator('[data-test="push-kurulumu"]');
-  await expect(guncelForm.getByText(/Kurulu\. Şu an \d+ cihaz abone\./)).toBeVisible();
+  // After setup the contact address must be **editable** without changing the
+  // keys (2026-08-21). Previously Save rejected the change with "keys already
+  // exist", leaving regeneration—which invalidates all subscriptions—as the
+  // only way to change the address.
+  await resilientGoto(page, "/admin/settings/delivery");
+  const configuredForm = page.locator('[data-test="push-setup"]');
+  await expect(configuredForm.getByText(/Configured\. \d+ devices are subscribed\./)).toBeVisible();
 
-  await guncelForm.getByLabel("İletişim adresi", { exact: true }).fill("mailto:yeni-bt@ornek.test");
-  await guncelForm.getByRole("button", { name: "Kaydet" }).click();
-  await expect(guncelForm.getByText("İletişim adresi kaydedildi.")).toBeVisible();
+  await configuredForm.getByLabel("Contact address", { exact: true }).fill("mailto:new-bt@example.test");
+  await configuredForm.getByRole("button", { name: "Save" }).click();
+  await expect(configuredForm.getByText("Contact address saved.")).toBeVisible();
 
-  // Adres gerçekten kaydedilmiş ve sistem hâlâ kurulu olmalı.
-  await dayanikliGoto(page, "/admin/settings/delivery");
-  const sonForm = page.locator('[data-test="push-kurulumu"]');
-  await expect(sonForm.getByLabel("İletişim adresi", { exact: true })).toHaveValue(
-    "mailto:yeni-bt@ornek.test",
+  // The address must be persisted and the system must remain configured.
+  await resilientGoto(page, "/admin/settings/delivery");
+  const finalForm = page.locator('[data-test="push-setup"]');
+  await expect(finalForm.getByLabel("Contact address", { exact: true })).toHaveValue(
+    "mailto:new-bt@example.test",
   );
-  await expect(sonForm.getByText(/Kurulu\. Şu an \d+ cihaz abone\./)).toBeVisible();
+  await expect(finalForm.getByText(/Configured\. \d+ devices are subscribed\./)).toBeVisible();
 
-  // Kurulum kullanıcının gördüğünü **değiştirmeli**: artık "kurulmadı"
-  // uyarısı yok, karar tarayıcı iznine kalmış durumda.
-  await girisYap(page, E2E_WORKER.email);
-  await profilAc(page);
+  // Setup must **change the user-facing state**: the "not configured" warning
+  // is gone and the remaining decision belongs to browser permission.
+  await signIn(page, E2E_WORKER.email);
+  await openProfile(page);
   await expect(
-    page.getByText("Tarayıcı bildirimleri henüz kurulmadı."),
+    page.getByText("Browser notifications are not configured yet."),
   ).toHaveCount(0);
 
-  // **Hangi** karara kaldığı tarayıcıya göre değişir ve uygulamanın işi
-  // değildir: Chromium bildirimi baştan reddediyor ("engellenmiş" dalı),
-  // Firefox ve WebKit ise sormamış sayıyor ("bu cihazda aç" düğmesi).
-  // Önceden burada yalnız Chromium'un dalı aranıyordu; test, uygulamanın
-  // davranışını değil ortamın varsayılanını ölçüyordu (22.08.2026, Firefox
-  // koşusunda yakalandı). Sınanan şey artık doğru olan: kurulumdan sonra
-  // karar tarayıcıya geçmiş olmalı.
+  // **Which** permission state remains depends on the browser, not the
+  // application: Chromium denies it up front, while Firefox and WebKit report
+  // "not requested" and show an enable control. The assertion must prove that
+  // setup handed the remaining decision to the browser, not assume an
+  // environment default (2026-08-22, found in the Firefox run).
   await expect(
-    page.locator('[data-test="push-anahtari"], [data-test="push-engellenmis"]'),
+    page.locator('[data-test="push-toggle"], [data-test="push-blocked"]'),
   ).toBeVisible();
 });
 
-test("geçersiz iletişim adresi reddedilir", async ({ page }) => {
-  await girisYap(page, E2E_ADMIN.email);
-  await dayanikliGoto(page, "/admin/settings/delivery");
+test("an invalid contact address is rejected", async ({ page }) => {
+  await signIn(page, E2E_ADMIN.email);
+  await resilientGoto(page, "/admin/settings/delivery");
 
-  const form = page.locator('[data-test="push-kurulumu"]');
-  await form.getByLabel("İletişim adresi", { exact: true }).fill("bt@ornek.test");
-  await form.getByRole("button", { name: /Kaydet|Anahtar üret ve kur/ }).click();
+  const form = page.locator('[data-test="push-setup"]');
+  await form.getByLabel("Contact address", { exact: true }).fill("bt@example.test");
+  await form.getByRole("button", { name: /Save|Generate keys and configure/ }).click();
 
   await expect(form.getByText(/mailto:/).first()).toBeVisible();
 });

@@ -6,20 +6,19 @@ import {
   type CloseContext,
 } from "@/server/conversations/close-rules";
 
-// §9.3 kapatma tablosunun HER satırı. Kural saf fonksiyonda olduğu için sahte
-// saatle, veritabanı olmadan sınanır.
+// §9.3 closing table rules. Tested with mock clock and without database.
 
-const ACILIS = new Date("2026-08-03T09:00:00.000Z"); // Pazartesi
+const OPENING_TIME = new Date("2026-08-03T09:00:00.000Z"); // Monday
 
 function context(overrides: Partial<CloseContext> = {}): CloseContext {
   return {
     status: "OPEN",
-    askerId: "soran",
-    respondentId: "sorumlu",
-    openedAt: ACILIS,
-    lastAskerActionAt: ACILIS,
+    askerId: "asker",
+    respondentId: "responsible",
+    openedAt: OPENING_TIME,
+    lastAskerActionAt: OPENING_TIME,
     now: new Date("2026-08-04T09:00:00.000Z"),
-    actorId: "soran",
+    actorId: "asker",
     actorIsSystemAdmin: false,
     actorIsAskerSupervisor: false,
     anyPartyInactive: false,
@@ -27,172 +26,167 @@ function context(overrides: Partial<CloseContext> = {}): CloseContext {
   };
 }
 
-describe("§9.3 — soruyu soran", () => {
-  it("her zaman kapatabilir", () => {
-    expect(decideClose(context({ actorId: "soran" }))).toEqual({
+describe("§9.3 — asker", () => {
+  it("can always close", () => {
+    expect(decideClose(context({ actorId: "asker" }))).toEqual({
       allowed: true,
       closeType: "NORMAL",
       requiresReason: false,
     });
   });
 
-  it("uzun süre sonra da kapatabilir", () => {
-    const karar = decideClose(
-      context({ actorId: "soran", now: new Date("2026-09-30T09:00:00.000Z") }),
+  it("can close even after a long period", () => {
+    const decision = decideClose(
+      context({ actorId: "asker", now: new Date("2026-09-30T09:00:00.000Z") }),
     );
-    expect(karar.allowed).toBe(true);
+    expect(decision.allowed).toBe(true);
   });
 });
 
-describe("§9.3 — sorunun sorumlusu", () => {
-  it("asla kapatamaz", () => {
-    expect(decideClose(context({ actorId: "sorumlu" }))).toEqual({
+describe("§9.3 — party responsible for question", () => {
+  it("can never close", () => {
+    expect(decideClose(context({ actorId: "responsible" }))).toEqual({
       allowed: false,
       reason: "responsible_cannot_close",
     });
   });
 
-  it("çok zaman geçse de kapatamaz", () => {
-    const karar = decideClose(
-      context({ actorId: "sorumlu", now: new Date("2026-12-31T09:00:00.000Z") }),
+  it("cannot close even after extensive time", () => {
+    const decision = decideClose(
+      context({ actorId: "responsible", now: new Date("2026-12-31T09:00:00.000Z") }),
     );
-    expect(karar.allowed).toBe(false);
+    expect(decision.allowed).toBe(false);
   });
 
-  it("sistem yöneticisi bile olsa sorumlu sıfatıyla kapatamaz", () => {
-    const karar = decideClose(
-      context({ actorId: "sorumlu", actorIsSystemAdmin: true }),
+  it("cannot close as responsible even if system admin", () => {
+    const decision = decideClose(
+      context({ actorId: "responsible", actorIsSystemAdmin: true }),
     );
-    expect(karar).toEqual({
+    expect(decision).toEqual({
       allowed: false,
       reason: "responsible_cannot_close",
     });
   });
 });
 
-describe("§9.3 — soranın üstündeki yönetici", () => {
-  it(`${SUPERVISOR_TAKEOVER_BUSINESS_DAYS} iş günü dolmadan kapatamaz`, () => {
-    const karar = decideClose(
+describe("§9.3 — asker's supervisor", () => {
+  it(`cannot close before ${SUPERVISOR_TAKEOVER_BUSINESS_DAYS} business days`, () => {
+    const decision = decideClose(
       context({
-        actorId: "ust",
+        actorId: "supervisor",
         actorIsAskerSupervisor: true,
-        // 3 Ağustos Pazartesi + 9 iş günü = 14 Ağustos Cuma.
+        // Aug 3 Mon + 9 business days = Aug 14 Fri.
         now: new Date("2026-08-14T09:00:00.000Z"),
       }),
     );
 
-    expect(karar).toEqual({ allowed: false, reason: "supervisor_too_early" });
+    expect(decision).toEqual({ allowed: false, reason: "supervisor_too_early" });
   });
 
-  it(`${SUPERVISOR_TAKEOVER_BUSINESS_DAYS} iş günü dolunca kapatabilir`, () => {
-    const karar = decideClose(
+  it(`can close when ${SUPERVISOR_TAKEOVER_BUSINESS_DAYS} business days have elapsed`, () => {
+    const decision = decideClose(
       context({
-        actorId: "ust",
+        actorId: "supervisor",
         actorIsAskerSupervisor: true,
-        // 17 Ağustos Pazartesi = 10. iş günü.
+        // Aug 17 Mon = 10th business day.
         now: new Date("2026-08-17T09:00:00.000Z"),
       }),
     );
 
-    expect(karar).toEqual({
+    expect(decision).toEqual({
       allowed: true,
       closeType: "NORMAL",
       requiresReason: false,
     });
   });
 
-  it("hafta sonu sayacı ilerletmez", () => {
-    // 3–16 Ağustos arasında iki hafta sonu var; takvim günü 13 olsa da iş günü
-    // 10'a ulaşmaz.
-    const karar = decideClose(
+  it("weekend does not advance business day counter", () => {
+    const decision = decideClose(
       context({
-        actorId: "ust",
+        actorId: "supervisor",
         actorIsAskerSupervisor: true,
         now: new Date("2026-08-16T09:00:00.000Z"),
       }),
     );
 
-    expect(karar.allowed).toBe(false);
+    expect(decision.allowed).toBe(false);
   });
 
-  it("resmî tatil de sayacı ilerletmez", () => {
-    const karar = decideClose(
+  it("public holiday does not advance business day counter", () => {
+    const decision = decideClose(
       context({
-        actorId: "ust",
+        actorId: "supervisor",
         actorIsAskerSupervisor: true,
         now: new Date("2026-08-17T09:00:00.000Z"),
         holidays: ["2026-08-10"],
       }),
     );
 
-    expect(karar.allowed).toBe(false);
+    expect(decision.allowed).toBe(false);
   });
 
-  it("soran yeni mesaj yazınca sayaç yeniden başlar", () => {
-    const karar = decideClose(
+  it("counter resets when asker sends a new message", () => {
+    const decision = decideClose(
       context({
-        actorId: "ust",
+        actorId: "supervisor",
         actorIsAskerSupervisor: true,
         lastAskerActionAt: new Date("2026-08-14T09:00:00.000Z"),
         now: new Date("2026-08-17T09:00:00.000Z"),
       }),
     );
 
-    expect(karar.allowed).toBe(false);
+    expect(decision.allowed).toBe(false);
   });
 });
 
-describe("§9.3 — sistem yöneticisi", () => {
-  it("idari olarak kapatabilir", () => {
-    const karar = decideClose(
+describe("§9.3 — system administrator", () => {
+  it("can close administratively", () => {
+    const decision = decideClose(
       context({
-        actorId: "sistem",
+        actorId: "system",
         actorIsSystemAdmin: true,
         anyPartyInactive: true,
       }),
     );
 
-    expect(karar).toEqual({
+    expect(decision).toEqual({
       allowed: true,
       closeType: "ADMINISTRATIVE",
       requiresReason: true,
     });
   });
 
-  it("taraflar aktifken de kapatabilir — pasifleştirme sürecinin önünü açar", () => {
-    // §4.6 açık konuşması olan kullanıcının pasifleştirilmesini engelliyor;
-    // idari kapatma "taraf pasifse" koşuluna bağlansaydı kilit oluşurdu
-    // (bkz. açık soru 10).
-    const karar = decideClose(
-      context({ actorId: "sistem", actorIsSystemAdmin: true }),
+  it("can close while parties are active — unblocks deactivation flow", () => {
+    const decision = decideClose(
+      context({ actorId: "system", actorIsSystemAdmin: true }),
     );
 
-    expect(karar).toEqual({
+    expect(decision).toEqual({
       allowed: true,
       closeType: "ADMINISTRATIVE",
       requiresReason: true,
     });
   });
 
-  it("idari kapatma sorumluluk kuralını çiğnemez", () => {
-    // Sistem yöneticisi aynı zamanda sorumluysa yine kapatamaz.
-    const karar = decideClose(
-      context({ actorId: "sorumlu", actorIsSystemAdmin: true }),
+  it("administrative closure does not violate responsibility rule", () => {
+    // If system admin is also the responsible party, cannot close.
+    const decision = decideClose(
+      context({ actorId: "responsible", actorIsSystemAdmin: true }),
     );
 
-    expect(karar.allowed).toBe(false);
+    expect(decision.allowed).toBe(false);
   });
 });
 
-describe("§9.3 — ilgisiz kişi ve kapalı konuşma", () => {
-  it("konuşmayla ilgisi olmayan kişi kapatamaz", () => {
-    expect(decideClose(context({ actorId: "yabanci" }))).toEqual({
+describe("§9.3 — unrelated person and closed conversation", () => {
+  it("unrelated person cannot close", () => {
+    expect(decideClose(context({ actorId: "stranger" }))).toEqual({
       allowed: false,
       reason: "not_a_party",
     });
   });
 
-  it("kapalı konuşma yeniden kapatılamaz", () => {
+  it("closed conversation cannot be closed again", () => {
     expect(decideClose(context({ status: "CLOSED" }))).toEqual({
       allowed: false,
       reason: "already_closed",

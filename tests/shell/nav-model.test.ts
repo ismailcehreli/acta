@@ -17,8 +17,8 @@ const baseUser: NavUser = {
   canViewScoreReports: false,
 };
 
-describe("ana gezinme modeli", () => {
-  it("kişisel ve yönetilen alanı ayrı, varsayılan İngilizce adlandırır", () => {
+describe("main navigation model", () => {
+  it("separates personal and managed areas and uses English by default", () => {
     const nav = buildNav(baseUser);
 
     expect(nav.personal.find((item) => item.href === "/activities")?.label).toBe(
@@ -33,7 +33,7 @@ describe("ana gezinme modeli", () => {
     expect(nav.personal.some((item) => item.href === "/feed")).toBe(false);
   });
 
-  it("Türkçe çevirmen ile Türkçe etiketler üretir", () => {
+  it("produces Turkish labels with the Turkish translator", () => {
     const t = createTranslator("tr");
     const nav = buildNav(baseUser, t);
 
@@ -48,7 +48,7 @@ describe("ana gezinme modeli", () => {
     ).toBe("Yönettiğim izinler");
   });
 
-  it("rapor bağlantısını yalnız rapor yetkisi olan kişiye verir", () => {
+  it("shows the reports link only to users with report permission", () => {
     expect(buildNav(baseUser).management.some((item) => item.href === "/reports")).toBe(
       false,
     );
@@ -59,7 +59,7 @@ describe("ana gezinme modeli", () => {
     ).toMatchObject({ label: "Reports" });
   });
 
-  it("rapor bağlantısını skor ekranından ayrı tutar", () => {
+  it("keeps the reports link separate from the scores screen", () => {
     const nav = buildNav({
       ...baseUser,
       scoringEnabled: false,
@@ -69,7 +69,7 @@ describe("ana gezinme modeli", () => {
     expect(nav.management.some((item) => item.href === "/scores")).toBe(false);
   });
 
-  it("ekibi olmayan kişide akış kişisel bölümde kalır", () => {
+  it("keeps the feed personal for a user without a team", () => {
     const nav = buildNav({ ...baseUser, hasTeam: false });
     expect(nav.personal.find((item) => item.href === "/feed")?.label).toBe(
       "Activity Feed",
@@ -78,12 +78,12 @@ describe("ana gezinme modeli", () => {
     expect(mobileTabs(nav).length).toBeLessThanOrEqual(5);
   });
 
-  it("okunmamış sayacı akışı doğrudan dikkat filtresine bağlar", () => {
+  it("connects the unread counter directly to the unread feed filter", () => {
     const nav = buildNav({ ...baseUser, unreadCount: 2 });
-    const akis = nav.management.find((item) => item.icon === "akis");
+    const akis = nav.management.find((item) => item.icon === "feed");
 
     expect(akis).toMatchObject({
-      href: "/feed?period=all&okunmamis=1",
+      href: "/feed?period=all&unread=1",
       count: 2,
     });
     expect(mobileTabs(nav)).toContainEqual(akis);

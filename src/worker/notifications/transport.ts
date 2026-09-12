@@ -1,8 +1,8 @@
 import { createTransport } from "nodemailer";
 
-// E-posta taşıyıcısı (§12.3). Arayüz dar tutuldu: gönderim ayrıntısı
-// işleyicinin bilmesi gereken bir şey değil, testler de sahte bir taşıyıcıyla
-// koşabilsin diye.
+
+
+
 
 export interface EmailMessage {
   to: string;
@@ -12,14 +12,11 @@ export interface EmailMessage {
 
 export interface EmailTransport {
   send(message: EmailMessage): Promise<void>;
-  /** Günlüğe yazılan ad; hangi taşıyıcının çalıştığı görünür olsun. */
+
   readonly name: string;
 }
 
-/**
- * Taşıyıcının ihtiyaç duyduğu ayarlar. Nereden geldiği (veritabanı ya da
- * ortam) burayı ilgilendirmez; okuma `server/settings/smtp.ts` içindedir.
- */
+
 export interface SmtpSettings {
   host: string;
   port: number;
@@ -53,18 +50,18 @@ export function createSmtpTransport(settings: SmtpSettings): EmailTransport {
 }
 
 /**
- * SMTP ayarlanmadığında kullanılan taşıyıcı: postayı **göndermez**, günlüğe
- * yazar. Kuyruk yolunun geliştirmede de çalışması için var; ürettiği satır
- * "gönderilmedi" demeyi açıkça içerir ki kimse gerçek gönderim sanmasın.
+ * Transport used when SMTP is not configured: it does not send email and
+ * writes to the log. It keeps the queue path usable in development; the log
+ * line explicitly says that the message was not sent.
  */
 export function createLogTransport(
   log: (message: string) => void = console.log,
 ): EmailTransport {
   return {
-    name: "log(SMTP ayarlı değil)",
+    name: "log(SMTP not configured)",
     async send(message) {
       log(
-        `[bildirim] SMTP ayarlı değil, gönderilmedi → ${message.to} · ${message.subject}`,
+        `[notification] SMTP not configured; not sent → ${message.to} · ${message.subject}`,
       );
     },
   };

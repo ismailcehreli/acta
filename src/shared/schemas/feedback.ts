@@ -4,10 +4,10 @@ const plainText = (label: string, max: number) =>
   z
     .string()
     .trim()
-    .min(1, `${label} boş bırakılamaz`)
-    .max(max, `${label} en fazla ${max} karakter olabilir`)
+    .min(1, `${label} cannot be empty`)
+    .max(max, `${label} must be ${max} characters or fewer`)
     .refine((value) => !/<\/?[a-z][^>]*>/i.test(value), {
-      message: `${label} HTML etiketi içeremez`,
+      message: `${label} cannot contain HTML tags`,
     });
 
 export const feedbackCategorySchema = z.enum([
@@ -21,16 +21,16 @@ export const feedbackStatusSchema = z.enum(["NEW", "IN_REVIEW", "RESOLVED"]);
 
 export const feedbackCreateSchema = z.object({
   category: feedbackCategorySchema,
-  title: plainText("Başlık", 200),
-  description: plainText("Açıklama", 10000),
+  title: plainText("Title", 200),
+  description: plainText("Description", 10000),
   sourcePath: z
     .string()
     .trim()
-    .max(500, "Sayfa yolu çok uzun")
+    .max(500, "Page path is too long")
     .optional()
     .transform((value) => value || null),
-  // Yeni akışta tüm kayıtları yalnızca sistem yöneticileri yönetir. Alan eski
-  // istemcilerle uyumluluk için kabul edilir ancak kullanıcıya gösterilmez.
+  // All records are managed by system administrators. The field remains
+  // accepted for compatibility with older clients but is not shown to users.
   adminsOnly: z.boolean().default(false),
 });
 
@@ -40,9 +40,9 @@ export const feedbackUpdateSchema = z.object({
   response: z
     .string()
     .trim()
-    .max(5000, "Yanıt en fazla 5000 karakter olabilir")
+    .max(5000, "Response must be 5,000 characters or fewer")
     .refine((value) => !/<\/?[a-z][^>]*>/i.test(value), {
-      message: "Yanıt HTML etiketi içeremez",
+      message: "Response cannot contain HTML tags",
     })
     .optional()
     .transform((value) => value || null),

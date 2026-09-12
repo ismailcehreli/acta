@@ -24,11 +24,11 @@ import {
 } from "./history";
 import { acquireScoreClosureLock } from "./recalculation";
 
-// Dönem kapanışı ve geç düzeltme sürümleri (P8-R3-1..4).
+
 //
-// Eski karne hiçbir zaman yeniden yazılmaz. İlk kapanış `revisionNo=1`, geç
-// fakat kurala uygun veri ise artan yeni bir sürüm üretir. Okuma yolları yalnız
-// en yeni mühürlü sürümü seçer; eski sürüm denetim kanıtı olarak kalır.
+
+
+
 
 export type ClosePeriodDb = ScoreCollectDb &
   Pick<
@@ -44,22 +44,22 @@ export type ClosePeriodDb = ScoreCollectDb &
   >;
 
 export interface ClosePeriodOutcome {
-  /** Kaç kişi için yeni sürüm yazıldı. */
+
   written: number;
-  /** İlk kapanan ya da yeniden hesaplanan dönemin ilk günü. */
+
   periodStart: string | null;
 }
 
 export interface ScorePeriodWorkBatchOutcome {
-  /** Bu turda tamamlanan bağımsız kapanış/düzeltme işleri. */
+
   processed: number;
-  /** Yazılan karne sürümü sayısı. */
+
   written: number;
-  /** İşlenen dönemler, eskiden yeniye. */
+
   periodStarts: string[];
-  /** İş sayısı sınırı dolduğu için iş bırakıldı mı? */
+
   exhaustedItemBudget: boolean;
-  /** Süre sınırı dolduğu için iş bırakıldı mı? */
+
   exhaustedTimeBudget: boolean;
 }
 
@@ -111,12 +111,7 @@ function closingEligible(now: Date, end: Date, retroactiveDays: number): boolean
   return companyDay(now) > dayValue(lastEntryDay);
 }
 
-/**
- * En eski uygun ve henüz ilk kapanışı yapılmamış ayı bulur.
- *
- * Kesim kaydı testlerde yoksa mevcut davranışla uyumlu olarak yalnız önceki
- * ay değerlendirilir. Üretim migrationı kesimi ilk güvenilir tam aya yazar.
- */
+
 async function nextMissingPeriod(
   db: Prisma.TransactionClient,
   now: Date,
@@ -148,11 +143,7 @@ interface RevisionCause {
   requestId: string | null;
 }
 
-/**
- * Transaction geri alındıktan sonra hangi kuyruk satırının hata aldığını
- * dışarı taşıyan dar hata türü. İstek kimliğini işlemden önce okumak yarışta
- * bayatlar: başka işçi o isteği bitirip sıradakine geçmiş olabilir.
- */
+
 class RecalculationProcessingError extends Error {
   readonly requestId: string;
 
@@ -163,7 +154,7 @@ class RecalculationProcessingError extends Error {
   }
 }
 
-/** Bir kullanıcı-ay için yeni, mühürlü sürüm yazar. */
+
 async function writeRevision(
   tx: Prisma.TransactionClient,
   input: {
@@ -194,14 +185,14 @@ async function writeRevision(
     id: input.user.id,
     isSystemAdmin: false,
   });
-  context.takvimIndeksi = input.environment.unitCalendarIndex;
-  context.takvimAyari = {
+  context.calendarIndex = input.environment.unitCalendarIndex;
+  context.calendarSetting = {
     workingDays:
       input.environment.companyCalendar.workingDays ?? [1, 2, 3, 4, 5],
   };
-  context.onayEsigi = input.environment.approvalThreshold;
-  context.cevapEsigi = input.environment.answerThreshold;
-  context.maddeEsigi = input.environment.followUpThreshold;
+  context.approvalThreshold = input.environment.approvalThreshold;
+  context.answerThreshold = input.environment.answerThreshold;
+  context.followUpThreshold = input.environment.followUpThreshold;
   context.appreciationPointsPer = input.environment.appreciationPointsPer;
 
   const collected = await collectScoreInputs(
@@ -218,7 +209,7 @@ async function writeRevision(
   );
   const scoreInput = collected.get(input.user.id);
   if (!scoreInput) {
-    throw new Error(`Skor girdisi üretilemedi: ${input.user.id}`);
+    throw new Error(`Could not build score input: ${input.user.id}`);
   }
   const weights = input.environment.weights;
 
@@ -226,8 +217,8 @@ async function writeRevision(
     isUnitManager: input.user.isUnitManager,
     requiresApproval: input.user.requiresApproval,
   });
-  // `computeScore` doğrudan yürürlükteki kayıtlı hesaplayıcıya yönlenir; yazılan
-  // etiket ile çalışan algoritma ayrı seçilemez.
+  // `computeScore` delegates to the registered calculator for the requested
+  // version; the stored label and the algorithm cannot diverge.
   const score = computeScoreByVersion(
     input.formulaVersion,
     profile,
@@ -292,10 +283,10 @@ async function writeRevision(
 }
 
 /**
- * Tarihsel düzeltme kullanıcının bu ay skor kapsamına hiç girmemesi
- * gerektiğini gösterirse eski sürümü silmeden görünürlükten düşüren mühür.
- * Sayısal alanlar son değişmez sürümden kopyalanır; `voided` olduğu için
- * hiçbir okuma yolu bu değerleri personel karnesi olarak sunmaz.
+ * Voids a previous revision without deleting it when a historical correction
+ * shows that the user should never have been in scope for the period.
+ * Numeric fields are copied from the latest immutable revision; because the
+ * new row is `voided`, no read path presents it as a person's scorecard.
  */
 async function writeVoidedRevision(
   tx: Prisma.TransactionClient,
@@ -332,7 +323,7 @@ async function writeVoidedRevision(
     input.previous.formulaVersion === null
   ) {
     throw new Error(
-      `Geçersiz kılınacak skor sürümü formül mührü taşımıyor: ${input.userId}`,
+      `Score revision to void is missing its formula snapshot: ${input.userId}`,
     );
   }
 
@@ -365,10 +356,11 @@ async function writeVoidedRevision(
 }
 
 /**
- * Dönemin ilk kapanışında kullanılan formül sürümü.
+ * Returns the formula version used when the period was first closed.
  *
- * Kapsama sonradan eklenen kişinin ilk karnesi de aynı sürümle yazılmalıdır;
- * yoksa aynı ayın iki karnesi iki ayrı algoritmayla hesaplanmış olurdu.
+ * A user added to scope later must receive their first scorecard with the
+ * same version; otherwise one month would contain scorecards calculated by
+ * different algorithms.
  */
 async function periodFormulaVersion(
   tx: Prisma.TransactionClient,
@@ -380,7 +372,7 @@ async function periodFormulaVersion(
   });
   if (!ledger) {
     throw new Error(
-      `Kapanmamış dönem için skor düzeltme isteği: ${dayValue(periodStart)}`,
+      `Score correction requested for an unclosed period: ${dayValue(periodStart)}`,
     );
   }
   return ledger.formulaVersion;
@@ -397,8 +389,9 @@ async function processRecalculation(
   if (!request) return null;
 
   try {
-    // Aynı kullanıcı-ay için o ana kadar biriken istekler tek yeni sürümde
-    // birleşir. İşçi yeni sürümün veri kesimini `now` ile alır.
+    // Requests accumulated for the same user and month are merged into one
+    // new revision. The worker takes the new revision's data snapshot at
+    // `now`.
     const grouped = await tx.scoreRecalculationRequest.findMany({
       where: {
         userId: request.userId,
@@ -451,13 +444,13 @@ async function processRecalculation(
       });
     };
 
-    // **Ayrım, karnenin varlığı değil dönem sonu uygunluğudur**
-    // (denetim 25.08.2026, P8-R5-2). Kişi o dönemde puan kapsamında
-    // değilse ve hiç karnesi de olmamışsa düzeltilecek bir şey yoktur:
-    // migration öncesinden, elle müdahaleden veya eski uygulama yolundan
-    // kalmış bayat istek hesaplama hatası değildir. Grubu tüket; aksi hâlde
-    // ilk satır her turda yeniden seçilir ve arkasındaki geçerli istekler
-    // sonsuza dek bekler.
+    // **The distinction is historical eligibility, not scorecard existence**
+    // (audit 25.08.2026, P8-R5-2). If the person was not in scope for the
+    // period and has no scorecard, there is nothing to correct. The stale
+    // request may come from a migration, manual intervention, or an old
+    // application path; it is not a calculation failure. Consume the group,
+    // otherwise the first row would be selected every cycle and valid requests
+    // behind it would wait forever.
     if (!historicalUser && !previousRevision?.formulaVersion) {
       await consume();
       return { written: 0, periodStart: dayValue(request.periodStart) };
@@ -468,16 +461,16 @@ async function processRecalculation(
       select: { id: true },
     });
     if (!user) {
-      throw new Error(`Skor düzeltme kullanıcısı bulunamadı: ${request.userId}`);
+      throw new Error(`Score correction user not found: ${request.userId}`);
     }
 
     const cause = { reason: request.sourceType, requestId: request.id };
     if (historicalUser) {
-      // Karnesi varsa bu bir veri düzeltmesidir ve formül geçişi değildir:
-      // dönemin hesap sürümü korunur. Karnesi yoksa gerekçeli geçmiş
-      // düzeltmesi kişiyi kapsama **ekliyor** demektir; ilk sürüm dönemin
-      // kayıt defterindeki formül sürümüyle yazılır. Yürürlükteki sürüme
-      // kaçmak, kapanmış dönemi sessizce yeni algoritmayla yorumlardı.
+      // An existing scorecard means a data correction, not a formula
+      // migration: preserve the period's calculation version. Without a
+      // scorecard, an approved historical correction **adds** the person to
+      // scope; write the first revision with the ledger's formula version.
+      // Using the current version would silently reinterpret a closed period.
       const formulaVersion =
         previousRevision?.formulaVersion ??
         (await periodFormulaVersion(tx, request.periodStart));
@@ -530,8 +523,8 @@ async function closeInitialPeriod(
     written += 1;
   }
 
-  // Kullanıcısı olmayan ay da tamamlandı olarak işaretlenir; işçi onu tekrar
-  // tekrar seçmez.
+  // A month with no users is also marked complete so the worker does not
+  // select it again.
   await tx.scorePeriodLedger.create({
     data: {
       periodStart: bounds.from,
@@ -555,12 +548,12 @@ export async function closeScorePeriod(
 
   const formulaVersion = options.formulaVersion ?? SCORE_FORMULA_VERSION;
   if (!Number.isInteger(formulaVersion) || formulaVersion < 1) {
-    throw new Error(`Geçersiz skor formülü sürümü: ${formulaVersion}`);
+    throw new Error(`Invalid score formula version: ${formulaVersion}`);
   }
 
-  // İlk kapanış ve düzeltme aynı global kilide katılır. Böylece iki worker
-  // aynı kullanıcı-ay için aynı sürüm numarasını üretemez ve dönem kayıt
-  // defteri seçim/yazma aralığında bayatlamaz.
+  // Initial closure and correction share the same global lock. This prevents
+  // two workers from generating the same revision number for one user-month
+  // and keeps the period ledger fresh between selection and write.
   try {
     return await db.$transaction(async (tx) => {
       await acquireScoreClosureLock(tx);
@@ -594,11 +587,11 @@ export async function closeScorePeriod(
 }
 
 /**
- * İşçi turunda birden çok bağımsız skor işini işler.
+ * Processes multiple independent score jobs in one worker cycle.
  *
- * Her `closeScorePeriod` çağrısı kendi transaction'ını ve dolayısıyla kendi
- * kısa dışlayıcı kilidini taşır. Toplulaştırma tek, uzun bir transaction
- * yaratmaz; bir düzeltmenin hatası önceki başarıları geri almaz.
+ * Each `closeScorePeriod` call has its own transaction and short exclusive
+ * lock. Batching does not create one long transaction; one correction failure
+ * does not roll back earlier successes.
  */
 export async function drainScorePeriodWork(
   db: ClosePeriodDb,
@@ -608,10 +601,10 @@ export async function drainScorePeriodWork(
   const maxItems = options.maxItems ?? DEFAULT_SCORE_WORK_MAX_ITEMS;
   const maxDurationMs = options.maxDurationMs ?? DEFAULT_SCORE_WORK_MAX_DURATION_MS;
   if (!Number.isInteger(maxItems) || maxItems < 1) {
-    throw new Error("Skor iş paketi en az bir iş içermeli.");
+    throw new Error("A score work batch must contain at least one item.");
   }
   if (!Number.isFinite(maxDurationMs) || maxDurationMs < 1) {
-    throw new Error("Skor iş paketi süresi pozitif olmalı.");
+    throw new Error("A score work batch duration must be positive.");
   }
 
   const startedAt = Date.now();

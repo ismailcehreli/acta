@@ -7,12 +7,12 @@ import { askQuestion, replyToConversation } from "@/server/conversations/service
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDatabaseUrl, testDb } from "../helpers/test-db";
 
-// Denetim (18.08.2026, FAZ 4 bulgu 2 ve 3): iptal, düzeltme ve soru
-// açma aynı kilit protokolüne katılmıyordu. İptalin "geri alınamaz" ve "açık
-// konuşmaları kapatır" sonuçları garanti değildi.
+// Audit (2026-08-18, PHASE 4 findings 2 and 3): cancellation, editing, and question
+// opening did not participate in the same locking protocol. Results where cancellation
+// is "irreversible" and "closes open conversations" were not guaranteed.
 //
-// Yarışı kurmak için iki ayrı bağlantı ve buluşma noktası gerekir; tek
-// istemciden art arda gönderilen çağrılar sıraya girer ve hiçbir şey kanıtlamaz.
+// Setting up a race condition requires two separate connections and a synchronization point;
+// sequential calls from a single client queue up and prove nothing.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
@@ -42,15 +42,15 @@ function createBarrier(participants: number) {
 }
 
 async function scenario() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-  const moldShop = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
+  const root = await createOrgUnit({ name: "Headquarters", type: "Root" });
+  const moldShop = await createOrgUnit({ name: "Tooling Workshop", parentId: root.id });
 
   const director = await createUser(root.id, {
-    fullName: "Direktör",
+    fullName: "Director",
     isUnitManager: true,
   });
   const author = await createUser(moldShop.id, {
-    fullName: "Kalıphane Müdürü",
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
 
@@ -59,8 +59,8 @@ async function scenario() {
       authorId: author.id,
       authorOrgUnitId: moldShop.id,
       activityDate: new Date("2026-08-17T00:00:00.000Z"),
-      title: "İlk başlık",
-      description: "İlk açıklama",
+      title: "Initial title",
+      description: "Initial description",
       approvalStatus: "APPROVED",
       createdAt: NOW,
       updatedAt: NOW,
@@ -71,16 +71,11 @@ async function scenario() {
 }
 
 /**
- * Yarışın hangi sırayla çözüleceği rastgeledir; "iki isteği aynı anda gönder"
- * biçiminde bir test, kilit kaldırıldığında da yeşil kalabilir. Bu yüzden
- * pencere elle açılır: dış bir işlem satırı `FOR UPDATE` ile tutar, sınanan
- * çağrı ön okumasını yaptıktan sonra kilitte bekler, ardından satırın durumu
- * değiştirilip işlem tamamlanır. Kilit yoksa çağrı beklemez ve eskimiş
- * durumla yazar.
- *
- * Kilidi tutan taraf gerçek `cancelActivity`/`closeConversation` yerine ham
- * güncelleme yapar; ikisi de aynı satırı `FOR UPDATE` ile kilitlediği için
- * dışarıdan görünen davranış aynıdır ve iç içe işlem açma sorunu doğmaz.
+ * Which side wins a race is non-deterministic; a naive "send two requests concurrently"
+ * test can pass even if locks are completely removed. Therefore, the race window is
+ * controlled explicitly: an external transaction acquires `FOR UPDATE`, tested call
+ * performs pre-read then waits on the lock, then the row status is mutated and completed.
+ * Without locking, the call would not wait and write stale state.
  */
 async function withRowLockedThen<T>(
   table: "Activity" | "Conversation",
@@ -112,18 +107,16 @@ async function withRowLockedThen<T>(
 
   await locked;
   const pending = during();
-  // Beklemeyi ölçen yarış hata fırlatsa bile işlem kapatılmalı; açık kalan bir
-  // işlem sonraki testin TRUNCATE'ini süresiz kilitler.
+  // Ensure transaction closes even if test throws; unclosed transactions deadlock TRUNCATE.
   pending.catch(() => undefined);
 
   try {
-    // Çağrının kilitte gerçekten beklediğini görmek için kısa bir soluk: bu
-    // süre içinde çözülürse kilit protokolüne hiç girmemiş demektir.
-    const erkenBiten = await Promise.race([
-      pending.then(() => "bitti" as const),
-      new Promise<"bekliyor">((resolve) => setTimeout(() => resolve("bekliyor"), 300)),
+    // Brief pause to verify the call is genuinely blocking on the lock.
+    const earlyResult = await Promise.race([
+      pending.then(() => "finished" as const),
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 300)),
     ]);
-    expect(erkenBiten).toBe("bekliyor");
+    expect(earlyResult).toBe("waiting");
   } finally {
     releaseHolder();
     await holder.catch(() => undefined);
@@ -132,11 +125,11 @@ async function withRowLockedThen<T>(
   return pending;
 }
 
-describe("düzeltme ile iptal yarışı", () => {
-  it("iptal kazanınca düzeltme yazamaz", async () => {
+describe("edit versus cancellation race", () => {
+  it("cannot edit when cancellation wins the race", async () => {
     const { author, activity, moldShop } = await scenario();
 
-    const sonuc = await withRowLockedThen(
+    const result = await withRowLockedThen(
       "Activity",
       activity.id,
       (tx) =>
@@ -151,29 +144,29 @@ describe("düzeltme ile iptal yarışı", () => {
           {
             id: activity.id,
             activityDate: "2026-08-17",
-            title: "Düzeltilmiş başlık",
-            description: "Düzeltilmiş açıklama",
+            title: "Edited title",
+            description: "Edited description",
             targetDepartmentIds: [moldShop.id],
           },
           new Date(NOW.getTime() + 60_000),
         ),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("conflict");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("conflict");
 
     const stored = await testDb.activity.findUniqueOrThrow({ where: { id: activity.id } });
-    expect(stored.title).toBe("İlk başlık");
+    expect(stored.title).toBe("Initial title");
     expect(stored.currentRevisionNo).toBe(1);
   });
 });
 
-describe("soru açma ile iptal yarışı", () => {
-  it("iptal kazanınca yeni konuşma açılmaz", async () => {
+describe("ask question versus cancellation race", () => {
+  it("does not open new conversation when cancellation wins", async () => {
     const { director, activity } = await scenario();
 
-    const sonuc = await withRowLockedThen(
+    const result = await withRowLockedThen(
       "Activity",
       activity.id,
       (tx) =>
@@ -185,91 +178,89 @@ describe("soru açma ile iptal yarışı", () => {
         askQuestion(
           clientB as never,
           { id: director.id, isSystemAdmin: false },
-          { activityId: activity.id, text: "Bu ne durumda?" },
+          { activityId: activity.id, text: "What is the status of this?" },
           new Date(NOW.getTime() + 60_000),
         ),
     );
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
 
-    // İptal edilmiş faaliyette hiç konuşma kalmamalı — açığı da kapalısı da.
+    // Cancelled activity must have no conversations — neither open nor closed.
     expect(await testDb.conversation.count({ where: { activityId: activity.id } })).toBe(0);
   });
 });
 
-describe("kapatma ile cevap yarışı", () => {
-  it("kapanan konuşmaya cevap yazılamaz", async () => {
+describe("close conversation versus reply race", () => {
+  it("cannot reply to a conversation that was closed", async () => {
     const { author, director, activity } = await scenario();
 
-    const acilan = await askQuestion(
+    const opened = await askQuestion(
       testDb,
       { id: director.id, isSystemAdmin: false },
-      { activityId: activity.id, text: "Bu ne durumda?" },
+      { activityId: activity.id, text: "What is the status of this?" },
       new Date(NOW.getTime() + 60_000),
     );
-    if (!acilan.ok) throw new Error("kurulum başarısız");
+    if (!opened.ok) throw new Error("setup failed");
 
-    const sonuc = await withRowLockedThen(
+    const result = await withRowLockedThen(
       "Conversation",
-      acilan.value.id,
+      opened.value.id,
       (tx) =>
         tx.conversation.update({
-          where: { id: acilan.value.id },
+          where: { id: opened.value.id },
           data: { status: "CLOSED", closedAt: NOW, closedById: director.id, closeType: "NORMAL" },
         }),
       () =>
         replyToConversation(
           clientB as never,
           { id: author.id, isSystemAdmin: false },
-          { conversationId: acilan.value.id, text: "Tamamlandı." },
+          { conversationId: opened.value.id, text: "Completed." },
           new Date(NOW.getTime() + 120_000),
         ),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("closed");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("closed");
 
-    // Kapalı konuşmada yalnız ilk soru kalmalı.
+    // Closed conversation should only contain the initial question message.
     expect(
       await testDb.conversationMessage.count({
-        where: { conversationId: acilan.value.id },
+        where: { conversationId: opened.value.id },
       }),
     ).toBe(1);
   });
 });
 
-describe("okuma kaydının değişmezi", () => {
-  // İki sekme açıkken sıra karışabilir: geç yazan istek erken zaman damgası
-  // taşıyabilir. "İlk okuma" ileri kaymamalı, "son okuma" geri gitmemeli.
-  // Yarışın hangi sırayla çözüleceği belirsiz olduğu için değişmez doğrudan
-  // sınanır: geç zaman önce, erken zaman sonra yazılır.
-  it("sonradan gelen erken zaman damgası değişmezi bozmaz", async () => {
+describe("read receipt invariants", () => {
+  // When two tabs are open, ordering can interleave: delayed request may carry earlier timestamp.
+  // "First read" must not move forward, "last read" must not move backward.
+  it("later arriving earlier timestamp preserves invariant", async () => {
     const { director, activity } = await scenario();
     const { markActivityAsRead } = await import("@/server/reads/service");
 
-    const erken = new Date(NOW.getTime() + 60_000);
-    const gec = new Date(NOW.getTime() + 120_000);
+    const early = new Date(NOW.getTime() + 60_000);
+    const late = new Date(NOW.getTime() + 120_000);
     const viewer = { id: director.id, isSystemAdmin: false };
 
-    await markActivityAsRead(testDb, viewer, activity.id, 3_000, gec);
-    await markActivityAsRead(testDb, viewer, activity.id, 3_000, erken);
+    await markActivityAsRead(testDb, viewer, activity.id, 3_000, late);
+    await markActivityAsRead(testDb, viewer, activity.id, 3_000, early);
 
-    const kayit = await testDb.readReceipt.findUniqueOrThrow({
+    const record = await testDb.readReceipt.findUniqueOrThrow({
       where: { activityId_userId: { activityId: activity.id, userId: director.id } },
     });
 
-    expect(kayit.firstReadAt).toEqual(erken);
-    expect(kayit.lastReadAt).toEqual(gec);
+    expect(record.firstReadAt).toEqual(early);
+    expect(record.lastReadAt).toEqual(late);
   });
 
-  it("eşzamanlı iki okuma tek satır bırakır", async () => {
+  it("two concurrent reads leave a single row", async () => {
     const { director, activity } = await scenario();
     const { markActivityAsRead } = await import("@/server/reads/service");
     const barrier = createBarrier(2);
     const viewer = { id: director.id, isSystemAdmin: false };
 
-    const sonuclar = await Promise.allSettled([
+    const results = await Promise.allSettled([
       (async () => {
         await barrier();
         return markActivityAsRead(clientA as never, viewer, activity.id, 3_000, NOW);
@@ -280,9 +271,8 @@ describe("okuma kaydının değişmezi", () => {
       })(),
     ]);
 
-    // Eşzamanlı yazım hata vermemeli (tekil anahtar ihlali yok) ve tek satır
-    // kalmalı.
-    expect(sonuclar.every((r) => r.status === "fulfilled")).toBe(true);
+    // Concurrent write must not fail (no unique key violation) and keep exactly 1 row.
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
     expect(await testDb.readReceipt.count()).toBe(1);
   });
 });

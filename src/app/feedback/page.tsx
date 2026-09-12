@@ -7,21 +7,24 @@ import { Card, CardBody, CardHeader, EmptyState } from "@/components/ui/card";
 import { AdminTabs } from "@/components/ui/admin-tabs";
 import { Page, PageHeader } from "@/components/ui/page";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocale } from "@/server/i18n/locale";
 import { canManageFeedback } from "@/server/authz/feedback";
 import {
-  feedbackCategoryLabel,
-  feedbackStatusLabel,
   listManageableFeedback,
   listOwnFeedback,
   type FeedbackView,
 } from "@/server/feedback/service";
 import { prisma } from "@/server/db";
 import { formatInstantShort } from "@/shared/format/date-time";
+import { getTranslations } from "@/server/i18n/server";
 
 import { FeedbackAdmin, type FeedbackClientView } from "./feedback-admin";
 import { FeedbackForm } from "./feedback-form";
 
-export const metadata = { title: "Geri bildirim" };
+export async function generateMetadata() {
+  const t = await getTranslations();
+  return { title: t("screens.feedback.pageTitle") };
+}
 
 const STATUS_TONES = {
   NEW: "neutral",
@@ -40,72 +43,85 @@ function serializeFeedback(item: FeedbackView): FeedbackClientView {
   };
 }
 
-function zaman(value: Date | null): string | null {
-  return value ? formatInstantShort(value) : null;
+function time(
+  value: Date | null,
+  locale: Parameters<typeof formatInstantShort>[1],
+): string | null {
+  return value ? formatInstantShort(value, locale) : null;
 }
 
-const GERI_BILDIRIM_SEKMELERI = [
-  { href: "/feedback", label: "Yeni geri bildirim", key: "gonder" },
-  { href: "/feedback?sekme=gecmis", label: "Gönderdiklerim", key: "gecmis" },
+const FEEDBACK_TABS = [
+  { href: "/feedback", key: "new" },
+  { href: "/feedback?tab=history", key: "history" },
 ] as const;
 
 export default async function FeedbackPage({
   searchParams,
 }: {
-  searchParams: Promise<{ sekme?: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const yonetici = canManageFeedback(user);
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
+
+  const manager = canManageFeedback(user);
   const params = await searchParams;
-  const sekmeler = yonetici
+  const tabler = manager
     ? [
-        ...GERI_BILDIRIM_SEKMELERI,
-        { href: "/feedback?sekme=yonetim", label: "Yönetim", key: "yonetim" },
+        ...FEEDBACK_TABS,
+        { href: "/feedback?tab=management", key: "management" },
       ]
-    : GERI_BILDIRIM_SEKMELERI;
-  const secilebilirSekme = sekmeler.some((item) => item.key === params.sekme)
-    ? (params.sekme as (typeof sekmeler)[number]["key"])
-    : "gonder";
-  const aktifSekme =
-    sekmeler.find((item) => item.key === secilebilirSekme) ?? sekmeler[0];
+    : FEEDBACK_TABS;
+  const selectedTab = tabler.some((item) => item.key === params.tab)
+    ? (params.tab as (typeof tabler)[number]["key"])
+    : "new";
+  const activeTab = tabler.find((item) => item.key === selectedTab) ?? tabler[0];
 
   const [own, manageable] = await Promise.all([
-    secilebilirSekme === "gecmis"
+    selectedTab === "history"
       ? listOwnFeedback(prisma, user.id)
       : Promise.resolve([] as FeedbackView[]),
-    secilebilirSekme === "yonetim" && yonetici
+    selectedTab === "management" && manager
       ? listManageableFeedback(prisma, user.id)
       : Promise.resolve([] as FeedbackView[]),
   ]);
 
   return (
     <AppShell user={await toShellUser(user)}>
-      <Page isaret="geri-bildirim">
+      <Page marker="feedback">
         <PageHeader
-          title="Geri bildirim"
-          description="Hata, öneri, eleştiri veya sorularınızı uygulama içinden iletin. Gönderdiğiniz kayıtların durumunu ve yönetici yanıtını yine burada takip edebilirsiniz."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Geri bildirim" }]}
+          title={t("screens.feedback.pageTitle")}
+          description={t("screens.feedback.pageDescription")}
+          breadcrumbs={[{ label: t("screens.feedback.dashboard"), href: "/" }, { label: t("screens.feedback.pageTitle") }]}
         />
 
         <AdminTabs
-          tabs={sekmeler.map(({ href, label }) => ({ href, label }))}
-          activeHref={aktifSekme.href}
+          tabs={tabler.map(({ href, key }) => ({
+            href,
+            label:
+              key === "new"
+                ? t("screens.feedback.newTab")
+                : key === "history"
+                  ? t("screens.feedback.historyTab")
+                  : t("screens.feedback.managementTab"),
+          }))}
+          activeHref={activeTab.href}
         />
 
-        {secilebilirSekme === "gonder" ? <FeedbackForm /> : null}
+        {selectedTab === "new" ? <FeedbackForm /> : null}
 
-        {secilebilirSekme === "gecmis" ? (
+        {selectedTab === "history" ? (
           <Card>
             <CardHeader
-              title="Gönderdiğim geri bildirimler"
-              description="Yöneticiler kaydınızı okuduğunda ve incelemeye başladığında bu bilgiler burada görünür."
+              title={t("screens.feedback.historyTitle")}
+              description={t("screens.feedback.historyDescription")}
             />
             {own.length === 0 ? (
               <EmptyState
-                title="Henüz geri bildirim göndermediniz"
-                description="Karşılaştığınız bir sorunu veya geliştirme fikrinizi yeni geri bildirim bölümünden paylaşabilirsiniz."
+                title={t("screens.feedback.noOwnFeedback")}
+                description={t("screens.feedback.noOwnFeedbackDescription")}
               />
             ) : (
               <CardBody className="flex flex-col gap-4">
@@ -115,33 +131,35 @@ export default async function FeedbackPage({
                       <div>
                         <p className="font-medium text-ink">{item.title}</p>
                         <p className="mt-1 text-[length:var(--text-xs)] text-muted">
-                          {feedbackCategoryLabel(item.category)} · {formatInstantShort(item.createdAt)}
-                          {item.adminsOnly ? " · Yalnızca sistem yöneticileri" : ""}
+                          {t(`screens.feedback.${item.category === "BUG" ? "bug" : item.category === "SUGGESTION" ? "suggestion" : item.category === "CRITIQUE" ? "criticism" : "question"}`)} · {formatInstantShort(item.createdAt, locale)}
+                          {item.adminsOnly ? ` · ${t("screens.feedback.administratorsOnly")}` : ""}
                         </p>
                       </div>
-                      <Badge tone={STATUS_TONES[item.status]}>{feedbackStatusLabel(item.status)}</Badge>
+                      <Badge tone={STATUS_TONES[item.status]}>
+                        {t(`screens.feedback.${item.status === "NEW" ? "newStatus" : item.status === "IN_REVIEW" ? "inReviewStatus" : "resolvedStatus"}`)}
+                      </Badge>
                     </div>
                     <p className="mt-3 whitespace-pre-line text-[length:var(--text-sm)] leading-[var(--leading-relaxed)] text-ink">
                       {item.description}
                     </p>
                     <div className="mt-3 flex flex-wrap gap-x-8 gap-y-2 text-[length:var(--text-xs)] text-muted">
                       <span>
-                        Okundu: {item.readAt ? `${item.readByName ?? "Yönetici"} · ${zaman(item.readAt)}` : "Henüz değil"}
+                          {t("screens.feedback.read")}: {item.readAt ? `${item.readByName ?? t("screens.feedback.manager")} · ${time(item.readAt, locale)}` : t("screens.feedback.notYet")}
                       </span>
                       {item.reviewedAt ? (
                         <span>
-                          İnceleme başladı: {item.reviewedByName ?? "Yönetici"} · {zaman(item.reviewedAt)}
+                          {t("screens.feedback.reviewStarted")}: {item.reviewedByName ?? t("screens.feedback.manager")} · {time(item.reviewedAt, locale)}
                         </span>
                       ) : null}
                       {item.resolvedAt ? (
                         <span>
-                          Çözüldü: {item.resolvedByName ?? "Yönetici"} · {zaman(item.resolvedAt)}
+                          {t("screens.feedback.resolved")}: {item.resolvedByName ?? t("screens.feedback.manager")} · {time(item.resolvedAt, locale)}
                         </span>
                       ) : null}
                     </div>
                     {item.response ? (
                       <div className="mt-3 border-s-2 border-primary-line ps-3 text-[length:var(--text-sm)] text-muted">
-                        <span className="font-medium text-ink">Yönetici yanıtı:</span> {item.response}
+                        <span className="font-medium text-ink">{t("screens.feedback.managerResponse")}</span> {item.response}
                       </div>
                     ) : null}
                   </article>
@@ -151,17 +169,17 @@ export default async function FeedbackPage({
           </Card>
         ) : null}
 
-        {secilebilirSekme === "yonetim" && yonetici ? (
-          <section id="geri-bildirim-yonetimi" className="flex flex-col gap-4 scroll-mt-6">
+        {selectedTab === "management" && manager ? (
+          <section id="feedback-management" className="flex flex-col gap-4 scroll-mt-6">
             <div>
-              <h2 className="text-[length:var(--text-xl)] font-semibold text-ink">Geri bildirim yönetimi</h2>
+              <h2 className="text-[length:var(--text-xl)] font-semibold text-ink">{t("screens.feedback.managementTitle")}</h2>
               <p className="mt-1 text-[length:var(--text-sm)] text-muted">
-                Tüm kullanıcıların geri bildirimlerini buradan okuyup yanıtlayabilirsiniz.
+                {t("screens.feedback.managementDescription")}
               </p>
             </div>
             {manageable.length === 0 ? (
               <Card>
-                <EmptyState title="Bekleyen geri bildirim yok" description="Yeni bir kayıt geldiğinde burada görünecek." />
+                <EmptyState title={t("screens.feedback.noPending")} description={t("screens.feedback.noPendingDescription")} />
               </Card>
             ) : (
               <FeedbackAdmin feedback={manageable.map(serializeFeedback)} />

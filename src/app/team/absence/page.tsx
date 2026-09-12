@@ -1,9 +1,6 @@
 import { redirect } from "next/navigation";
 
-import {
-  absenceDecisionRouteLabel,
-  AbsenceStatusBadge,
-} from "@/components/absence/absence-status";
+import { AbsenceStatusBadge } from "@/components/absence/absence-status";
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +22,8 @@ import { buildQueryAddress } from "@/shared/filters/query-address";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { subordinateUserIds } from "@/server/authz/visibility";
 import { prisma } from "@/server/db";
+import { getLocale } from "@/server/i18n/locale";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import {
   AbsenceDecisionActions,
@@ -37,27 +36,45 @@ import {
   toDateValue,
 } from "@/shared/format/date-time";
 
-// İzin listesi, üst yöneticinin alt organizasyonunu da gösterir. Kayıt açma
-// yetkisi ve onay/red yetkisi ise sunucu tarafında ayrıca daraltılır.
 
-export const metadata = { title: "Ekip izinleri" };
 
-function gunMetni(date: string): string {
-  return formatDay(toDateValue(date));
+
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.teamAbsence.pageTitle");
+}
+
+function decisionRouteKey(route: string): string {
+  return route === "DIRECT_ENTRY"
+    ? "screens.absence.routeDirectEntry"
+    : route === "DIRECT_MANAGER"
+      ? "screens.absence.routeDirectManager"
+      : route === "DEPUTY"
+        ? "screens.absence.routeDeputy"
+        : "screens.absence.routeUpperManager";
+}
+
+function dayLabel(
+  date: string,
+  locale: Parameters<typeof formatDay>[1],
+): string {
+  return formatDay(toDateValue(date), locale);
 }
 
 export default async function TeamAbsencePage({
   searchParams,
 }: {
   searchParams: Promise<{
-    kisi?: string;
-    durum?: string;
-    sayfa?: string;
-    boyut?: string;
+    person?: string;
+    status?: string;
+    page?: string;
+    pageSize?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
 
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
   const now = new Date();
@@ -76,24 +93,24 @@ export default async function TeamAbsencePage({
   const params = await searchParams;
 
   const filters: AbsenceFilters = {
-    userId: params.kisi || undefined,
+    userId: params.person || undefined,
     status:
-      params.durum === "gecerli"
+      params.status === "active"
         ? "active"
-        : params.durum === "bekliyor"
+        : params.status === "pending"
           ? "pending"
-          : params.durum === "reddedildi"
+          : params.status === "rejected"
             ? "rejected"
-            : params.durum === "iptal"
+            : params.status === "cancelled"
               ? "cancelled"
               : undefined,
   };
 
-  const SAYFA_BOYU = await resolvePageSize(params.boyut);
-  const istenen = Number.parseInt(params.sayfa ?? "1", 10);
-  const sayfa = Number.isFinite(istenen) && istenen > 0 ? istenen : 1;
+  const pageSize = await resolvePageSize(params.pageSize);
+  const requested = Number.parseInt(params.page ?? "1", 10);
+  const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-  const [people, visiblePeople, managerPeople, toplam] = await Promise.all([
+  const [people, visiblePeople, managerPeople, total] = await Promise.all([
     prisma.user.findMany({
       where: { id: { in: departmentEmployees }, isActive: true },
       select: { id: true, fullName: true },
@@ -116,42 +133,42 @@ export default async function TeamAbsencePage({
     countTeamAbsences(prisma, viewer.id, visibleUserIds, filters, now),
   ]);
 
-  const sayfaSayisi = Math.max(1, Math.ceil(toplam / SAYFA_BOYU));
-  const gecerliSayfa = Math.min(sayfa, sayfaSayisi);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, pageCount);
 
   const absences = await listTeamAbsences(
     prisma,
     viewer.id,
     visibleUserIds,
     filters,
-    { limit: SAYFA_BOYU, skip: (gecerliSayfa - 1) * SAYFA_BOYU, now },
+    { limit: pageSize, skip: (currentPage - 1) * pageSize, now },
   );
 
-  const adres = (ek: Record<string, string> = {}) =>
+  const address = (attachment: Record<string, string> = {}) =>
     buildQueryAddress(
       "/team/absence",
-      { kisi: params.kisi, durum: params.durum, boyut: String(SAYFA_BOYU) },
-      ek,
+      { person: params.person, status: params.status, pageSize: String(pageSize) },
+      attachment,
     );
 
-  const suzgecliMi = Boolean(params.kisi) || Boolean(params.durum);
+  const isFiltered = Boolean(params.person) || Boolean(params.status);
 
   return (
     <AppShell
       user={await toShellUser(user, subordinates)}
     >
-      <Page isaret="ekip-izinleri">
+      <Page marker="team-leave">
         <PageHeader
-          title="Ekip izinleri"
-          description="Departmanınızdaki çalışanların izin günlerini yönetin. Alt birimlerdeki kayıtları görebilir, yalnız size yönlendirilen talepleri karara bağlayabilirsiniz."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Ekip izinleri" }]}
+          title={t("screens.teamAbsence.pageTitle")}
+          description={t("screens.teamAbsence.pageDescription")}
+          breadcrumbs={[{ label: t("screens.teamAbsence.dashboard"), href: "/" }, { label: t("screens.teamAbsence.pageTitle") }]}
         />
 
         {visibleUserIds.length === 0 && managerPeople.length === 0 ? (
           <Card>
             <EmptyState
-              title="Ekibinizde kullanıcı yok"
-              description="Size bağlı bir kullanıcı tanımlandığında bu ekrandan gün girebilirsiniz."
+              title={t("screens.teamAbsence.noTeamUsers")}
+              description={t("screens.teamAbsence.noTeamUsersDescription")}
             />
           </Card>
         ) : (
@@ -159,8 +176,8 @@ export default async function TeamAbsencePage({
             {managerPeople.length > 0 ? (
               <Card>
                 <CardHeader
-                  title="Yönetici vekâleti ekle"
-                  description="İzne çıkacak yöneticiyi ve onun yerine karar verecek yöneticiyi seçin. Bu ayrı akış yalnız yöneticiler için kullanılır."
+                  title={t("screens.teamAbsence.addManagerLeave")}
+                  description={t("screens.teamAbsence.addManagerLeaveDescription")}
                 />
                 <CardBody>
                   <MarkAbsenceForm
@@ -175,13 +192,13 @@ export default async function TeamAbsencePage({
             {departmentEmployees.length > 0 ? (
               <Card>
                 <CardHeader
-                  title="İzin günü ekle"
-                  description="Departmanınızdaki çalışanı ve tarih aralığını seçin. Bu ekrandan girilen kayıtlar doğrudan geçerli olur. Çalışanlar kendi izin taleplerini İzinlerim bölümünden gönderir."
+                  title={t("screens.teamAbsence.addEmployeeLeave")}
+                  description={t("screens.teamAbsence.addEmployeeLeaveDescription")}
                 />
                 <CardBody>
                   <MarkAbsenceForm
                     people={people}
-                    personLabel={managerPeople.length > 0 ? "Çalışan" : "Kişi"}
+                    personLabel={managerPeople.length > 0 ? t("screens.teamAbsence.employee") : t("screens.teamAbsence.person")}
                   />
                 </CardBody>
               </Card>
@@ -189,11 +206,11 @@ export default async function TeamAbsencePage({
 
             <Card>
               <CardHeader
-                title="Girilen izinler"
-                description="Bekleyen talepleri karara bağlayın. Onaylanan kayıtlar geçerli olur; reddedilen veya iptal edilen kayıtlar geçmişte görünmeye devam eder."
+                title={t("screens.teamAbsence.listTitle")}
+                description={t("screens.teamAbsence.listDescription")}
                 action={
                   <span className="mono text-[length:var(--text-sm)] text-muted">
-                    {toplam} kayıt
+                    {t("screens.teamAbsence.recordCount", { count: total })}
                   </span>
                 }
               />
@@ -201,54 +218,51 @@ export default async function TeamAbsencePage({
               <FilterBar
                 action="/team/absence"
                 clearHref="/team/absence"
-                filtered={suzgecliMi}
-                pageSize={SAYFA_BOYU}
+                filtered={isFiltered}
+                pageSize={pageSize}
                 fields={[
                   {
-                    name: "kisi",
-                    label: "Kime ait",
-                    value: params.kisi ?? "",
+                    name: "person",
+                    label: t("screens.teamAbsence.belongsTo"),
+                    value: params.person ?? "",
                     options: [
-                      { value: "", label: "Herkes" },
+                      { value: "", label: t("screens.teamAbsence.everyone") },
                       ...visiblePeople.map((k) => ({ value: k.id, label: k.fullName })),
                     ],
                   },
                   {
-                    name: "durum",
-                    label: "Kayıt durumu",
-                    value: params.durum ?? "",
+                    name: "status",
+                    label: t("screens.teamAbsence.recordStatus"),
+                    value: params.status ?? "",
                     width: "w-40",
                     options: [
-                      { value: "", label: "Hepsi" },
-                      { value: "gecerli", label: "Geçerli" },
-                      { value: "bekliyor", label: "Onay bekleyen" },
-                      { value: "reddedildi", label: "Reddedilen" },
-                      { value: "iptal", label: "İptal edilmiş" },
+                      { value: "", label: t("screens.teamAbsence.everyone") },
+                      { value: "active", label: t("screens.teamAbsence.active") },
+                      { value: "pending", label: t("screens.teamAbsence.pending") },
+                      { value: "rejected", label: t("screens.teamAbsence.rejected") },
+                      { value: "cancelled", label: t("screens.teamAbsence.cancelled") },
                     ],
                   },
                 ]}
               />
 
-              {/* Ekip işaretleri kayıt defteri olarak listelenir: bu
-                  ekran telefondan da açılır ("kim izinli?") ve beş sütunlu
-                   bir tabloyu sıkıştırmak yerine her işaret etiketli
-                   alanlardan oluşan bir kayıt olur (brief §5 mobil). */}
+
               {absences.length === 0 ? (
-                suzgecliMi ? (
+                isFiltered ? (
                   <EmptyState
-                    title="Süzgece uyan kayıt yok"
-                    description="Süzgeci temizleyerek bütün kayıtları görebilirsiniz."
+                    title={t("screens.teamAbsence.filterNoMatch")}
+                    description={t("screens.teamAbsence.clearFilters")}
                   />
                 ) : (
                   <EmptyState
-                    title="Kayıt yok"
-                    description="Alt organizasyonunuzdaki kişiler için izin kaydı girilmedi."
+                    title={t("screens.teamAbsence.noRecords")}
+                    description={t("screens.teamAbsence.noRecordsDescription")}
                   />
                 )
               ) : (
                 <RecordList>
                   {absences.map((absence) => (
-                    <RecordItem key={absence.id} data-test="izin-satiri">
+                    <RecordItem key={absence.id} data-test="leave-record">
                       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
                         <div className="min-w-0">
                           <p
@@ -261,11 +275,11 @@ export default async function TeamAbsencePage({
                             {absence.userName}
                           </p>
                           <p className="tabular text-[length:var(--text-sm)] text-muted">
-                            {gunMetni(absence.startDate)} – {gunMetni(absence.endDate)}
+                            {dayLabel(absence.startDate, locale)} – {dayLabel(absence.endDate, locale)}
                           </p>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
                             {absence.cancelledReason ? (
-                              <Badge tone="cancelled">İptal edildi</Badge>
+                              <Badge tone="cancelled">{t("screens.teamAbsence.cancelled")}</Badge>
                             ) : (
                               <AbsenceStatusBadge status={absence.status} />
                             )}
@@ -285,7 +299,7 @@ export default async function TeamAbsencePage({
 
                       {absence.cancelledReason ? (
                         <div className="mt-2.5">
-                          <RecordField label="İptal edildi">
+                          <RecordField label={t("screens.teamAbsence.cancelledReason")}>
                             {absence.cancelledReason}
                           </RecordField>
                         </div>
@@ -293,7 +307,7 @@ export default async function TeamAbsencePage({
 
                       {absence.status === "REJECTED" && absence.decisionReason ? (
                         <div className="mt-2.5">
-                          <RecordField label="Reddetme gerekçesi">
+                          <RecordField label={t("screens.teamAbsence.rejectedReason")}>
                             {absence.decisionReason}
                           </RecordField>
                         </div>
@@ -302,24 +316,22 @@ export default async function TeamAbsencePage({
                       {absence.note || absence.deputyName || absence.decidedByName ? (
                         <div className="mt-2.5 flex flex-wrap gap-x-8 gap-y-2">
                           {absence.note ? (
-                            <RecordField label="Not">{absence.note}</RecordField>
+                            <RecordField label={t("screens.absence.note")}>{absence.note}</RecordField>
                           ) : null}
                           {absence.deputyName ? (
-                            <RecordField label="Vekil">{absence.deputyName}</RecordField>
+                            <RecordField label={t("screens.absence.deputy")}>{absence.deputyName}</RecordField>
                           ) : null}
                           {absence.decidedByName ? (
                             <RecordField
-                              label={absence.status === "REJECTED" ? "Reddeden" : "Onaylayan"}
+                              label={absence.status === "REJECTED" ? t("screens.absence.rejectedBy") : t("screens.absence.approvedBy")}
                             >
                               {absence.decidedByName}
-                              {absence.decisionRoute
-                                ? ` · ${absenceDecisionRouteLabel(absence.decisionRoute)}`
-                                : ""}
+                              {absence.decisionRoute ? ` · ${t(decisionRouteKey(absence.decisionRoute))}` : ""}
                             </RecordField>
                           ) : null}
                           {absence.decidedAt ? (
-                            <RecordField label="Karar zamanı">
-                              {formatInstantShort(absence.decidedAt)}
+                            <RecordField label={t("screens.teamAbsence.decisionTime")}>
+                              {formatInstantShort(absence.decidedAt, locale)}
                             </RecordField>
                           ) : null}
                         </div>
@@ -330,10 +342,10 @@ export default async function TeamAbsencePage({
               )}
 
               <Pagination
-                page={gecerliSayfa}
-                pageCount={sayfaSayisi}
-                hrefFor={(hedef) =>
-                  hedef === 1 ? adres() : adres({ sayfa: String(hedef) })
+                page={currentPage}
+                pageCount={pageCount}
+                hrefFor={(targetPage) =>
+                  targetPage === 1 ? address() : address({ page: String(targetPage) })
                 }
               />
             </Card>

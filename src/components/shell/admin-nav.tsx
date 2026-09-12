@@ -2,64 +2,62 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "@/components/i18n";
+import type { TranslationKey } from "@/shared/i18n";
 
-// Yönetim çalışma alanının ikincil gezinmesi (brief §7).
-//
-// Yönetim, ana ürünün görsel dilini kullanır ama **ayrı bir çalışma alanı**
-// olduğu bellidir: bu şerit yalnız yönetim route'larında görünür ve hepsinde
-// aynıdır — kullanıcı bir yönetim ekranından diğerine geçerken nerede
-// olduğunu kaybetmez.
-//
-// Yatay kaydırma dar ekranda bilinçli: yedi bölümü iki satıra sarmak, şeridi
-// sayfa başlığından daha yüksek hâle getirirdi.
 
-const BOLUMLER = [
-  { href: "/admin/org", label: "Organizasyon" },
-  { href: "/admin/users", label: "Kullanıcılar" },
-  { href: "/admin/calendar", label: "Çalışma takvimi" },
-  { href: "/admin/approval-reasons", label: "Onay gerekçeleri" },
-  { href: "/admin/settings", label: "Sistem ayarları" },
-  { href: "/admin/jobs", label: "Zamanlanmış işler" },
-  { href: "/admin/audit", label: "İşlem kayıtları" },
+//
+
+
+
+
+//
+
+
+
+const SECTIONS = [
+  { href: "/admin/org", labelKey: "nav.orgTree" },
+  { href: "/admin/users", labelKey: "nav.users" },
+  { href: "/admin/calendar", labelKey: "nav.calendar" },
+  { href: "/admin/approval-reasons", labelKey: "nav.approvalReasons" },
+  { href: "/admin/settings", labelKey: "nav.settings" },
+  { href: "/admin/jobs", labelKey: "nav.jobs" },
+  { href: "/admin/audit", labelKey: "nav.audit" },
 ];
 
-/**
- * Yalnız ana sistem yöneticisine (root) açık bölümler (karar 03.09.2026).
- * Şeritte de yalnız ona görünür: yetkisi olmayanın göreceği bir bağlantı,
- * tıklandığında reddedilmek üzere duran bir bağlantıdır.
- */
-const ROOT_BOLUMLERI = [{ href: "/admin/faaliyet-silme", label: "Faaliyet silme" }];
+
+const ROOT_SECTIONS = [{ href: "/admin/activity-deletion", labelKey: "nav.activityDeletion" }];
 
 export function AdminNav({ isRoot = false }: { isRoot?: boolean }) {
   const pathname = usePathname();
-  const bolumler = isRoot ? [...BOLUMLER, ...ROOT_BOLUMLERI] : BOLUMLER;
+  const t = useTranslations();
+  const sections = isRoot ? [...SECTIONS, ...ROOT_SECTIONS] : SECTIONS;
 
   return (
     <nav
-      aria-label="Yönetim bölümleri"
+      aria-label={t("nav.adminSections")}
       className="-mx-4 border-y border-line bg-raised sm:-mx-7"
     >
       <ul className="flex overflow-x-auto px-4 sm:px-7">
-        {bolumler.map((bolum) => {
-          const aktif = pathname === bolum.href || pathname.startsWith(`${bolum.href}/`);
+        {sections.map((section) => {
+          const active = pathname === section.href || pathname.startsWith(`${section.href}/`);
 
           return (
-            <li key={bolum.href} className="shrink-0">
+            <li key={section.href} className="shrink-0">
               <Link
-                href={bolum.href}
-                aria-current={aktif ? "page" : undefined}
+                href={section.href}
+                aria-current={active ? "page" : undefined}
                 className={[
                   "relative flex min-h-(--spacing-touch) items-center px-3.5",
                   "text-[length:var(--text-sm)] transition-colors duration-(--duration-fast)",
-                  aktif
+                  active
                     ? "font-semibold text-ink"
                     : "text-muted hover:text-ink",
                 ].join(" ")}
               >
-                {bolum.label}
-                {/* Aktif bölüm alt kuralla da işaretlenir: renk tek taşıyıcı
-                    değil. */}
-                {aktif ? (
+                {t(section.labelKey as TranslationKey)}
+                {/* The active section is marked with an underline as well as color. */}
+                {active ? (
                   <span aria-hidden className="absolute inset-x-2 bottom-0 h-[2px] bg-primary" />
                 ) : null}
               </Link>

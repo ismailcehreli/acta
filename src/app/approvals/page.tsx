@@ -17,40 +17,47 @@ import { FilterBar } from "@/components/filters/filter-bar";
 import { Pagination } from "@/components/ui/pagination";
 import { buildQueryAddress } from "@/shared/filters/query-address";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocale } from "@/server/i18n/locale";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { prisma } from "@/server/db";
 
 import { ApprovalGroupForm } from "./approval-group-form";
 import { formatDayLong } from "@/shared/format/date-time";
 
-// Toplu onay ekranı (Görev 10.6, tasarım §6).
-//
-// Onay **kişi ve gün** bazında gruplanır: müdür bir kişinin o günkü işini bir
-// bütün olarak okur. Tek tek sayfa açıp geri dönmek, günde 5–12 faaliyette
-// müdürü akıştan koparıyordu.
 
-export const metadata = { title: "Onaylar" };
+//
+
+
+
+
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.approvalsPage.title");
+}
 
 export default async function ApprovalsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    onaylandi?: string;
+    approved?: string;
     period?: string;
     authorId?: string;
     authorOrgUnitId?: string;
-    sayfa?: string;
-    boyut?: string;
+    page?: string;
+    pageSize?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
+
   const params = await searchParams;
-  const onaylanan = Number.parseInt(params.onaylandi ?? "", 10);
+  const approved = Number.parseInt(params.approved ?? "", 10);
 
   const now = new Date();
 
-  // Süzgeçler adres çubuğundan gelir; tanınmayan değer sessizce düşer.
+
   const filters: ApprovalGroupFilters = {
     period:
       params.period === "today" || params.period === "week" ? params.period : "all",
@@ -58,14 +65,14 @@ export default async function ApprovalsPage({
     authorOrgUnitId: params.authorOrgUnitId || undefined,
   };
 
-  const SAYFA_BOYU = await resolvePageSize(params.boyut);
-  const istenen = Number.parseInt(params.sayfa ?? "1", 10);
-  const sayfa = Number.isFinite(istenen) && istenen > 0 ? istenen : 1;
+  const PAGE_SIZE = await resolvePageSize(params.pageSize);
+  const requested = Number.parseInt(params.page ?? "1", 10);
+  const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-  // Yetki ayrı bir kontrole gerek bırakmıyor: liste yalnız **aktif
-  // onaylayıcısı bu kişi olan** kayıtları getiriyor. Onayı olmayan boş sayfa
-  // görür, başkasının kaydını değil. Süzgeçler bu koşulun üstüne eklenir.
-  const [toplamGrup, subordinates, departments] = await Promise.all([
+
+
+
+  const [totalGroups, subordinates, departments] = await Promise.all([
     countApprovalGroups(prisma, user.id, now, filters),
     subordinateUserIds(prisma, user.id),
     prisma.orgUnit.findMany({
@@ -75,16 +82,16 @@ export default async function ApprovalsPage({
     }),
   ]);
 
-  const sayfaSayisi = Math.max(1, Math.ceil(toplamGrup / SAYFA_BOYU));
-  const gecerliSayfa = Math.min(sayfa, sayfaSayisi);
+  const pageCount = Math.max(1, Math.ceil(totalGroups / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
 
-  const [gruplar, people] = await Promise.all([
+  const [groups, people] = await Promise.all([
     listApprovalGroups(prisma, user.id, now, filters, {
-      limit: SAYFA_BOYU,
-      skip: (gecerliSayfa - 1) * SAYFA_BOYU,
+      limit: PAGE_SIZE,
+      skip: (currentPage - 1) * PAGE_SIZE,
     }),
-    // Süzgeç seçenekleri kapsamdan gelir: adres çubuğuna kimlik yazmadan
-    // şirketin kişi listesi öğrenilememeli.
+
+
     listScopePeople(
       prisma,
       { id: user.id, isSystemAdmin: user.isSystemAdmin },
@@ -92,35 +99,37 @@ export default async function ApprovalsPage({
     ),
   ]);
 
-  const adres = (ek: Record<string, string> = {}) =>
+  const address = (attachment: Record<string, string> = {}) =>
     buildQueryAddress(
       "/approvals",
       {
         period: params.period,
         authorId: params.authorId,
         authorOrgUnitId: params.authorOrgUnitId,
-        boyut: String(SAYFA_BOYU),
+        pageSize: String(PAGE_SIZE),
       },
-      ek,
+      attachment,
     );
 
-  const suzgecliMi =
+  const isFiltered =
     (params.period ?? "all") !== "all" ||
     Boolean(params.authorId) ||
     Boolean(params.authorOrgUnitId);
 
   return (
     <AppShell user={await toShellUser(user)}>
-      <Page isaret="onaylar">
+      <Page marker="approvals">
         <PageHeader
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Onaylar" }]}
-          title="Onayımı bekleyenler"
-          description="Kayıtlar kişi ve gün bazında gruplanır. Onaylayana kadar üst kademeler bu kayıtları görmez."
+          breadcrumbs={[{ label: t("screens.approvalsPage.dashboard"), href: "/" }, { label: t("screens.approvalsPage.marker") }]}
+          title={t("screens.approvalsPage.title")}
+          description={t("screens.approvalsPage.description")}
         />
 
-        {Number.isInteger(onaylanan) && onaylanan > 0 ? (
-          <div id="onay-bilgi" role="status">
-            <Alert tone="success">{onaylanan} kayıt onaylandı.</Alert>
+        {Number.isInteger(approved) && approved > 0 ? (
+          <div id="approval-message" role="status">
+            <Alert tone="success">
+              {t("screens.approvalsPage.approvedMessage", { count: approved })}
+            </Alert>
           </div>
         ) : null}
 
@@ -128,36 +137,36 @@ export default async function ApprovalsPage({
           <FilterBar
             action="/approvals"
             clearHref="/approvals"
-            filtered={suzgecliMi}
-            pageSize={SAYFA_BOYU}
+            filtered={isFiltered}
+            pageSize={PAGE_SIZE}
             fields={[
               {
                 name: "period",
-                label: "Dönem",
+                label: t("screens.approvalsPage.period"),
                 value: params.period ?? "all",
                 width: "w-32",
                 options: [
-                  { value: "all", label: "Tümü" },
-                  { value: "today", label: "Bugün" },
-                  { value: "week", label: "Bu hafta" },
+                  { value: "all", label: t("screens.approvalsPage.all") },
+                  { value: "today", label: t("screens.approvalsPage.today") },
+                  { value: "week", label: t("screens.approvalsPage.week") },
                 ],
               },
               {
                 name: "authorId",
-                label: "Kişi",
+                label: t("screens.approvalsPage.person"),
                 value: params.authorId ?? "",
                 options: [
-                  { value: "", label: "Herkes" },
+                  { value: "", label: t("screens.approvalsPage.everyone") },
                   ...people.map((k) => ({ value: k.id, label: k.fullName })),
                 ],
               },
               {
                 name: "authorOrgUnitId",
-                label: "Yazan departman",
+                label: t("screens.approvalsPage.department"),
                 value: params.authorOrgUnitId ?? "",
                 width: "w-52",
                 options: [
-                  { value: "", label: "Hepsi" },
+                  { value: "", label: t("screens.approvalsPage.everyone") },
                   ...departments.map((u) => ({ value: u.id, label: u.name })),
                 ],
               },
@@ -165,37 +174,37 @@ export default async function ApprovalsPage({
           />
         </Card>
 
-        {gruplar.length === 0 ? (
+        {groups.length === 0 ? (
           <Card>
-            {suzgecliMi ? (
+            {isFiltered ? (
               <EmptyState
-                title="Süzgece uyan kayıt yok."
-                description="Süzgeci temizleyerek onayınızı bekleyen bütün kayıtları görebilirsiniz."
+                title={t("screens.approvalsPage.noFilterMatch")}
+                description={t("screens.approvalsPage.clearFilterDescription")}
               />
             ) : (
               <EmptyState
-                title="Onayınızı bekleyen kayıt yok."
-                description="Ekibinizden bir faaliyet geldiğinde burada görünür."
+                title={t("screens.approvalsPage.noRecords")}
+                description={t("screens.approvalsPage.noRecordsDescription")}
               />
             )}
           </Card>
         ) : (
-          gruplar.map((grup) => (
+          groups.map((group) => (
             <ApprovalGroupForm
-              key={`${grup.authorId}:${grup.day}`}
-              authorName={grup.authorName}
-              authorUnitName={grup.authorUnitName}
-              dayLabel={formatDayLong(grup.activityDate)}
-              items={grup.items}
+              key={`${group.authorId}:${group.day}`}
+              authorName={group.authorName}
+              authorUnitName={group.authorUnitName}
+              dayLabel={formatDayLong(group.activityDate, locale)}
+              items={group.items}
             />
           ))
         )}
 
         <Pagination
-          page={gecerliSayfa}
-          pageCount={sayfaSayisi}
-          hrefFor={(hedef) =>
-            hedef === 1 ? adres() : adres({ sayfa: String(hedef) })
+          page={currentPage}
+          pageCount={pageCount}
+          hrefFor={(targetPage) =>
+            targetPage === 1 ? address() : address({ page: String(targetPage) })
           }
         />
       </Page>

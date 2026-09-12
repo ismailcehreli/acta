@@ -16,37 +16,17 @@ import {
   type LegacyDemoOriginCandidate,
 } from "./origin";
 
-// Örnek verinin temizlenmesi.
+// Demo data purging.
 //
-// **Bu, projedeki "fiziksel silme yok" kuralının bilinçli ve dar bir
-// istisnasıdır** (ürün sahibi kararı, 20.08.2026). Gerekçe: demo verisi bir iş
-// kaydı değil, deneme malzemesidir; onu pasifleştirmek sistemi temizlemez,
-// yalnızca çöpü görünmez yapar.
+// This is a deliberate and narrow exception to the "no physical delete" principle.
+// Demo data is not a business record but test/sample material; deactivating it does
+// not clean the system, it merely hides the sample data.
 //
-// ---------------------------------------------------------------------------
-// 21.08.2026 — Denetim, bulgu 1. Bu dosya baştan yazıldı.
-// ---------------------------------------------------------------------------
-//
-// Eski hâli üç güvence vaat ediyordu ve **üçü de fiilen boştu**:
-//
-//   1. "Yabancı anahtarlar gerçek veriye dokunulmasını engeller." Engellemiyordu:
-//      kod çocuk satırları **önce** siliyordu, dolayısıyla yabancı anahtar hiç
-//      devreye girmiyordu. Gerçek bir kullanıcının demo bir faaliyete yazdığı
-//      mesaj sessizce siliniyordu.
-//   2. "Denetim izi değişmezdir." Demo kullanıcının aktör olduğu bütün
-//      `AuditLog` satırları, nesnenin gerçek olup olmadığına bakılmadan
-//      siliniyordu.
-//   3. "İşlem denetim izine yazılır." Yazılmıyordu.
-//
-// Yeni kurgu, vaat edileni yapıyor:
-//
-//   · **Önce bak, sonra sil.** Silinecek kümeye gerçek bir kullanıcının verisi
-//     bağlıysa temizlik **hiç başlamaz** ve neyin engellediği söylenir. Yarım
-//     temizlik ya da sessiz veri kaybı yok.
-//   · **Denetim izine dokunulmaz** — yalnız aktörü *ve* nesnesi demo olan
-//     satırlar silinir. Demo bir kullanıcı gerçek bir nesneye dokunmuşsa
-//     temizlik durur.
-//   · **Temizliğin kendisi iz bırakır.**
+// Invariants:
+//   - Look before deleting: if real user data is attached to the delete set,
+//     purge halts immediately and reports what is blocking it.
+//   - Audit log is immutable: only records where both actor and target are demo objects are deleted.
+//   - Purge itself leaves an audit log.
 
 export interface PurgeSummary {
   users: number;
@@ -55,7 +35,7 @@ export interface PurgeSummary {
   followUps: number;
   notifications: number;
   orgUnits: number;
-  /** Diskten silinen ek dosyası sayısı. */
+  /** Number of attachment files deleted from storage. */
   files: number;
   helpArticles: number;
 }
@@ -72,161 +52,142 @@ export type PurgeResult =
 
 export type PurgeDb = PrismaClient;
 
-/** Demo verisi kurulu mu; ekranda düğmeleri buna göre çizmek için. */
+/** Checks whether demo data is present. */
 export async function demoDataPresent(db: PurgeDb): Promise<boolean> {
-  const sayi = await db.user.count({
+  const count = await db.user.count({
     where: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } },
   });
-  return sayi > 0;
+  return count > 0;
 }
 
 /**
- * Gerçek veriye dokunup dokunmadığımızı **silmeden önce** kontrol eder.
+ * Checks whether any real user data is connected before deletion.
  *
- * Her madde ayrı ayrı sorulur ki kullanıcıya "şu yüzden silinemedi" diyebilelim.
- * Tek bir "bir şeyler ters gitti" mesajı, sistem yöneticisini kör bırakırdı.
+ * Each item is checked individually to provide clear feedback on what blocked deletion.
  */
-async function engelleriTopla(
+async function collectBlockers(
   db: PurgeDb,
-  kullaniciIds: string[],
-  faaliyetIds: string[],
-  /**
-   * Temizlikte silinecek **bütün** demo nesnelerinin kimlikleri.
-   *
-   * Denetim izi kontrolü eskiden yalnız kullanıcı ve faaliyet kimliklerine
-   * bakıyordu; kurulumun demo kullanıcı adına açtığı birim ve konuşma
-   * kayıtlarının izleri "gerçek bir nesneye işaret ediyor" sayılıyor ve
-   * **kurulumdan hemen sonraki temizlik bile** engelleniyordu
-   * (denetim 23.08.2026, P3-R4-2).
-   */
-  demoNesneIds: string[],
+  userIds: string[],
+  activityIds: string[],
+  demoObjectIds: string[],
 ): Promise<string[]> {
-  const yabanci = { notIn: kullaniciIds };
-  const engeller: string[] = [];
+  const nonDemo = { notIn: userIds };
+  const blockers: string[] = [];
 
   const [
-    mesaj,
-    konusma,
-    takip,
-    takipOlay,
-    ek,
-    revizyon,
-    iptal,
-    onayTuru,
-    donem,
-    skorOlgusu,
-    takdir,
-    izKaydi,
+    messages,
+    conversations,
+    followUps,
+    followUpEvents,
+    attachments,
+    revisions,
+    cancellations,
+    approvalRounds,
+    periods,
+    scoreFacts,
+    appreciations,
+    auditLogs,
   ] = await Promise.all([
     db.conversationMessage.count({
       where: {
-        conversation: { activityId: { in: faaliyetIds } },
-        authorId: yabanci,
+        conversation: { activityId: { in: activityIds } },
+        authorId: nonDemo,
       },
     }),
     db.conversation.count({
       where: {
-        activityId: { in: faaliyetIds },
-        OR: [{ askerId: yabanci }, { responsibleId: yabanci }, { closedById: yabanci }],
+        activityId: { in: activityIds },
+        OR: [{ askerId: nonDemo }, { responsibleId: nonDemo }, { closedById: nonDemo }],
       },
     }),
     db.followUpItem.count({
       where: {
-        activityId: { in: faaliyetIds },
-        OR: [{ openedById: yabanci }, { ownerId: yabanci }, { closedById: yabanci }],
+        activityId: { in: activityIds },
+        OR: [{ openedById: nonDemo }, { ownerId: nonDemo }, { closedById: nonDemo }],
       },
     }),
     db.followUpItemEvent.count({
-      where: { followUp: { activityId: { in: faaliyetIds } }, actorId: yabanci },
+      where: { followUp: { activityId: { in: activityIds } }, actorId: nonDemo },
     }),
     attachmentMaintenanceReader(db).count({
-      where: { activityId: { in: faaliyetIds }, uploadedById: yabanci },
+      where: { activityId: { in: activityIds }, uploadedById: nonDemo },
     }),
     db.activityRevision.count({
-      where: { activityId: { in: faaliyetIds }, changedById: yabanci },
+      where: { activityId: { in: activityIds }, changedById: nonDemo },
     }),
     db.cancellationRecord.count({
-      where: { activityId: { in: faaliyetIds }, cancelledById: yabanci },
+      where: { activityId: { in: activityIds }, cancelledById: nonDemo },
     }),
-    // Gerçek bir yönetici demo kayda karar vermiş olabilir; o karar geçmişi
-    // ona aittir ve silinemez (P3-R3-3).
+    // A real manager may have decided on a demo record; decision history cannot be deleted
     db.approvalRound.count({
-      where: { activityId: { in: faaliyetIds }, decidedById: yabanci },
+      where: { activityId: { in: activityIds }, decidedById: nonDemo },
     }),
-    // Demo bir kullanıcı gerçek birinin izin kaydını girmiş ya da ona vekâlet
-    // etmiş olabilir. O satır gerçek kişiye aittir; silinemez.
+    // A demo user may have marked leave or acted as deputy for a real user
     db.noActivityPeriod.count({
       where: {
-        userId: yabanci,
-        OR: [{ markedById: { in: kullaniciIds } }, { deputyId: { in: kullaniciIds } }],
+        userId: nonDemo,
+        OR: [{ markedById: { in: userIds } }, { deputyId: { in: userIds } }],
       },
     }),
-    // **Skor katkısı** (denetim 25.08.2026, P8-6). Demo bir faaliyet
-    // gerçek birinin kapanmış dönemine katkı yazmış olabilir — örneğin gerçek
-    // bir yönetici demo kayda karar verdiyse. O olgu gerçek kişinin donmuş
-    // geçmişine aittir; silinemez ve temizlik durur.
+    // Score contribution: a demo activity may have written contribution to a closed period of a real user
     db.userScorePeriodFact.count({
-      where: { activityId: { in: faaliyetIds }, userId: yabanci },
+      where: { activityId: { in: activityIds }, userId: nonDemo },
     }),
-    // Takdir de gerçek bir kullanıcının faaliyetle ilişkili işlemidir. Demo
-    // faaliyetini gerçek biri takdir ettiyse veya demo kullanıcı gerçek bir
-    // faaliyete takdir verdiyse, temizlik bunu sessizce silemez.
+    // Appreciation from a real user on demo activity, or demo user appreciation on real activity
     db.activityAppreciation.count({
       where: {
         OR: [
-          { activityId: { in: faaliyetIds }, userId: yabanci },
-          { activityId: { notIn: faaliyetIds }, userId: { in: kullaniciIds } },
+          { activityId: { in: activityIds }, userId: nonDemo },
+          { activityId: { notIn: activityIds }, userId: { in: userIds } },
         ],
       },
     }),
-    // Denetim izi: aktörü demo ama nesnesi silinmeyecek bir şey olan kayıt.
-    // Böyle bir satır varsa temizlik değişmez izi bozardı (§15.2).
+    // Audit log: actor is demo but object is not in demo objects list
     db.auditLog.count({
       where: {
-        OR: [{ userId: { in: kullaniciIds } }, { actualUserId: { in: kullaniciIds } }],
-        NOT: { objectId: { in: demoNesneIds } },
+        OR: [{ userId: { in: userIds } }, { actualUserId: { in: userIds } }],
+        NOT: { objectId: { in: demoObjectIds } },
       },
     }),
   ]);
 
-  if (mesaj > 0) engeller.push(`${mesaj} konuşma mesajı gerçek bir kullanıcıya ait`);
-  if (konusma > 0) engeller.push(`${konusma} konuşmanın tarafı gerçek bir kullanıcı`);
-  if (takip > 0) engeller.push(`${takip} takip maddesi gerçek bir kullanıcıya bağlı`);
-  if (takipOlay > 0) engeller.push(`${takipOlay} takip olayını gerçek bir kullanıcı yaptı`);
-  if (ek > 0) engeller.push(`${ek} eki gerçek bir kullanıcı yükledi`);
-  if (revizyon > 0) engeller.push(`${revizyon} revizyonu gerçek bir kullanıcı yaptı`);
-  if (iptal > 0) engeller.push(`${iptal} iptali gerçek bir kullanıcı yaptı`);
-  if (onayTuru > 0) {
-    engeller.push(`${onayTuru} onay kararını gerçek bir kullanıcı verdi`);
+  if (messages > 0) blockers.push(`${messages} conversation message(s) belong to a real user`);
+  if (conversations > 0) blockers.push(`${conversations} conversation(s) involve a real user`);
+  if (followUps > 0) blockers.push(`${followUps} follow-up item(s) are linked to a real user`);
+  if (followUpEvents > 0) blockers.push(`${followUpEvents} follow-up event(s) were performed by a real user`);
+  if (attachments > 0) blockers.push(`${attachments} attachment(s) were uploaded by a real user`);
+  if (revisions > 0) blockers.push(`${revisions} revision(s) were made by a real user`);
+  if (cancellations > 0) blockers.push(`${cancellations} cancellation(s) were made by a real user`);
+  if (approvalRounds > 0) {
+    blockers.push(`${approvalRounds} approval decision(s) were made by a real user`);
   }
-  if (donem > 0) engeller.push(`${donem} izin kaydı gerçek bir kullanıcıya ait`);
-  if (skorOlgusu > 0) {
-    engeller.push(
-      `${skorOlgusu} skor katkısı gerçek bir kullanıcının kapanmış dönemine ait`,
+  if (periods > 0) blockers.push(`${periods} leave record(s) belong to a real user`);
+  if (scoreFacts > 0) {
+    blockers.push(
+      `${scoreFacts} score contribution(s) belong to a closed period of a real user`,
     );
   }
-  if (takdir > 0) {
-    engeller.push(`${takdir} takdir kaydı gerçek bir kullanıcıya ait`);
+  if (appreciations > 0) {
+    blockers.push(`${appreciations} appreciation record(s) belong to a real user`);
   }
-  if (izKaydi > 0) {
-    engeller.push(
-      `${izKaydi} denetim kaydı gerçek bir nesneye işaret ediyor (denetim izi silinemez)`,
+  if (auditLogs > 0) {
+    blockers.push(
+      `${auditLogs} audit record(s) point to a real object (audit log is immutable)`,
     );
   }
 
-  return engeller;
+  return blockers;
 }
 
-/** Kilit altında bulunan engel; işlemi geri almak için fırlatılıyor. */
 class PurgeBlocked extends Error {
-  constructor(readonly detay: string) {
-    super(detay);
+  constructor(readonly detail: string) {
+    super(detail);
   }
 }
 
 class LegacyDemoOriginUnknown extends Error {
   constructor(readonly candidates: LegacyDemoOriginCandidate[]) {
-    super("Eski örnek kurulumundaki birimlerin kökeni sınıflandırılmamış");
+    super("Origins of legacy demo org units have not been classified");
   }
 }
 
@@ -235,348 +196,271 @@ export async function purgeDemoData(
   actorId: string,
   now: Date = new Date(),
 ): Promise<PurgeResult> {
-  const demoKullanicilar = await db.user.findMany({
+  const demoUsers = await db.user.findMany({
     where: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } },
     select: { id: true },
   });
 
-  if (demoKullanicilar.length === 0) {
+  if (demoUsers.length === 0) {
     return { ok: false, error: "nothing_to_purge" };
   }
 
-  const kullaniciIds = demoKullanicilar.map((k) => k.id);
+  const userIds = demoUsers.map((u) => u.id);
 
-  const demoFaaliyetler = await activityMaintenanceReader(db).findMany({
-    where: { authorId: { in: kullaniciIds } },
+  const demoActivities = await activityMaintenanceReader(db).findMany({
+    where: { authorId: { in: userIds } },
     select: { id: true },
   });
-  const faaliyetIds = demoFaaliyetler.map((f) => f.id);
+  const activityIds = demoActivities.map((a) => a.id);
 
-  // Silinecek dosyaların yolları işlem öncesinde okunur; diskten silme
-  // **commit'ten sonra** yapılır. Ters sırada yapılsaydı işlem geri alındığında
-  // kaydı duran ama dosyası olmayan ekler kalırdı.
-  const dosyalar = await attachmentMaintenanceReader(db).findMany({
-    where: { activityId: { in: faaliyetIds } },
+  // Storage paths are read before the transaction; disk deletion occurs after commit
+  const files = await attachmentMaintenanceReader(db).findMany({
+    where: { activityId: { in: activityIds } },
     select: { storagePath: true },
   });
 
   try {
-    const ozet = await db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('faaliyet:demo_verisi'))`;
+    const summary = await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('acta:demo_data'))`;
 
-      // Fiziksel silme yasağının kapısı. `SET LOCAL` **yalnız bu
-      // transaction** süresince geçerli: işlem bitince kendiliğinden kalkar
-      // ve bağlantı havuzunda bir sonraki isteğe sızamaz. Uygulamada bu
-      // değişkeni kuran tek yer burasıdır.
+      // Session variable allowing physical deletion during this transaction only
       await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'evet'");
 
-      // Migration öncesi kurulmuş birimlerde köken bilinmez. Ad veya ağaç
-      // konumundan tahmin ederek silmek gerçek bir birimi yok edebilir;
-      // belirsizlik tek satır değiştirilmeden yöneticiye taşınır (P3-R6-2).
-      const belirsizBirimler = await listLegacyDemoOriginCandidates(
+      const unclassifiedUnits = await listLegacyDemoOriginCandidates(
         tx as unknown as PurgeDb,
       );
-      if (belirsizBirimler.length > 0) {
-        throw new LegacyDemoOriginUnknown(belirsizBirimler);
+      if (unclassifiedUnits.length > 0) {
+        throw new LegacyDemoOriginUnknown(unclassifiedUnits);
       }
 
-      // **Kontrol ile silme aynı işlemde ve kilit altında** (denetim
-      // 23.08.2026, P3-R4-3). Kontroller işlem dışındayken, ön kontrol ile
-      // silme arasında gerçek bir yönetici demo kaydı onaylayabiliyor ve
-      // temizlik onun **değişmez** karar geçmişini siliyordu. Faaliyet
-      // satırları burada kilitleniyor; onay yolu da aynı satırı kilitlediği
-      // için ikisi sıraya giriyor.
-      await lockActivitiesForMaintenance(tx, faaliyetIds);
+      // Lock activities and sub-objects
+      await lockActivitiesForMaintenance(tx, activityIds);
 
-      // Kilit altında **yeniden** okunuyor: aradaki pencerede yazılmış bir
-      // bağlantı ön kontrolde görünmezdi.
-      //
-      // **Alt nesneler de kilitleniyor** (denetim 23.08.2026,
-      // P3-R5-1). Faaliyet kilidi tek başına yetmiyordu: `closeFollowUp`
-      // yalnız `FollowUpItem` satırını kilitliyor, `replyToConversation`
-      // yalnız `Conversation` satırını. Ortak kilit olmadan gerçek bir
-      // yönetici, engel kontrolünden sonra takip maddesini kapatabiliyor ve
-      // temizlik onun geçmişini siliyordu. Sıra sabit: faaliyet → konuşma →
-      // takip.
-      const tazeKonusmalar = await tx.$queryRaw<{ id: string }[]>`
+      const freshConversations = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "Conversation"
-        WHERE "activityId" = ANY(${faaliyetIds}::text[])
+        WHERE "activityId" = ANY(${activityIds}::text[])
         ORDER BY "id"
         FOR UPDATE
       `;
-      const tazeTakipler = await tx.$queryRaw<{ id: string }[]>`
+      const freshFollowUps = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "FollowUpItem"
-        WHERE "activityId" = ANY(${faaliyetIds}::text[])
+        WHERE "activityId" = ANY(${activityIds}::text[])
         ORDER BY "id"
         FOR UPDATE
       `;
-      // **Birim kimliği kökeninden geliyor, adından değil** (P3-R5-2).
-      // Kurulum aynı adlı mevcut bir birimi yeniden kullanıyor; ada bakan
-      // temizlik daha önceden var olan gerçek bir birimi silerdi.
-      const demoBirimKayitlari = await tx.demoObject.findMany({
+
+      const demoUnitRecords = await tx.demoObject.findMany({
         where: { objectType: DEMO_OBJECT_ORG_UNIT },
         select: { objectId: true, origin: true },
       });
-      const demoBirimIds = demoBirimKayitlari
-        .filter((satir) => satir.origin === DEMO_ORIGIN_CREATED)
-        .map((satir) => satir.objectId);
+      const demoUnitIds = demoUnitRecords
+        .filter((row) => row.origin === DEMO_ORIGIN_CREATED)
+        .map((row) => row.objectId);
 
-      // Örnek yardım yazıları, örnek genel müdür tarafından oluşturulan
-      // içeriklerdir. Gerçek bir yönetici sonradan böyle bir yazıyı
-      // düzenlediyse silme durur; ortak kullanılan içeriği sessizce yok
-      // etmek yerine yöneticiye karar alanı bırakılır.
-      const demoYardimYazilari = await tx.helpArticle.findMany({
-        where: { createdById: { in: kullaniciIds } },
+      const demoHelpArticles = await tx.helpArticle.findMany({
+        where: { createdById: { in: userIds } },
         select: { id: true },
       });
-      const demoYardimIds = demoYardimYazilari.map((yazi) => yazi.id);
-      if (demoYardimIds.length > 0) {
-        const gercekKisiDuzenlemeleri = await tx.helpArticle.count({
+      const demoHelpArticleIds = demoHelpArticles.map((article) => article.id);
+      if (demoHelpArticleIds.length > 0) {
+        const realUserEdits = await tx.helpArticle.count({
           where: {
-            id: { in: demoYardimIds },
-            updatedById: { notIn: kullaniciIds },
+            id: { in: demoHelpArticleIds },
+            updatedById: { notIn: userIds },
           },
         });
-        if (gercekKisiDuzenlemeleri > 0) {
+        if (realUserEdits > 0) {
           throw new PurgeBlocked(
-            `${gercekKisiDuzenlemeleri} yardım yazısı gerçek bir yönetici tarafından düzenlenmiş`,
+            `${realUserEdits} help article(s) were edited by a real administrator`,
           );
         }
       }
 
-      // Denetim izi kontrolünün "demo nesne" kümesi: kullanıcılar,
-      // faaliyetler ve kurulumun açtığı birim/konuşma/takip/yardım satırları.
-      const demoNesneIds = [
-        ...kullaniciIds,
-        ...faaliyetIds,
-        ...tazeKonusmalar.map((k) => k.id),
-        ...tazeTakipler.map((t) => t.id),
-        ...demoBirimIds,
-        ...demoYardimIds,
+      const demoObjectIds = [
+        ...userIds,
+        ...activityIds,
+        ...freshConversations.map((c) => c.id),
+        ...freshFollowUps.map((f) => f.id),
+        ...demoUnitIds,
+        ...demoHelpArticleIds,
       ];
 
-      const engeller = await engelleriTopla(
+      const blockers = await collectBlockers(
         tx as unknown as PurgeDb,
-        kullaniciIds,
-        faaliyetIds,
-        demoNesneIds,
+        userIds,
+        activityIds,
+        demoObjectIds,
       );
-      if (engeller.length > 0) {
-        throw new PurgeBlocked(engeller.join("; "));
+      if (blockers.length > 0) {
+        throw new PurgeBlocked(blockers.join("; "));
       }
 
-      // Çocuklardan köke doğru. Sıra önemli: her adım bir üsttekinin
-      // yabancı anahtarını serbest bırakır.
-      //
-      // **Silme koşulu dar** (P3-R5-1): yalnız her bağlantısı demo kişilere
-      // ait satırlar siliniyor. Kontrol ile silme arasında kilit tutmayan bir
-      // yoldan (örneğin yeni bir takip maddesi açılması) gerçek bir satır
-      // doğarsa, o satır **silinmiyor** ve faaliyet silinirken yabancı anahtar
-      // işlemin tamamını geri alıyor. Yanlışlıkla silmektense durmak.
-      const demoKisi = { in: kullaniciIds };
-      const takipler = await tx.followUpItem.findMany({
+      const demoUserFilter = { in: userIds };
+      const followUps = await tx.followUpItem.findMany({
         where: {
-          activityId: { in: faaliyetIds },
-          openedById: demoKisi,
-          ownerId: demoKisi,
-          OR: [{ closedById: null }, { closedById: demoKisi }],
+          activityId: { in: activityIds },
+          openedById: demoUserFilter,
+          ownerId: demoUserFilter,
+          OR: [{ closedById: null }, { closedById: demoUserFilter }],
         },
         select: { id: true },
       });
-      const takipIds = takipler.map((t) => t.id);
+      const followUpIds = followUps.map((f) => f.id);
 
       await tx.followUpItemEvent.deleteMany({
-        where: { followUpId: { in: takipIds }, actorId: demoKisi },
+        where: { followUpId: { in: followUpIds }, actorId: demoUserFilter },
       });
-      const silinenTakip = await tx.followUpItem.deleteMany({
-        where: { id: { in: takipIds } },
+      const deletedFollowUps = await tx.followUpItem.deleteMany({
+        where: { id: { in: followUpIds } },
       });
 
-      const konusmalar = await tx.conversation.findMany({
+      const conversations = await tx.conversation.findMany({
         where: {
-          activityId: { in: faaliyetIds },
-          askerId: demoKisi,
-          responsibleId: demoKisi,
-          OR: [{ closedById: null }, { closedById: demoKisi }],
+          activityId: { in: activityIds },
+          askerId: demoUserFilter,
+          responsibleId: demoUserFilter,
+          OR: [{ closedById: null }, { closedById: demoUserFilter }],
         },
         select: { id: true },
       });
       await tx.conversationMessage.deleteMany({
-        where: { conversationId: { in: konusmalar.map((k) => k.id) } },
+        where: { conversationId: { in: conversations.map((c) => c.id) } },
       });
-      const silinenKonusma = await tx.conversation.deleteMany({
-        where: { id: { in: konusmalar.map((k) => k.id) } },
+      const deletedConversations = await tx.conversation.deleteMany({
+        where: { id: { in: conversations.map((c) => c.id) } },
       });
 
-      // Okundu kaydı gerçek kullanıcıya ait olsa da silinir: faaliyet
-      // gidince "kim okudu" sorusunun konusu kalmıyor. Denetim izi
-      // kapsamında da değil (§10.3) — kolaylık göstergesidir.
-      await tx.readReceipt.deleteMany({ where: { activityId: { in: faaliyetIds } } });
-      await tx.attachment.deleteMany({ where: { activityId: { in: faaliyetIds } } });
+      await tx.readReceipt.deleteMany({ where: { activityId: { in: activityIds } } });
+      await tx.attachment.deleteMany({ where: { activityId: { in: activityIds } } });
       await tx.activityTargetDept.deleteMany({
-        where: { activityId: { in: faaliyetIds } },
+        where: { activityId: { in: activityIds } },
       });
       await tx.cancellationRecord.deleteMany({
-        where: { activityId: { in: faaliyetIds } },
+        where: { activityId: { in: activityIds } },
       });
       await tx.activityRevision.deleteMany({
-        where: { activityId: { in: faaliyetIds } },
+        where: { activityId: { in: activityIds } },
       });
       await tx.activityApprover.deleteMany({
-        where: { activityId: { in: faaliyetIds } },
+        where: { activityId: { in: activityIds } },
       });
-      // Takdir kaydı hem faaliyete hem veren kullanıcıya RESTRICT ile bağlı.
-      // Gerçek kullanıcıyla kesişim yukarıdaki kontrolde engellendi; burada
-      // yalnızca örnek faaliyete verilen veya örnek kullanıcının verdiği
-      // güvenli satırlar temizlenir.
       await tx.activityAppreciation.deleteMany({
         where: {
           OR: [
-            { activityId: { in: faaliyetIds } },
-            { userId: { in: kullaniciIds } },
+            { activityId: { in: activityIds } },
+            { userId: { in: userIds } },
           ],
         },
       });
-      // Onay turları da faaliyetin çocuğu; silinmezse yabancı anahtar
-      // temizliği bloke ediyordu (P3-R3-3).
       await tx.approvalRound.deleteMany({
         where: {
-          activityId: { in: faaliyetIds },
-          OR: [{ decidedById: null }, { decidedById: demoKisi }],
+          activityId: { in: activityIds },
+          OR: [{ decidedById: null }, { decidedById: demoUserFilter }],
         },
       });
 
-      // **Skor katkıları faaliyetten önce gitmeli** (denetim
-      // 25.08.2026, P8-6). Katkı hem faaliyete hem döneme `RESTRICT` ile
-      // bağlı; temizlenmediğinde faaliyet silme yabancı anahtar ihlaliyle
-      // düşüyor ve ham Prisma metni kullanıcıya "engel" diye taşınıyordu.
-      //
-      // Buraya gelindiyse gerçek kullanıcıya ait katkı yok: engel kontrolü
-      // onu zaten durdururdu. Silinenler yalnız demo kişilerin katkıları.
       await tx.userScorePeriodFact.deleteMany({
-        where: { userId: { in: kullaniciIds } },
+        where: { userId: { in: userIds } },
       });
 
-      // Bildirim satırları faaliyete bağlı; faaliyetten önce gitmeli.
-      const silinenBildirim = await tx.notificationQueue.deleteMany({
+      const deletedNotifications = await tx.notificationQueue.deleteMany({
         where: {
-          OR: [{ userId: { in: kullaniciIds } }, { activityId: { in: faaliyetIds } }],
+          OR: [{ userId: { in: userIds } }, { activityId: { in: activityIds } }],
         },
       });
 
-      const silinenFaaliyet = await tx.activity.deleteMany({
-        where: { id: { in: faaliyetIds } },
+      const deletedActivities = await tx.activity.deleteMany({
+        where: { id: { in: activityIds } },
       });
 
-      // Yardım yazıları örnek kullanıcıya bağlıdır; fiziksel silme yalnız
-      // örnek temizleme transaction'ının özel kapısından geçer.
-      const silinenYardim = await tx.helpArticle.deleteMany({
-        where: { id: { in: demoYardimIds } },
+      const deletedHelpArticles = await tx.helpArticle.deleteMany({
+        where: { id: { in: demoHelpArticleIds } },
       });
 
-      // Yalnız demo kişilere **ait** dönemler. Gerçek birine ait olanlar
-      // yukarıdaki kontrolde zaten temizliği durdururdu.
       await tx.noActivityPeriod.deleteMany({
-        where: { userId: { in: kullaniciIds } },
+        where: { userId: { in: userIds } },
       });
 
-      // Skor dönemleri kullanıcıdan önce; katkıları yukarıda gitti.
       await tx.userScorePeriod.deleteMany({
-        where: { userId: { in: kullaniciIds } },
+        where: { userId: { in: userIds } },
       });
-      // Sürüm isteği kullanıcıya RESTRICT ile bağlıdır ve dönem satırı onu
-      // kaynak olarak gösterebilir. Bu yüzden sıra: katkı → dönem → istek.
       await tx.scoreRecalculationRequest.deleteMany({
-        where: { userId: { in: kullaniciIds } },
+        where: { userId: { in: userIds } },
       });
-      // Etkili-tarih olayları bilerek FK taşımaz; aksi hâlde değişmez iş
-      // geçmişi kullanıcı pasifleştirmesini zorlaştırırdı. Demo istisnasında
-      // bu, kendiliğinden temizlenmeyecekleri anlamına gelir. Dar
-      // `app.demo_purge` kapısı append-only tetikleyicisinde silmeye izin verir.
       await tx.scoreUserStateEvent.deleteMany({
-        where: { userId: { in: kullaniciIds } },
+        where: { userId: { in: userIds } },
       });
-      await tx.pushSubscription.deleteMany({ where: { userId: { in: kullaniciIds } } });
+      await tx.pushSubscription.deleteMany({ where: { userId: { in: userIds } } });
 
-      // Denetim izi: yalnız aktörü **ve** nesnesi demo olan satırlar.
-      // Gerçek bir nesneye işaret eden satır varsa buraya hiç gelinmezdi.
       await tx.auditLog.deleteMany({
         where: {
-          OR: [{ userId: { in: kullaniciIds } }, { actualUserId: { in: kullaniciIds } }],
-          objectId: { in: demoNesneIds },
+          OR: [{ userId: { in: userIds } }, { actualUserId: { in: userIds } }],
+          objectId: { in: demoObjectIds },
         },
       });
 
-      await tx.session.deleteMany({ where: { userId: { in: kullaniciIds } } });
-      await tx.userCredential.deleteMany({ where: { userId: { in: kullaniciIds } } });
+      await tx.session.deleteMany({ where: { userId: { in: userIds } } });
+      await tx.userCredential.deleteMany({ where: { userId: { in: userIds } } });
 
-      const silinenKullanici = await tx.user.deleteMany({
-        where: { id: { in: kullaniciIds } },
+      const deletedUsers = await tx.user.deleteMany({
+        where: { id: { in: userIds } },
       });
 
       await tx.scoreUnitCalendarEvent.deleteMany({
-        where: { orgUnitId: { in: demoBirimIds } },
+        where: { orgUnitId: { in: demoUnitIds } },
       });
       await tx.scoreOrgUnitStateEvent.deleteMany({
-        where: { orgUnitId: { in: demoBirimIds } },
+        where: { orgUnitId: { in: demoUnitIds } },
       });
-      const silinenBirimIds = await birimleriTemizle(tx, demoBirimIds);
-      const silinenBirim = silinenBirimIds.length;
+      const deletedUnitIds = await purgeOrgUnits(tx, demoUnitIds);
+      const deletedUnitsCount = deletedUnitIds.length;
 
-      // Sabit nokta temizliği bütün sahipli birimleri silmeden dönmez. Başarı
-      // halinde yeniden kullanılan gerçek birimlerin karar kayıtları da bu
-      // demo kurulumuyla birlikte biter.
       await tx.demoObject.deleteMany({
         where: {
           objectType: DEMO_OBJECT_ORG_UNIT,
-          objectId: { in: demoBirimKayitlari.map((kayit) => kayit.objectId) },
+          objectId: { in: demoUnitRecords.map((r) => r.objectId) },
         },
       });
 
-      // **Temizliğin kendisi iz bırakır** (§15.2). Aynı işlem içinde: "silindi
-      // ama izi yok" durumu mümkün olmamalı.
       await recordAudit(tx, {
         userId: actorId,
         objectType: AUDIT_OBJECTS.setting,
         objectId: "demo_data",
         action: AUDIT_ACTIONS.demoDataPurged,
         detail: {
-          users: silinenKullanici.count,
-          activities: silinenFaaliyet.count,
-          conversations: silinenKonusma.count,
-          followUps: silinenTakip.count,
-          notifications: silinenBildirim.count,
-          orgUnits: silinenBirim,
-          files: dosyalar.length,
-          helpArticles: silinenYardim.count,
+          users: deletedUsers.count,
+          activities: deletedActivities.count,
+          conversations: deletedConversations.count,
+          followUps: deletedFollowUps.count,
+          notifications: deletedNotifications.count,
+          orgUnits: deletedUnitsCount,
+          files: files.length,
+          helpArticles: deletedHelpArticles.count,
         },
         now,
       });
 
       return {
-        users: silinenKullanici.count,
-        activities: silinenFaaliyet.count,
-        conversations: silinenKonusma.count,
-        followUps: silinenTakip.count,
-        notifications: silinenBildirim.count,
-        orgUnits: silinenBirim,
-        files: dosyalar.length,
-        helpArticles: silinenYardim.count,
+        users: deletedUsers.count,
+        activities: deletedActivities.count,
+        conversations: deletedConversations.count,
+        followUps: deletedFollowUps.count,
+        notifications: deletedNotifications.count,
+        orgUnits: deletedUnitsCount,
+        files: files.length,
+        helpArticles: deletedHelpArticles.count,
       } satisfies PurgeSummary;
     });
 
-    // Commit sonrası: diskteki dosyalar. Başarısız olursa kayıt zaten gitti;
-    // artakalan dosyaya giden bir yol yok ve ikinci temizlik onu bulmaz —
-    // bu yüzden hata yutulmaz, çağırana taşınmaz ama günlüğe düşer.
-    for (const dosya of dosyalar) {
+    for (const file of files) {
       try {
-        await deleteStoredFile(dosya.storagePath);
+        await deleteStoredFile(file.storagePath);
       } catch (error) {
-        console.error("[örnek veri] dosya silinemedi", dosya.storagePath, error);
+        console.error("[demo-data] file delete failed", file.storagePath, error);
       }
     }
 
-    return { ok: true, summary: ozet };
+    return { ok: true, summary };
   } catch (error) {
     if (error instanceof LegacyDemoOriginUnknown) {
       return {
@@ -586,8 +470,6 @@ export async function purgeDemoData(
       };
     }
 
-    // Beklenmeyen bir bağ kalmışsa yabancı anahtar durdurur ve işlem tamamen
-    // geri alınır. Kullanıcıya ne olduğu söylenir, sessizce "silindi" denmez.
     return {
       ok: false,
       error: "blocked",
@@ -597,64 +479,58 @@ export async function purgeDemoData(
 }
 
 /**
- * Örnek birimler: yalnız içinde kimse kalmamışsa ve alt birimi yoksa.
- * Yapraklardan köke doğru gidilir; kök birim **hiç dokunulmaz**.
+ * Deletes demo org units from leaves towards the root, only if empty and childless.
+ * Root unit is never deleted.
  */
-async function birimleriTemizle(
+async function purgeOrgUnits(
   tx: Prisma.TransactionClient,
-  demoBirimIds: string[],
+  demoUnitIds: string[],
 ): Promise<string[]> {
-  const silinenler: string[] = [];
-  const kalan = new Set(demoBirimIds);
+  const deleted: string[] = [];
+  const remaining = new Set(demoUnitIds);
 
-  // `findMany` sırası sözleşme değildir. Her tur yalnız gerçek yaprakları
-  // siler; en az bir silme oldukça üst katman yeni yaprağa dönüşür. Böylece
-  // girdi hangi sırada gelirse gelsin aynı işlem içinde sabit noktaya varılır
-  // (denetim 24.08.2026, P3-R6-1).
-  while (kalan.size > 0) {
-    let ilerleme = 0;
+  while (remaining.size > 0) {
+    let progress = 0;
 
-    for (const birimId of [...kalan]) {
-      const birim = await tx.orgUnit.findUnique({
-        where: { id: birimId },
+    for (const unitId of [...remaining]) {
+      const unit = await tx.orgUnit.findUnique({
+        where: { id: unitId },
         select: { id: true, parentId: true },
       });
-      if (!birim) {
-        kalan.delete(birimId);
+      if (!unit) {
+        remaining.delete(unitId);
         continue;
       }
-      // Kök birim köken kaydında olsa bile asla silinmez; aşağıdaki tıkanma
-      // bütün işlemi geri alır ve bozuk sınıflandırmayı görünür kılar.
-      if (birim.parentId === null) continue;
+      if (unit.parentId === null) continue;
 
-      const [kullanan, alt, kayit] = await Promise.all([
-        tx.user.count({ where: { orgUnitId: birim.id } }),
-        tx.orgUnit.count({ where: { parentId: birim.id } }),
-        activityMaintenanceReader(tx).count({ where: { authorOrgUnitId: birim.id } }),
+      const [userCount, childCount, activityCount] = await Promise.all([
+        tx.user.count({ where: { orgUnitId: unit.id } }),
+        tx.orgUnit.count({ where: { parentId: unit.id } }),
+        activityMaintenanceReader(tx).count({ where: { authorOrgUnitId: unit.id } }),
       ]);
-      if (kullanan > 0 || alt > 0 || kayit > 0) continue;
+      if (userCount > 0 || childCount > 0 || activityCount > 0) continue;
 
-      await tx.orgUnit.delete({ where: { id: birim.id } });
-      kalan.delete(birim.id);
-      silinenler.push(birim.id);
-      ilerleme += 1;
+      await tx.orgUnit.delete({ where: { id: unit.id } });
+      remaining.delete(unit.id);
+      deleted.push(unit.id);
+      progress += 1;
     }
 
-    if (ilerleme === 0) break;
+    if (progress === 0) break;
   }
 
-  if (kalan.size > 0) {
-    const adlar = await tx.orgUnit.findMany({
-      where: { id: { in: [...kalan] } },
+  if (remaining.size > 0) {
+    const names = await tx.orgUnit.findMany({
+      where: { id: { in: [...remaining] } },
       select: { id: true, name: true },
       orderBy: [{ name: "asc" }, { id: "asc" }],
     });
     throw new PurgeBlocked(
-      `${kalan.size} örnek birim güvenle silinemedi: ${adlar
-        .map((birim) => `${birim.name} (${birim.id})`)
+      `${remaining.size} demo org unit(s) could not be safely deleted: ${names
+        .map((unit) => `${unit.name} (${unit.id})`)
         .join(", ")}`,
     );
   }
 
-  return silinenler;
+  return deleted;
 }

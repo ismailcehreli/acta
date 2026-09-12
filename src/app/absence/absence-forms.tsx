@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 
+import { useTranslations } from "@/components/i18n";
 import { Alert, FormMessage } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/form";
@@ -9,10 +10,6 @@ import { FormActions, FormGrid } from "@/components/ui/page";
 
 import { cancelOwnAbsenceAction, markOwnAbsenceAction } from "./actions";
 import { emptyAbsenceFormState } from "./form-state";
-
-// Kişinin kendi dönemi (Görev 11.8). Kişi seçici **yok**: kayıt her zaman
-// oturumdaki kişiye ait.
-
 export function MarkOwnAbsenceForm({
   maxDays,
   deputyPeople = [],
@@ -20,6 +17,7 @@ export function MarkOwnAbsenceForm({
   maxDays: number;
   deputyPeople?: { id: string; fullName: string }[];
 }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     markOwnAbsenceAction,
     emptyAbsenceFormState,
@@ -28,18 +26,18 @@ export function MarkOwnAbsenceForm({
   return (
     <form action={formAction} className="flex flex-col gap-5">
       <FormGrid columns={3}>
-        <Field htmlFor="own-start" label="Başlangıç" required>
+        <Field htmlFor="own-start" label={t("screens.absence.start")} required>
           <Input id="own-start" name="startDate" type="date" required />
         </Field>
 
-        <Field htmlFor="own-end" label="Bitiş" required>
+        <Field htmlFor="own-end" label={t("screens.absence.end")} required>
           <Input id="own-end" name="endDate" type="date" required />
         </Field>
 
         <Field
           htmlFor="own-note"
-          label="Not (isteğe bağlı)"
-          hint="Örn. yıllık izin, rapor"
+          label={t("screens.absence.noteOptional")}
+          hint={t("screens.absence.notePlaceholder")}
         >
           <Input id="own-note" name="note" maxLength={500} />
         </Field>
@@ -47,11 +45,11 @@ export function MarkOwnAbsenceForm({
         {deputyPeople.length > 0 ? (
           <Field
             htmlFor="own-deputy"
-            label="Vekil yönetici"
-            hint="İzniniz sırasında departmanınızın taleplerini sizin yerinize karara bağlar."
+            label={t("screens.absence.deputyManager")}
+            hint={t("screens.absence.deputyHint")}
           >
             <Select id="own-deputy" name="deputyId" defaultValue="">
-              <option value="">Vekil seçmeden devam et</option>
+              <option value="">{t("screens.absence.noDeputy")}</option>
               {deputyPeople.map((person) => (
                 <option key={person.id} value={person.id}>
                   {person.fullName}
@@ -64,12 +62,12 @@ export function MarkOwnAbsenceForm({
 
       <FormActions>
         <Button type="submit" variant="primary" disabled={pending}>
-          {pending ? "Kaydediliyor…" : "Kaydet"}
+          {pending ? t("screens.absence.saving") : t("screens.absence.save")}
         </Button>
         <span className="text-[length:var(--text-sm)] text-muted">
-          En fazla {maxDays} gün. Daha uzun bir dönemi yöneticiniz girebilir.
+          {t("screens.absence.maxDaysHint", { days: maxDays })}
           {deputyPeople.length > 0
-            ? " İzniniz sırasında talepleri yönetmesi için vekil seçebilirsiniz."
+            ? ` ${t("screens.absence.deputyChoiceHint")}`
             : ""}
         </span>
       </FormActions>
@@ -80,16 +78,17 @@ export function MarkOwnAbsenceForm({
 }
 
 export function CancelOwnAbsenceButton({ id }: { id: string }) {
-  const [acik, setAcik] = useState(false);
+  const t = useTranslations();
+  const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState(
     cancelOwnAbsenceAction,
     emptyAbsenceFormState,
   );
 
-  if (!acik) {
+  if (!open) {
     return (
-      <Button type="button" size="sm" onClick={() => setAcik(true)}>
-        İptal et
+      <Button type="button" size="sm" onClick={() => setOpen(true)}>
+        {t("screens.absence.cancel")}
       </Button>
     );
   }
@@ -97,21 +96,21 @@ export function CancelOwnAbsenceButton({ id }: { id: string }) {
   return (
     <form action={formAction} className="flex flex-col gap-2">
       <input type="hidden" name="id" value={id} />
-      <Field htmlFor={`iptal-${id}`} label="İptal gerekçesi" required>
+      <Field htmlFor={`cancel-${id}`} label={t("screens.absence.cancellationReason")} required>
         <Input
-          id={`iptal-${id}`}
+          id={`cancel-${id}`}
           name="reason"
           required
           maxLength={500}
-          placeholder="Örn. tarihleri yanlış girdim"
+          placeholder={t("screens.absence.cancellationPlaceholder")}
         />
       </Field>
       <div className="flex gap-2">
         <Button type="submit" variant="danger" size="sm" disabled={pending}>
-          {pending ? "İptal ediliyor…" : "Kaydı iptal et"}
+          {pending ? t("screens.absence.cancelling") : t("screens.absence.cancelRecord")}
         </Button>
-        <Button type="button" size="sm" onClick={() => setAcik(false)}>
-          Vazgeç
+        <Button type="button" size="sm" onClick={() => setOpen(false)}>
+          {t("screens.absence.cancel")}
         </Button>
       </div>
       {state.error ? <Alert tone="danger">{state.error}</Alert> : null}

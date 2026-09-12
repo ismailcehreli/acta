@@ -4,20 +4,22 @@ import { getCurrentUser } from "@/server/auth/current-user";
 import { loadAttachmentForDownload } from "@/server/attachments/service";
 import { isInlineViewable } from "@/server/attachments/rules";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import { localizeServiceMessage } from "@/shared/i18n/message";
 
-// Ek indirme ucu (§15.4). Dosyalar web sunucusundan doğrudan servis edilmez;
-// her indirme görünürlük modülünden geçer. Faaliyeti görme yetkisi olmayan,
+
+
 // ekini de indiremez.
 //
-// Ucun **iki** sunum biçimi var ve ikisi de aynı görünürlük kapısından geçer:
+
 //
-//   · varsayılan   → indirme (`attachment`)
-//   · `?inline=1`  → sayfada gösterim (`inline`), yalnız resim/PDF/video
+
+
 //
-// Gösterim biçimi istemcinin isteğine bırakılmıyor: tür izin listesinde ve
-// gösterilebilir kümesinde değilse istek `inline=1` dese bile dosya indirme
-// olarak sunulur. Aksi hâlde tarayıcıda açılmaması gereken bir dosyayı
-// açtırmak için tek gereken adres çubuğuna bir parametre eklemek olurdu.
+
+
+
+
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +28,12 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const user = await getCurrentUser();
+  const t = await getTranslations();
   if (!user) {
-    return NextResponse.json({ danger: "Oturum gerekli." }, { status: 401 });
+    return NextResponse.json(
+      { danger: t("errors.api.authenticationRequired") },
+      { status: 401 },
+    );
   }
 
   const { id } = await params;
@@ -38,27 +44,30 @@ export async function GET(
   );
 
   if (!result.ok) {
-    // Yetkisiz erişim ile var olmayan dosya aynı cevabı alır: fark, dosyanın
-    // varlığını ele verirdi (§18.4).
-    return NextResponse.json({ danger: result.message }, { status: 404 });
+
+
+    return NextResponse.json(
+      { danger: localizeServiceMessage(t, "attachments", result) },
+      { status: 404 },
+    );
   }
 
-  const istenenGosterim = new URL(request.url).searchParams.get("inline") === "1";
-  const gosterilebilir = istenenGosterim && isInlineViewable(result.value.mimeType);
+  const requestedDisplay = new URL(request.url).searchParams.get("inline") === "1";
+  const isInlineDisplay = requestedDisplay && isInlineViewable(result.value.mimeType);
 
   return new NextResponse(new Uint8Array(result.value.content), {
     headers: {
       "Content-Type": result.value.mimeType,
-      // Varsayılan indirme: yüklenen dosya tarayıcıda çalıştırılmasın.
-      // Gösterim yalnız tarayıcının **çizdiği** türlerde açılıyor.
-      "Content-Disposition": `${gosterilebilir ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(
+
+
+      "Content-Disposition": `${isInlineDisplay ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(
         result.value.originalName,
       )}`,
       "X-Content-Type-Options": "nosniff",
-      // Gösterilen dosya kendi kaynağını çağıramaz ve betik çalıştıramaz:
-      // sandbox tek başına bütün yetenekleri kapatır, `default-src 'none'`
-      // ise dosyanın içinden dışarıya istek çıkmasını engeller.
-      ...(gosterilebilir
+      // The displayed file cannot load its own resources or run scripts:
+      // the sandbox disables capabilities, while `default-src 'none'` prevents
+      // requests from the file to external resources.
+      ...(isInlineDisplay
         ? { "Content-Security-Policy": "default-src 'none'; sandbox" }
         : {}),
       "Cache-Control": "private, no-store",

@@ -10,7 +10,7 @@ import {
 } from "@/server/settings/system-settings";
 import { renderEmail, renderLine } from "@/server/notifications/templates";
 import {
-  gorunurlugeGoreAyir,
+  partitionRowsByVisibility,
   type VisibleRowsDb,
 } from "@/server/notifications/visible-rows";
 import {
@@ -22,15 +22,13 @@ import {
 
 import type { EmailTransport } from "./transport";
 
-// Kuyruk işleyicisi (§12.3). İşleyici süreci her turda çağırır.
+// Queue dispatcher (§12.3). Called periodically by the worker process.
 //
-// Sıra: bekleyenleri kişi bazında topla → gönderim zamanı gelenleri seç →
-// tek e-postada birleştirip gönder → sonucu yaz.
+// Sequence: collect pending rows by user -> select those due for sending ->
+// coalesce into single email and send -> update results.
 //
-// **Birleştirme penceresi yoktur.** Tur aralığının kendisi penceredir: bir tur
-// içinde aynı kişiye biriken bildirimler tek e-postada gider. Ayrıca beklemek
-// ilk bildirimi geciktirirdi; kabul ölçütü gecikmeyi beş dakikanın altında
-// istiyor (§18.4).
+// No separate coalescing window is needed: the worker cycle itself forms the window.
+// Notifications accumulated for the same user within a cycle are sent in one email.
 
 export type DispatcherDb = Pick<
   PrismaClient,
@@ -39,22 +37,22 @@ export type DispatcherDb = Pick<
   VisibleRowsDb;
 
 export interface DispatchResult {
-  /** Gönderilen e-posta sayısı (kişi başına bir e-posta). */
+  /** Number of sent emails (one email per recipient). */
   sent: number;
-  /** Gönderilmiş sayılan kuyruk kaydı sayısı. */
+  /** Number of queue items marked as delivered. */
   delivered: number;
-  /** Bu turda hata alan kuyruk kaydı sayısı. */
+  /** Number of queue items that failed in this cycle. */
   failed: number;
-  /** Denemeleri tükendiği için vazgeçilen kayıt sayısı. */
+  /** Number of items given up after exceeding retry limits. */
   givenUp: number;
-  /** Alıcı ilgili kaydı artık göremediği için gönderilmeyen kayıt sayısı. */
+  /** Number of items cancelled because recipient can no longer view the activity. */
   cancelled: number;
 }
 
 export interface DispatchOptions {
   now: Date;
   baseUrl: string;
-  /** Tek turda en fazla kaç kişiye gönderilir; kuyruk şişse de tur bitmeli. */
+  /** Max recipients to process in one cycle to keep execution time bounded. */
   maxRecipients?: number;
 }
 
@@ -88,10 +86,10 @@ export async function dispatchNotifications(
   };
   if (pending.length === 0) return result;
 
-  // Özet saati koda gömülü değil: ekrandan değiştirilebilir (§16.5).
+  // Digest hour is configurable via settings (§16.5).
   const digestHour = await readNumericSetting(db, SETTING_KEYS.dailyDigestHour);
 
-  // Kişi bazında toplama = birleştirme.
+  // Group by user for coalescing
   const byUser = new Map<string, typeof pending>();
   for (const row of pending) {
     const list = byUser.get(row.userId) ?? [];
@@ -99,24 +97,24 @@ export async function dispatchNotifications(
     byUser.set(row.userId, list);
   }
 
-  let islenenKisi = 0;
+  let processedUsers = 0;
 
-  for (const [userId, kuyrukSatirlari] of byUser) {
-    let rows = kuyrukSatirlari;
-    if (islenenKisi >= maxRecipients) break;
+  for (const [userId, queueRows] of byUser) {
+    let rows = queueRows;
+    if (processedUsers >= maxRecipients) break;
 
     const user = await db.user.findUnique({
       where: { id: userId },
       select: { email: true, isActive: true, notificationMode: true },
     });
 
-    // Pasifleştirilmiş kullanıcıya posta gitmez; kayıt da beklemede kalmaz.
+    // Inactive users do not receive emails; do not leave pending.
     if (!user || !user.isActive) {
       await db.notificationQueue.updateMany({
         where: { id: { in: rows.map((r) => r.id) } },
         data: {
           status: "FAILED",
-          lastError: "Alıcı pasif ya da bulunamadı.",
+          lastError: "Recipient is inactive or not found.",
           lastAttemptAt: now,
         },
       });
@@ -124,127 +122,114 @@ export async function dispatchNotifications(
       continue;
     }
 
-    // **Görünürlük, gönderim anında yeniden sorulur** (denetim
-    // 21.08.2026, bulgu 3). Bildirim kuyruğa yazıldığında alıcı kaydı
-    // görüyordu; gönderim anında görmüyor olabilir — başka dala taşınmış,
-    // vekâleti bitmiş ya da kararı başkası vermiş olabilir. E-posta metni
-    // faaliyetin **başlığını** taşıyor; onu yollamak, görünürlük katmanını
-    // atlayan bir yazma yolu olurdu (§8, §18.4).
-    const { gecenler, dusenler } = await gorunurlugeGoreAyir(
+    // Visibility is re-checked at dispatch time (audit 21.08.2026, finding 3).
+    const { passed, dropped } = await partitionRowsByVisibility(
       db,
       { id: userId, isSystemAdmin: false },
       rows,
       now,
     );
 
-    if (dusenler.length > 0) {
-      // `FAILED` değil: ortada arıza yok, gönderilmemesi doğru karar.
-      // Operasyon ekranında hata gibi görünmemeli.
+    if (dropped.length > 0) {
       await db.notificationQueue.updateMany({
-        where: { id: { in: dusenler.map((row) => row.id) } },
+        where: { id: { in: dropped.map((row) => row.id) } },
         data: {
           status: "CANCELLED",
           lastAttemptAt: now,
-          lastError: "Alıcı ilgili kaydı artık göremiyor.",
+          lastError: "Recipient can no longer view the activity.",
         },
       });
-      result.cancelled += dusenler.length;
+      result.cancelled += dropped.length;
     }
 
-    if (gecenler.length === 0) continue;
-    rows = gecenler;
+    if (passed.length === 0) continue;
+    rows = passed;
 
-    // Denemesi tükenmiş kayıtlar burada kapatılır: sessizce beklemede kalmaz,
-    // operasyon ekranında "başarısız" olarak görünür.
-    const tukenmis = rows.filter((row) => isExhausted(row.attemptCount));
-    if (tukenmis.length > 0) {
+    // Conclude exhausted attempts
+    const exhausted = rows.filter((row) => isExhausted(row.attemptCount));
+    if (exhausted.length > 0) {
       await db.notificationQueue.updateMany({
-        where: { id: { in: tukenmis.map((r) => r.id) } },
+        where: { id: { in: exhausted.map((r) => r.id) } },
         data: { status: "FAILED", lastAttemptAt: now },
       });
-      result.givenUp += tukenmis.length;
+      result.givenUp += exhausted.length;
     }
 
-    const hazir = rows.filter(
+    const ready = rows.filter(
       (row) => !isExhausted(row.attemptCount) && isRetryDue(row, now),
     );
-    if (hazir.length === 0) continue;
+    if (ready.length === 0) continue;
 
-    // Bekleyemeyen olaylar (parola sıfırlama) ayrı gider: ne özet moduna girer
-    // ne de başka bildirimlerle birleşir. Bir saatlik ömrü olan bir bağlantının
-    // akşam 18:00 özetini beklemesi, bağlantıyı işe yaramaz hâle getirirdi.
-    const acil = hazir.filter((row) => isUrgentEvent(row.eventType));
-    const normal = hazir.filter((row) => !isUrgentEvent(row.eventType));
+    // Urgent events (e.g. password reset) are dispatched immediately without digest delay
+    const urgent = ready.filter((row) => isUrgentEvent(row.eventType));
+    const normal = ready.filter((row) => !isUrgentEvent(row.eventType));
 
-    const gruplar: { rows: typeof hazir; digest: boolean }[] = acil.map((row) => ({
+    const groups: { rows: typeof ready; digest: boolean }[] = urgent.map((row) => ({
       rows: [row],
       digest: false,
     }));
 
-    // "Yalnız benden işlem isteyenler" tercihi (Görev 10.8): bilgilendirmeler
-    // gönderilmez. **Kuyrukta bekletilmez**, kapatılır — aksi hâlde kuyruk
-    // hiç gönderilmeyecek kayıtlarla dolardı ve gecikme ölçümü bozulurdu.
-    const elenenler =
+    // "Action required only" preference (Task 10.8): informational items are filtered out
+    const filteredOut =
       user.notificationMode === "ACTION_ONLY"
         ? normal.filter((row) => !isActionRequiredEvent(row.eventType))
         : [];
 
-    if (elenenler.length > 0) {
+    if (filteredOut.length > 0) {
       await db.notificationQueue.updateMany({
-        where: { id: { in: elenenler.map((row) => row.id) } },
+        where: { id: { in: filteredOut.map((row) => row.id) } },
         data: {
           status: "SENT",
           sentAt: now,
           lastAttemptAt: now,
-          lastError: "Kişinin tercihi: yalnız işlem isteyen bildirimler.",
+          lastError: "User preference: action-required notifications only.",
         },
       });
     }
 
-    const gonderilecek = normal.filter((row) => !elenenler.includes(row));
+    const toSend = normal.filter((row) => !filteredOut.includes(row));
 
-    if (gonderilecek.length > 0) {
-      // Günlük özet modu: olay başına posta yerine günde tek özet (§12.3).
+    if (toSend.length > 0) {
       if (user.notificationMode === "DAILY_DIGEST") {
-        const sonGonderim = await db.notificationQueue.findFirst({
+        const lastSent = await db.notificationQueue.findFirst({
           where: { userId, status: "SENT" },
           orderBy: { sentAt: "desc" },
           select: { sentAt: true },
         });
 
-        if (isDigestDue(now, sonGonderim?.sentAt ?? null, digestHour)) {
-          gruplar.push({ rows: gonderilecek, digest: true });
+        if (isDigestDue(now, lastSent?.sentAt ?? null, digestHour)) {
+          groups.push({ rows: toSend, digest: true });
         }
       } else {
-        gruplar.push({ rows: gonderilecek, digest: false });
+        groups.push({ rows: toSend, digest: false });
       }
     }
 
-    if (gruplar.length === 0) continue;
-    islenenKisi += 1;
+    if (groups.length === 0) continue;
+    processedUsers += 1;
 
-    for (const grup of gruplar) {
-      await gonder(grup.rows, grup.digest);
+    for (const group of groups) {
+      await sendGroup(group.rows, group.digest);
     }
   }
 
   return result;
 
-  async function gonder(denenecek: typeof pending, digest: boolean): Promise<void> {
-    const alici = await db.user.findUnique({
-      where: { id: denenecek[0].userId },
+  async function sendGroup(batch: typeof pending, digest: boolean): Promise<void> {
+    const recipient = await db.user.findUnique({
+      where: { id: batch[0].userId },
       select: { email: true },
     });
-    if (!alici) return;
+    if (!recipient) return;
 
-    const lines = denenecek.map((row) => renderLine(row.eventType, row.payload));
+    const lines = batch.map((row) => renderLine(row.eventType, row.payload));
     const email = renderEmail(lines, { baseUrl, digest });
 
     try {
-      await transport.send({ to: alici.email, ...email });
+      await transport.send({ to: recipient.email, ...email });
 
       await db.notificationQueue.updateMany({
-        where: { id: { in: denenecek.map((r) => r.id) } },
+        where: { id: { in: batch.map((r) => r.id) } },
         data: {
           status: "SENT",
           sentAt: now,
@@ -255,22 +240,20 @@ export async function dispatchNotifications(
       });
 
       result.sent += 1;
-      result.delivered += denenecek.length;
+      result.delivered += batch.length;
     } catch (error) {
-      const mesaj = error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
 
-      // Hata yutulmaz: deneme sayacı artar, sebep kayda geçer. Sayaç sınıra
-      // ulaştıysa kayıt bir sonraki turda "başarısız" olur.
       await db.notificationQueue.updateMany({
-        where: { id: { in: denenecek.map((r) => r.id) } },
+        where: { id: { in: batch.map((r) => r.id) } },
         data: {
           lastAttemptAt: now,
           attemptCount: { increment: 1 },
-          lastError: mesaj.slice(0, 1_000),
+          lastError: message.slice(0, 1_000),
         },
       });
 
-      result.failed += denenecek.length;
+      result.failed += batch.length;
     }
   }
 }

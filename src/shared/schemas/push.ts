@@ -1,22 +1,22 @@
 import { z } from "zod";
 
-// Push aboneliği girdileri (Görev 5.3b). Tarayıcının ürettiği `PushSubscription`
-// nesnesinin JSON hâli; sunucuda da aynı şemayla doğrulanır.
+// Push-subscription input. The browser-generated JSON is validated again on
+// the server with the same schema.
 
 const endpointSchema = z
   .string()
   .trim()
-  .url("Abonelik adresi geçersiz")
-  .max(1000, "Abonelik adresi çok uzun");
+  .url("Subscription endpoint is invalid")
+  .max(1000, "Subscription endpoint is too long");
 
 const keySchema = z
   .string()
   .trim()
   .min(1)
   .max(255)
-  // Tarayıcı anahtarları base64url'dir; başka bir şey gelmesi bozuk istemci
-  // ya da elle uydurulmuş istek demektir.
-  .regex(/^[A-Za-z0-9_-]+=*$/, "Anahtar biçimi geçersiz");
+  // Browser keys use base64url; anything else indicates a malformed client
+  // or a hand-crafted request.
+  .regex(/^[A-Za-z0-9_-]+=*$/, "Key format is invalid");
 
 export const pushSubscriptionSchema = z.object({
   endpoint: endpointSchema,

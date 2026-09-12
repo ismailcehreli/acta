@@ -13,18 +13,9 @@ import { SETTING_KEYS, saveSettings } from "@/server/settings/system-settings";
 import { createActivity, createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// ÖRNEK VERİ TEMİZLİĞİ (denetim 21.08.2026, bulgu 1).
-//
-// Temizlik, "fiziksel silme yok" kuralının bilinçli ve **dar** bir
-// istisnasıdır (§22.3). Darlığın kanıtı bu dosyadır.
-//
-// Eski kod üç güvence vaat ediyor ve üçünü de tutmuyordu: yabancı anahtarların
-// koruduğunu söylüyordu ama çocuk satırları önce sildiği için anahtarlar hiç
-// devreye girmiyordu; denetim izini değişmez sayıyordu ama demo kullanıcının
-// aktör olduğu bütün satırları siliyordu; işlemin ize yazıldığını söylüyordu
-// ama yazmıyordu.
-//
-// Buradaki testlerin hepsi **gerçek veriye dokunulmadığını** sınıyor.
+// Demo data purge tests.
+// Purge is a deliberate and narrow exception to the "no physical delete" principle.
+// These tests verify that real user data is never touched or lost.
 
 const NOW = new Date("2026-08-21T09:00:00.000Z");
 
@@ -37,213 +28,197 @@ afterAll(async () => {
 });
 
 /**
- * Küçük bir örnek şirket: bir demo kullanıcı, bir gerçek kullanıcı ve
- * demo kullanıcının yazdığı bir faaliyet.
+ * Small scenario setup: one demo user, one real user, and an activity written by demo user.
  */
-async function sahne() {
-  const kok = await createOrgUnit({ name: "Acta HQ" });
-  // Bu sahneyi örnek kurulum değil test kurdu; temizlik birimi korumalı ama
-  // köken kapısında durmamalı ki aşağıdaki gerçek veri engelleri ölçülsün.
-  await rememberDemoOrgUnitOrigin(testDb, kok.id, DEMO_ORIGIN_REUSED);
+async function setupScenario() {
+  const root = await createOrgUnit({ name: "Acta HQ" });
+  await rememberDemoOrgUnitOrigin(testDb, root.id, DEMO_ORIGIN_REUSED);
 
-  const yonetici = await createUser(kok.id, {
-    email: "yonetici@sirket.test",
+  const admin = await createUser(root.id, {
+    email: "admin@company.test",
     isSystemAdmin: true,
     isUnitManager: true,
   });
-  const gercek = await createUser(kok.id, { email: "gercek@sirket.test" });
-  const demo = await createUser(kok.id, { email: `demo@${DEMO_EMAIL_DOMAIN}` });
+  const realUser = await createUser(root.id, { email: "real.user@company.test" });
+  const demoUser = await createUser(root.id, { email: `demo@${DEMO_EMAIL_DOMAIN}` });
 
-  const demoKayit = await createActivity(demo, { approvalStatus: "APPROVED" });
+  const demoActivity = await createActivity(demoUser, { approvalStatus: "APPROVED" });
 
-  return { kok, yonetici, gercek, demo, demoKayit };
+  return { root, admin, realUser, demoUser, demoActivity };
 }
 
-describe("temizlik gerçek veriye dokunmaz", () => {
-  it("gerçek kullanıcının mesajı varsa hiçbir şey silinmez", async () => {
-    const { yonetici, gercek, demo, demoKayit } = await sahne();
+describe("purge never touches real data", () => {
+  it("nothing is deleted if a real user message exists on demo activity", async () => {
+    const { admin, realUser, demoUser, demoActivity } = await setupScenario();
 
-    // Gerçek kullanıcı demo bir faaliyete soru sordu ve cevap yazıldı.
-    const konusma = await testDb.conversation.create({
+    // Real user asked a question on demo activity
+    const conversation = await testDb.conversation.create({
       data: {
-        activityId: demoKayit.id,
-        askerId: gercek.id,
-        responsibleId: demo.id,
+        activityId: demoActivity.id,
+        askerId: realUser.id,
+        responsibleId: demoUser.id,
       },
     });
     await testDb.conversationMessage.create({
       data: {
-        conversationId: konusma.id,
-        authorId: gercek.id,
-        text: "Bu kalıp sorunu neden sürüyor?",
+        conversationId: conversation.id,
+        authorId: realUser.id,
+        text: "Why does this tooling issue persist?",
       },
     });
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    if (sonuc.error !== "blocked") throw new Error("engellenmeliydi");
-    // Neyin engellediği söylenir: "bir şeyler ters gitti" sistem yöneticisini
-    // kör bırakırdı.
-    expect(sonuc.detail).toContain("mesaj");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    if (result.error !== "blocked") throw new Error("Expected purge to be blocked");
+    expect(result.detail).toContain("conversation message");
 
-    // **Hiçbir şey silinmedi.**
+    // Nothing was deleted
     expect(await testDb.conversationMessage.count()).toBe(1);
-    expect(await testDb.activity.count({ where: { id: demoKayit.id } })).toBe(1);
-    expect(await testDb.user.count({ where: { id: demo.id } })).toBe(1);
+    expect(await testDb.activity.count({ where: { id: demoActivity.id } })).toBe(1);
+    expect(await testDb.user.count({ where: { id: demoUser.id } })).toBe(1);
   });
 
-  it("gerçek bir nesneye işaret eden denetim kaydı varsa hiçbir şey silinmez", async () => {
-    const { yonetici, gercek, demo } = await sahne();
+  it("nothing is deleted if an audit log points to a real object", async () => {
+    const { admin, realUser, demoUser } = await setupScenario();
 
-    // Demo kullanıcı **gerçek** bir kullanıcı üzerinde işlem yapmış.
+    // Demo user performed an action on a real user
     await testDb.auditLog.create({
       data: {
-        userId: demo.id,
+        userId: demoUser.id,
         objectType: "user",
-        objectId: gercek.id,
+        objectId: realUser.id,
         action: AUDIT_ACTIONS.userUpdated,
       },
     });
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    if (sonuc.error !== "blocked") throw new Error("engellenmeliydi");
-    expect(sonuc.detail).toContain("denetim");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    if (result.error !== "blocked") throw new Error("Expected purge to be blocked");
+    expect(result.detail).toContain("audit record");
 
-    // Denetim izi değişmezdir (§15.2): tek satır bile gitmemeli.
-    expect(await testDb.auditLog.count({ where: { objectId: gercek.id } })).toBe(1);
+    // Audit logs are immutable
+    expect(await testDb.auditLog.count({ where: { objectId: realUser.id } })).toBe(1);
   });
 
-  it("gerçek kullanıcının izin kaydına demo vekil atanmışsa silinmez", async () => {
-    const { yonetici, gercek, demo } = await sahne();
+  it("nothing is deleted if demo user is deputy on real user leave record", async () => {
+    const { admin, realUser, demoUser } = await setupScenario();
 
     await testDb.noActivityPeriod.create({
       data: {
-        userId: gercek.id,
+        userId: realUser.id,
         startDate: new Date("2026-08-20T00:00:00.000Z"),
         endDate: new Date("2026-08-25T00:00:00.000Z"),
-        markedById: demo.id,
+        markedById: demoUser.id,
       },
     });
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    if (sonuc.error !== "blocked") throw new Error("engellenmeliydi");
-    expect(sonuc.detail).toContain("izin kaydı");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    if (result.error !== "blocked") throw new Error("Expected purge to be blocked");
+    expect(result.detail).toContain("leave record");
     expect(await testDb.noActivityPeriod.count()).toBe(1);
   });
 
-  it("gerçek kullanıcının yüklediği ek varsa silinmez", async () => {
-    const { yonetici, gercek, demoKayit } = await sahne();
+  it("nothing is deleted if attachment was uploaded by real user", async () => {
+    const { admin, realUser, demoActivity } = await setupScenario();
 
     await testDb.attachment.create({
       data: {
-        activityId: demoKayit.id,
-        originalName: "rapor.pdf",
-        storedName: "stored-gercek",
-        storagePath: "gs/stored-gercek",
+        activityId: demoActivity.id,
+        originalName: "report.pdf",
+        storedName: "stored-real",
+        storagePath: "gs/stored-real",
         sizeBytes: 10,
         mimeType: "application/pdf",
         sha256: "a".repeat(64),
-        uploadedById: gercek.id,
+        uploadedById: realUser.id,
       },
     });
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    if (sonuc.error !== "blocked") throw new Error("engellenmeliydi");
-    expect(sonuc.detail).toContain("ek");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    if (result.error !== "blocked") throw new Error("Expected purge to be blocked");
+    expect(result.detail).toContain("attachment");
     expect(await testDb.attachment.count()).toBe(1);
   });
 });
 
-describe("temiz durumda temizlik tamamlanır", () => {
-  it("yalnız demo veri varsa silinir ve iz bırakır", async () => {
-    const { yonetici, demo, demoKayit } = await sahne();
+describe("clean purge completes successfully", () => {
+  it("deletes demo data and leaves audit log when only demo data exists", async () => {
+    const { admin, demoUser, demoActivity } = await setupScenario();
 
-    // Demo kullanıcının kendi kaydına ait, kendi bıraktığı iz.
+    // Audit log created by demo user on demo activity
     await testDb.auditLog.create({
       data: {
-        userId: demo.id,
+        userId: demoUser.id,
         objectType: "activity",
-        objectId: demoKayit.id,
+        objectId: demoActivity.id,
         action: AUDIT_ACTIONS.activityCreated,
       },
     });
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.summary.users).toBe(1);
-    expect(sonuc.summary.activities).toBe(1);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.summary.users).toBe(1);
+    expect(result.summary.activities).toBe(1);
 
-    expect(await testDb.user.count({ where: { id: demo.id } })).toBe(0);
-    expect(await testDb.activity.count({ where: { id: demoKayit.id } })).toBe(0);
+    expect(await testDb.user.count({ where: { id: demoUser.id } })).toBe(0);
+    expect(await testDb.activity.count({ where: { id: demoActivity.id } })).toBe(0);
 
-    // Gerçek kullanıcılar yerinde.
+    // Real users remain
     expect(await testDb.user.count()).toBe(2);
 
-    // **Temizliğin kendisi iz bıraktı.**
-    const iz = await testDb.auditLog.findFirstOrThrow({
+    // Purge operation itself leaves an audit log
+    const log = await testDb.auditLog.findFirstOrThrow({
       where: { action: AUDIT_ACTIONS.demoDataPurged },
     });
-    expect(iz.userId).toBe(yonetici.id);
-    expect(iz.objectId).toBe("demo_data");
+    expect(log.userId).toBe(admin.id);
+    expect(log.objectId).toBe("demo_data");
   });
 
-  it("silinecek örnek veri yoksa açıkça söylenir", async () => {
-    const kok = await createOrgUnit({ name: "Acta HQ" });
-    const yonetici = await createUser(kok.id, {
-      email: "yonetici@sirket.test",
+  it("reports clearly when there is nothing to purge", async () => {
+    const root = await createOrgUnit({ name: "Acta HQ" });
+    const admin = await createUser(root.id, {
+      email: "admin@company.test",
       isSystemAdmin: true,
     });
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("nothing_to_purge");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("nothing_to_purge");
   });
 });
 
-// Skor kapanışından geçmiş örnek veri (denetim 25.08.2026, P8-6).
-//
-// Yeni katkı tablosu hem faaliyete hem döneme `RESTRICT` ile bağlı. Temizlik
-// katkıları silmediği için faaliyet silme yabancı anahtar ihlaliyle düşüyor,
-// ham Prisma metni kullanıcıya "engel" diye taşınıyordu: skor kapanışı bir kez
-// çalıştıktan sonra sistem yöneticisinin belgelenmiş "örnek veriyi bütünüyle
-// kaldır" işlemi kalıcı olarak bozuluyordu.
-describe("örnek veri temizliği — skor kapanışından sonra", () => {
-  /** Demo kişinin dönemi **gerçek kapanış servisiyle** kapatılır. */
-  async function kapanisiKostur() {
+describe("demo data purge after score closing", () => {
+  async function runPeriodClose() {
     await saveSettings(testDb, { [SETTING_KEYS.scoringEnabled]: "true" });
-    // Faaliyetler fixture varsayılanıyla 2026-08-17'de; Eylül'ün üçünde
-    // koşan işçi Ağustos'u kapatır. Ayın 1'i değil: geriye giriş penceresi
-    // kapanmadan dönem dondurulmuyor (P8-R2-2).
     return closeScorePeriod(testDb, new Date("2026-09-03T06:00:00.000Z"));
   }
 
-  it("donmuş dönemi ve katkısı olan demo veri temizlenir", async () => {
-    const { yonetici, demo } = await sahne();
+  it("cleans up demo data with frozen period and facts", async () => {
+    const { admin, demoUser } = await setupScenario();
 
-    const kapanis = await kapanisiKostur();
-    expect(kapanis.written).toBeGreaterThan(0);
-    const demoOlgu = await testDb.userScorePeriodFact.count({
-      where: { userId: demo.id },
+    const closeResult = await runPeriodClose();
+    expect(closeResult.written).toBeGreaterThan(0);
+    const demoFacts = await testDb.userScorePeriodFact.count({
+      where: { userId: demoUser.id },
     });
-    expect(demoOlgu, "demo kişinin katkısı oluşmalı").toBeGreaterThan(0);
+    expect(demoFacts).toBeGreaterThan(0);
     await testDb.scoreRecalculationRequest.create({
       data: {
-        userId: demo.id,
+        userId: demoUser.id,
         periodStart: new Date("2026-08-01T00:00:00.000Z"),
         sourceType: "TEST_DEMO_LATE_CHANGE",
         sourceId: "demo-late-change",
@@ -251,40 +226,37 @@ describe("örnek veri temizliği — skor kapanışından sonra", () => {
       },
     });
     expect(
-      await testDb.scoreUserStateEvent.count({ where: { userId: demo.id } }),
+      await testDb.scoreUserStateEvent.count({ where: { userId: demoUser.id } }),
     ).toBeGreaterThan(0);
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok, `temizlik durdu: ${JSON.stringify(sonuc)}`).toBe(true);
-    // Demo kişinin dönem ve katkıları gitti; gerçek kişilerinki durdu.
+    expect(result.ok, `Purge halted: ${JSON.stringify(result)}`).toBe(true);
+    // Demo user period and facts removed; real users preserved
     expect(
-      await testDb.userScorePeriodFact.count({ where: { userId: demo.id } }),
+      await testDb.userScorePeriodFact.count({ where: { userId: demoUser.id } }),
     ).toBe(0);
     expect(
-      await testDb.userScorePeriod.count({ where: { userId: demo.id } }),
+      await testDb.userScorePeriod.count({ where: { userId: demoUser.id } }),
     ).toBe(0);
     expect(
       await testDb.scoreRecalculationRequest.count({
-        where: { userId: demo.id },
+        where: { userId: demoUser.id },
       }),
     ).toBe(0);
     expect(
-      await testDb.scoreUserStateEvent.count({ where: { userId: demo.id } }),
+      await testDb.scoreUserStateEvent.count({ where: { userId: demoUser.id } }),
     ).toBe(0);
   });
 
-  it("gerçek kullanıcının katkısı demo faaliyete bağlıysa temizlik durur", async () => {
-    const { yonetici, gercek, demoKayit } = await sahne();
+  it("halts purge if real user score contribution is linked to demo activity", async () => {
+    const { admin, realUser, demoActivity } = await setupScenario();
 
-    // Gerçek kişinin donmuş dönemi, katkısı **demo** bir faaliyete bağlı.
-    // Bu olgu gerçek kişinin geçmişine aittir; silinemez.
-    const donemBasi = new Date("2026-07-01T00:00:00.000Z");
-    // Gerçek kapanışın sırası: taslak, katkı, mühür (P8-R2-1).
+    const periodStart = new Date("2026-07-01T00:00:00.000Z");
     await testDb.userScorePeriod.create({
       data: {
-        userId: gercek.id,
-        periodStart: donemBasi,
+        userId: realUser.id,
+        periodStart,
         regularity: 40,
         followUp: 30,
         total: 70,
@@ -295,18 +267,18 @@ describe("örnek veri temizliği — skor kapanışından sonra", () => {
     });
     await testDb.userScorePeriodFact.create({
       data: {
-        userId: gercek.id,
-        periodStart: donemBasi,
-        activityId: demoKayit.id,
+        userId: realUser.id,
+        periodStart,
+        activityId: demoActivity.id,
         kind: "WRITTEN",
-        happenedOn: donemBasi,
+        happenedOn: periodStart,
       },
     });
     await testDb.userScorePeriod.update({
       where: {
         userId_periodStart_revisionNo: {
-          userId: gercek.id,
-          periodStart: donemBasi,
+          userId: realUser.id,
+          periodStart,
           revisionNo: 1,
         },
       },
@@ -321,16 +293,16 @@ describe("örnek veri temizliği — skor kapanışından sonra", () => {
       },
     });
 
-    const sonuc = await purgeDemoData(testDb, yonetici.id, NOW);
+    const result = await purgeDemoData(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok || sonuc.error !== "blocked") {
-      throw new Error(`beklenen engel yerine: ${JSON.stringify(sonuc)}`);
+    expect(result.ok).toBe(false);
+    if (result.ok || result.error !== "blocked") {
+      throw new Error(`Expected blocked result, got: ${JSON.stringify(result)}`);
     }
-    expect(sonuc.detail).toMatch(/skor katkısı/);
-    // Hiçbir şey silinmemiş olmalı.
+    expect(result.detail).toMatch(/score contribution/);
+    // Nothing should be deleted
     expect(
-      await testDb.userScorePeriodFact.count({ where: { userId: gercek.id } }),
+      await testDb.userScorePeriodFact.count({ where: { userId: realUser.id } }),
     ).toBe(1);
     expect(await testDb.activity.count()).toBeGreaterThan(0);
   });

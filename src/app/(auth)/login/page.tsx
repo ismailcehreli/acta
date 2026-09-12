@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/server/auth/current-user";
-import { getTranslations } from "@/server/i18n/server";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { prisma } from "@/server/db";
 import {
   readNumericSetting,
@@ -13,23 +13,25 @@ import { Alert } from "@/components/ui/alert";
 
 import { LoginForm } from "./login-form";
 
-export const metadata = { title: "Sign In" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("auth.signIn");
+}
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ parola?: string }>;
+  searchParams: Promise<{ passwordChanged?: string }>;
 }) {
-  // Girişli kullanıcı giriş ekranını görmez.
+
   if (await getCurrentUser()) {
     redirect("/");
   }
 
-  const { parola } = await searchParams;
+  const { passwordChanged } = await searchParams;
   const t = await getTranslations();
 
-  // "Beni hatırla" süresi sistem ayarından; 0 ise kutu hiç çizilmez.
-  const hatirlaGun = await readNumericSetting(
+
+  const rememberDay = await readNumericSetting(
     prisma,
     SETTING_KEYS.rememberMeDays,
   );
@@ -44,13 +46,13 @@ export default async function LoginPage({
         </Link>
       }
     >
-      {parola === "degisti" ? (
-        <div id="parola-degisti" role="status" className="mb-4">
+      {passwordChanged === "1" ? (
+        <div id="password-changed" role="status" className="mb-4">
           <Alert tone="success">{t("auth.passwordChanged")}</Alert>
         </div>
       ) : null}
 
-      <LoginForm rememberDays={hatirlaGun} />
+      <LoginForm rememberDays={rememberDay} />
     </AuthLayout>
   );
 }

@@ -11,17 +11,17 @@ import {
 } from "@/server/conversations/read";
 import type { Viewer } from "@/server/authz/visibility";
 
-// Tek iş kuyruğu (Görev 10.5).
+
 //
-// Kullanıcı açısından "cevap bekleyen soru" ile "onayımı bekleyen kayıt" aynı
-// sorunun cevabıdır: **şimdi ne yapmalıyım?** İki ayrı kutuda durdukları sürece
-// kişi ikisini de gözden geçirmek zorundaydı ve hangisinin daha çok beklediğini
-// göremiyordu.
+
+
+
+
 //
-// Kuyruk **yeni bir yetki kaynağı değil**: her kalem kendi mevcut yolundan
-// geliyor. Sorular `listOpenWorkItems` üzerinden (o da görünürlükle daraltıyor),
-// onaylar aktif onaylayıcı sütunundan, düzeltmeler kişinin kendi kayıtlarından.
-// Burada ikinci bir kural yazmak, iki kuralın ayrışması demekti.
+
+
+
+
 
 export type WorkQueueDb = ConversationReadDb &
   Pick<PrismaClient, "workCalendar" | "holiday">;
@@ -32,15 +32,15 @@ export interface WorkItem {
   kind: WorkKind;
   activityId: string;
   activityTitle: string;
-  /** İşi önüme kim getirdi. */
+
   fromName: string;
-  /** İş bu kişinin önüne ne zaman düştü. */
+
   since: Date;
-  /** Kaç **iş günüdür** bekliyor; bugün düştüyse sıfır. */
+
   waitingBusinessDays: number;
 }
 
-/** İzlenenler: sıra bende değil, ama takip ediyorum. */
+
 export interface WatchedItem {
   activityId: string;
   activityTitle: string;
@@ -54,14 +54,14 @@ export interface WorkQueue {
   watched: WatchedItem[];
 }
 
-const ETIKET: Record<WorkKind, string> = {
-  answer: "Cevapla",
-  approve: "Onayla",
-  revise: "Düzelt",
+const WORK_KIND_LABELS: Record<WorkKind, string> = {
+  answer: "Answer",
+  approve: "Approve",
+  revise: "Revise",
 };
 
 export function workKindLabel(kind: WorkKind): string {
-  return ETIKET[kind];
+  return WORK_KIND_LABELS[kind];
 }
 
 export async function listWorkQueue(
@@ -69,16 +69,16 @@ export async function listWorkQueue(
   viewer: Viewer,
   now: Date,
 ): Promise<WorkQueue> {
-  const [ayarlar, konusmalar, onaylar, duzeltmeler] = await Promise.all([
+  const [calendarSettings, conversations, approvals, revisions] = await Promise.all([
     readWorkCalendar(db),
     listOpenWorkItems(db, viewer),
-    // Vekâlet süresince, vekâlet edilenin onay kuyruğu vekilin iş
-    // kuyruğunda da görünür — `listPendingApprovals` bunu kendi içinde
-    // çözüyor, buraya `now` geçmek yeterli.
+
+
+
     listPendingApprovals(db, viewer.id, now),
-    // Düzeltme istenmiş kendi kayıtlarım. Bunlar bugüne kadar hiçbir listede
-    // yoktu: müdür "şunu düzelt" diyordu ve talep yalnız faaliyet sayfasında
-    // duruyordu. Kişi ana ekranına baktığında yapacak işi olduğunu görmüyordu.
+
+
+
     listVisibleActivities(db, viewer, {
       where: { authorId: viewer.id, approvalStatus: "CHANGES_REQUESTED" },
       orderBy: { approvalDecidedAt: "asc" },
@@ -91,70 +91,70 @@ export async function listWorkQueue(
     }),
   ]);
 
-  // Tatiller yalnız gereken aralık için okunur; en eski işten bugüne.
-  const enEski = [
-    ...konusmalar.map((k) => k.openedAt),
-    ...onaylar.map((o) => o.activityDate),
-    ...duzeltmeler.map((d) => d.approvalDecidedAt ?? now),
-  ].reduce((min, tarih) => (tarih < min ? tarih : min), now);
 
-  const takvim = await loadWorkCalendar(db, enEski, now);
+  const earliest = [
+    ...conversations.map((conversation) => conversation.openedAt),
+    ...approvals.map((approval) => approval.activityDate),
+    ...revisions.map((revision) => revision.approvalDecidedAt ?? now),
+  ].reduce((min, date) => (date < min ? date : min), now);
 
-  const gunSecenekleri = {
-    workingDays: ayarlar.workingDays,
-    holidays: takvim.holidays,
+  const calendar = await loadWorkCalendar(db, earliest, now);
+
+  const dayOptions = {
+    workingDays: calendarSettings.workingDays,
+    holidays: calendar.holidays,
   };
 
-  const bekleme = (since: Date) =>
-    businessDaysBetween(since, now, gunSecenekleri);
+  const waitingBusinessDays = (since: Date) =>
+    businessDaysBetween(since, now, dayOptions);
 
   const items: WorkItem[] = [
-    ...konusmalar
-      .filter((konusma) => konusma.waitingOnMe)
-      .map((konusma) => ({
+    ...conversations
+      .filter((conversation) => conversation.waitingOnMe)
+      .map((conversation) => ({
         kind: "answer" as const,
-        activityId: konusma.activityId,
-        activityTitle: konusma.activityTitle,
-        fromName: konusma.counterpartName,
-        since: konusma.openedAt,
-        waitingBusinessDays: bekleme(konusma.openedAt),
+        activityId: conversation.activityId,
+        activityTitle: conversation.activityTitle,
+        fromName: conversation.counterpartName,
+        since: conversation.openedAt,
+        waitingBusinessDays: waitingBusinessDays(conversation.openedAt),
       })),
 
-    ...onaylar.map((onay) => ({
+    ...approvals.map((approval) => ({
       kind: "approve" as const,
-      activityId: onay.id,
-      activityTitle: onay.title,
-      fromName: onay.authorName,
-      since: onay.activityDate,
-      waitingBusinessDays: bekleme(onay.activityDate),
+      activityId: approval.id,
+      activityTitle: approval.title,
+      fromName: approval.authorName,
+      since: approval.activityDate,
+      waitingBusinessDays: waitingBusinessDays(approval.activityDate),
     })),
 
-    ...duzeltmeler.map((kayit) => ({
+    ...revisions.map((record) => ({
       kind: "revise" as const,
-      activityId: kayit.id,
-      activityTitle: kayit.title,
-      fromName: kayit.approver?.fullName ?? "Yöneticiniz",
-      // Karar anı yoksa (eski kayıt) bekleme sıfır sayılır; uydurma bir tarih
-      // koymak listeyi yanlış sıralardı.
-      since: kayit.approvalDecidedAt ?? now,
-      waitingBusinessDays: kayit.approvalDecidedAt
-        ? bekleme(kayit.approvalDecidedAt)
+      activityId: record.id,
+      activityTitle: record.title,
+      fromName: record.approver?.fullName ?? "Your manager",
+
+
+      since: record.approvalDecidedAt ?? now,
+      waitingBusinessDays: record.approvalDecidedAt
+        ? waitingBusinessDays(record.approvalDecidedAt)
         : 0,
     })),
   ];
 
-  // **En çok bekleyen en üstte.** Tür sırasına göre dizmek, üç gündür bekleyen
-  // bir soruyu bugün gelen bir onayın altına düşürürdü.
+
+
   items.sort((a, b) => a.since.getTime() - b.since.getTime());
 
-  const watched: WatchedItem[] = konusmalar
-    .filter((konusma) => !konusma.waitingOnMe)
-    .map((konusma) => ({
-      activityId: konusma.activityId,
-      activityTitle: konusma.activityTitle,
-      counterpartName: konusma.counterpartName,
-      since: konusma.openedAt,
-      waitingBusinessDays: bekleme(konusma.openedAt),
+  const watched: WatchedItem[] = conversations
+    .filter((conversation) => !conversation.waitingOnMe)
+    .map((conversation) => ({
+      activityId: conversation.activityId,
+      activityTitle: conversation.activityTitle,
+      counterpartName: conversation.counterpartName,
+      since: conversation.openedAt,
+      waitingBusinessDays: waitingBusinessDays(conversation.openedAt),
     }))
     .sort((a, b) => a.since.getTime() - b.since.getTime());
 

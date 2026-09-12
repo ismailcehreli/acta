@@ -15,9 +15,9 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const GERCEK_BETIK = path.resolve("scripts/backup.sh");
+const REAL_SCRIPT = path.resolve("scripts/backup.sh");
 
-interface Sahne {
+interface Setup {
   root: string;
   script: string;
   output: string;
@@ -28,39 +28,39 @@ interface Sahne {
   env: NodeJS.ProcessEnv;
 }
 
-interface Kosu {
+interface Run {
   child: ChildProcess;
   done: Promise<{ code: number | null; stdout: string; stderr: string }>;
 }
 
 type EnvOverrides = Record<string, string | undefined>;
 
-const sahneler: string[] = [];
+const testDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    sahneler.splice(0).map((dizin) => rm(dizin, { recursive: true, force: true })),
+    testDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
   );
 });
 
-async function betikYaz(yol: string, icerik: string): Promise<void> {
-  await writeFile(yol, icerik, { mode: 0o755 });
-  await chmod(yol, 0o755);
+async function writeScript(filePath: string, content: string): Promise<void> {
+  await writeFile(filePath, content, { mode: 0o755 });
+  await chmod(filePath, 0o755);
 }
 
-async function sahneKur(): Promise<Sahne> {
-  const root = await mkdtemp(path.join(tmpdir(), "faaliyet-backup-test-"));
-  sahneler.push(root);
+async function setupScenario(): Promise<Setup> {
+  const root = await mkdtemp(path.join(tmpdir(), "acta-backup-test-"));
+  testDirs.push(root);
 
-  const proje = path.join(root, "proje");
-  const scripts = path.join(proje, "scripts");
+  const project = path.join(root, "project");
+  const scripts = path.join(project, "scripts");
   const bin = path.join(root, "bin");
-  const output = path.join(root, "yedek");
+  const output = path.join(root, "backup");
   const tmp = path.join(root, "tmp");
   const script = path.join(scripts, "backup.sh");
   const dockerLog = path.join(root, "docker.log");
-  const ready = path.join(root, "hazir");
-  const release = path.join(root, "birak");
+  const ready = path.join(root, "ready");
+  const release = path.join(root, "release");
 
   await Promise.all([
     mkdir(scripts, { recursive: true }),
@@ -68,32 +68,32 @@ async function sahneKur(): Promise<Sahne> {
     mkdir(output, { recursive: true }),
     mkdir(tmp, { recursive: true }),
   ]);
-  await copyFile(GERCEK_BETIK, script);
+  await copyFile(REAL_SCRIPT, script);
   await chmod(script, 0o755);
 
-  await betikYaz(
+  await writeScript(
     path.join(bin, "docker"),
     `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s|%s\\n' "\${FAKE_RUN_ID:-yok}" "$*" >> "$FAKE_DOCKER_LOG"
+printf '%s|%s\\n' "\${FAKE_RUN_ID:-none}" "$*" >> "$FAKE_DOCKER_LOG"
 
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "ps" ]]; then
-  servis="\${!#}"
+  service="\${!#}"
   case ",\${FAKE_RUNNING_SERVICES:-}," in
-    *",$servis,"*) printf 'fake-%s\\n' "$servis" ;;
+    *",$service,"*) printf 'fake-%s\\n' "$service" ;;
   esac
   exit 0
 fi
 
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "stop" ]]; then
-  servis="\${!#}"
-  if [[ "\${FAKE_STOP_FAIL_SERVICE:-}" == "$servis" ]]; then exit 42; fi
+  service="\${!#}"
+  if [[ "\${FAKE_STOP_FAIL_SERVICE:-}" == "$service" ]]; then exit 42; fi
   exit 0
 fi
 
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "start" ]]; then
-  servis="\${!#}"
-  if [[ "\${FAKE_START_FAIL_SERVICE:-}" == "$servis" || "\${FAKE_START_FAIL_SERVICE:-}" == "hepsi" ]]; then
+  service="\${!#}"
+  if [[ "\${FAKE_START_FAIL_SERVICE:-}" == "$service" || "\${FAKE_START_FAIL_SERVICE:-}" == "all" ]]; then
     exit 43
   fi
   exit 0
@@ -110,14 +110,14 @@ for arg in "$@"; do
       done
       [[ -e "$FAKE_RELEASE_FILE" ]] || exit 45
     fi
-    printf 'sahte-veritabani-dokumu'
+    printf 'fake-database-dump'
     exit 0
   fi
 done
 
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "run" ]]; then
   if [[ "\${FAKE_ARCHIVE_FAIL:-0}" == "1" ]]; then exit 46; fi
-  printf 'sahte-birim-arsivi'
+  printf 'fake-volume-archive'
   exit 0
 fi
 
@@ -125,7 +125,7 @@ exit 0
 `,
   );
 
-  await betikYaz(
+  await writeScript(
     path.join(bin, "flock"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -141,32 +141,31 @@ exit 2
 `,
   );
 
-  await betikYaz(
+  await writeScript(
     path.join(bin, "openssl"),
     `#!/usr/bin/env bash
 set -euo pipefail
-girdi=''
-cikti=''
+input=''
+output=''
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -in) girdi="$2"; shift 2 ;;
-    -out) cikti="$2"; shift 2 ;;
+    -in) input="$2"; shift 2 ;;
+    -out) output="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
-cp "$girdi" "$cikti"
+cp "$input" "$output"
 `,
   );
 
-  // macOS `mktemp -d` çağrısının TMPDIR yorumuna güvenmiyoruz; çalışma
-  // dizinini sahnenin içine sabitleyip gerçekten temizlenip temizlenmediğini
-  // gözlüyoruz.
-  await betikYaz(
+  // We do not trust macOS mktemp -d interpretation of TMPDIR; fixing the working
+  // directory inside the fixture and watching whether it is truly cleaned up.
+  await writeScript(
     path.join(bin, "mktemp"),
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "-d" ]]; then
-  exec /usr/bin/mktemp -d "$FAKE_TMP_PARENT/calisma.XXXXXX"
+  exec /usr/bin/mktemp -d "$FAKE_TMP_PARENT/work.XXXXXX"
 fi
 exec /usr/bin/mktemp "$@"
 `,
@@ -183,13 +182,13 @@ exec /usr/bin/mktemp "$@"
     env: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
-      BACKUP_PASSPHRASE: "yalniz-test",
+      BACKUP_PASSPHRASE: "test-only",
       POSTGRES_USER: "test",
       POSTGRES_DB: "test",
       TMPDIR: tmp,
-      BACKUP_LOCK_FILE: path.join(proje, ".backup.lock"),
+      BACKUP_LOCK_FILE: path.join(project, ".backup.lock"),
       FAKE_DOCKER_LOG: dockerLog,
-      FAKE_FLOCK_DIR: path.join(root, "flock-tutuluyor"),
+      FAKE_FLOCK_DIR: path.join(root, "flock-held"),
       FAKE_READY_FILE: ready,
       FAKE_RELEASE_FILE: release,
       FAKE_TMP_PARENT: tmp,
@@ -198,21 +197,21 @@ exec /usr/bin/mktemp "$@"
   };
 }
 
-function baslat(
-  sahne: Sahne,
+function startRun(
+  setup: Setup,
   runId: string,
-  ekEnv: EnvOverrides = {},
-): Kosu {
-  const child = spawn("bash", [sahne.script, sahne.output], {
-    cwd: path.dirname(path.dirname(sahne.script)),
-    env: { ...sahne.env, ...ekEnv, FAKE_RUN_ID: runId },
+  extraEnv: EnvOverrides = {},
+): Run {
+  const child = spawn("bash", [setup.script, setup.output], {
+    cwd: path.dirname(path.dirname(setup.script)),
+    env: { ...setup.env, ...extraEnv, FAKE_RUN_ID: runId },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   let stdout = "";
   let stderr = "";
-  child.stdout?.on("data", (parca) => (stdout += String(parca)));
-  child.stderr?.on("data", (parca) => (stderr += String(parca)));
+  child.stdout?.on("data", (chunk) => (stdout += String(chunk)));
+  child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
 
   return {
     child,
@@ -222,29 +221,29 @@ function baslat(
   };
 }
 
-async function bitmesiniBekle(
-  sahne: Sahne,
-  runId = "tek",
-  ekEnv: EnvOverrides = {},
+async function waitForCompletion(
+  setup: Setup,
+  runId = "single",
+  extraEnv: EnvOverrides = {},
 ) {
-  return baslat(sahne, runId, ekEnv).done;
+  return startRun(setup, runId, extraEnv).done;
 }
 
-async function dosyaBekle(yol: string): Promise<void> {
+async function waitForFile(filePath: string): Promise<void> {
   for (let i = 0; i < 100; i += 1) {
     try {
-      await access(yol);
+      await access(filePath);
       return;
     } catch {
-      await new Promise((coz) => setTimeout(coz, 20));
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
-  throw new Error(`Dosya oluşmadı: ${yol}`);
+  throw new Error(`File was not created: ${filePath}`);
 }
 
-async function dockerCagrilari(sahne: Sahne): Promise<string[]> {
+async function getDockerCalls(setup: Setup): Promise<string[]> {
   try {
-    return (await readFile(sahne.dockerLog, "utf8"))
+    return (await readFile(setup.dockerLog, "utf8"))
       .trim()
       .split("\n")
       .filter(Boolean);
@@ -253,81 +252,81 @@ async function dockerCagrilari(sahne: Sahne): Promise<string[]> {
   }
 }
 
-describe("backup.sh yaşam döngüsü", () => {
+describe("backup.sh lifecycle", () => {
   it.each([
-    ["başarı", {}, 0],
-    ["pg_dump hatası", { FAKE_PG_DUMP_FAIL: "1" }, 1],
-    ["arşiv hatası", { FAKE_ARCHIVE_FAIL: "1" }, 1],
-  ])("%s yolunda açık metin çalışma dizini bırakmaz", async (_ad, env, basarili) => {
-    const sahne = await sahneKur();
-    const sonuc = await bitmesiniBekle(sahne, "temizlik", env);
+    ["success", {}, 0],
+    ["pg_dump error", { FAKE_PG_DUMP_FAIL: "1" }, 1],
+    ["archive error", { FAKE_ARCHIVE_FAIL: "1" }, 1],
+  ])("does not leave plain text working directory in %s path", async (_name, env, expectedCode) => {
+    const setup = await setupScenario();
+    const result = await waitForCompletion(setup, "cleanup", env);
 
-    if (basarili === 0) expect(sonuc.code).toBe(0);
-    else expect(sonuc.code).not.toBe(0);
-    expect(await readdir(sahne.tmp)).toEqual([]);
+    if (expectedCode === 0) expect(result.code).toBe(0);
+    else expect(result.code).not.toBe(0);
+    expect(await readdir(setup.tmp)).toEqual([]);
   });
 
-  it("servis yeniden başlatılamazsa yedeği başarılı saymaz", async () => {
-    const sahne = await sahneKur();
-    const sonuc = await bitmesiniBekle(sahne, "start-hatasi", {
+  it("does not treat backup as successful if service cannot be restarted", async () => {
+    const setup = await setupScenario();
+    const result = await waitForCompletion(setup, "start-error", {
       FAKE_START_FAIL_SERVICE: "app",
     });
 
-    expect(sonuc.code).not.toBe(0);
-    expect(sonuc.stderr).toContain("başlatılamadı");
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("could not restart");
   });
 
-  it("başlangıçta kapalı servisi durdurmaz veya başlatmaz", async () => {
-    const sahne = await sahneKur();
-    const sonuc = await bitmesiniBekle(sahne, "durum", {
+  it("does not stop or start service that was initially stopped", async () => {
+    const setup = await setupScenario();
+    const result = await waitForCompletion(setup, "status", {
       FAKE_RUNNING_SERVICES: "worker",
     });
 
-    expect(sonuc.code).toBe(0);
-    const cagrilar = await dockerCagrilari(sahne);
-    expect(cagrilar.some((satir) => satir.includes("compose stop app"))).toBe(false);
-    expect(cagrilar.some((satir) => satir.includes("compose start app"))).toBe(false);
-    expect(cagrilar.some((satir) => satir.includes("compose stop worker"))).toBe(true);
-    expect(cagrilar.some((satir) => satir.includes("compose start worker"))).toBe(true);
+    expect(result.code).toBe(0);
+    const calls = await getDockerCalls(setup);
+    expect(calls.some((line) => line.includes("compose stop app"))).toBe(false);
+    expect(calls.some((line) => line.includes("compose start app"))).toBe(false);
+    expect(calls.some((line) => line.includes("compose stop worker"))).toBe(true);
+    expect(calls.some((line) => line.includes("compose start worker"))).toBe(true);
   });
 
-  it("kısmi stop hatasında daha önce duran servisi geri açar", async () => {
-    const sahne = await sahneKur();
-    const sonuc = await bitmesiniBekle(sahne, "stop-hatasi", {
+  it("restarts previously stopped service on partial stop error", async () => {
+    const setup = await setupScenario();
+    const result = await waitForCompletion(setup, "stop-error", {
       FAKE_STOP_FAIL_SERVICE: "worker",
     });
 
-    expect(sonuc.code).not.toBe(0);
-    const cagrilar = await dockerCagrilari(sahne);
-    expect(cagrilar.some((satir) => satir.includes("compose stop app"))).toBe(true);
-    expect(cagrilar.some((satir) => satir.includes("compose start app"))).toBe(true);
+    expect(result.code).not.toBe(0);
+    const calls = await getDockerCalls(setup);
+    expect(calls.some((line) => line.includes("compose stop app"))).toBe(true);
+    expect(calls.some((line) => line.includes("compose start app"))).toBe(true);
   });
 
-  it("devam eden yedekte ikinci koşuyu servislere dokunmadan reddeder", async () => {
-    const sahne = await sahneKur();
-    const ilk = baslat(sahne, "ilk", {
-      FAKE_BLOCK_RUN_ID: "ilk",
+  it("rejects second run during ongoing backup without touching services", async () => {
+    const setup = await setupScenario();
+    const first = startRun(setup, "first", {
+      FAKE_BLOCK_RUN_ID: "first",
     });
 
     try {
-      await dosyaBekle(sahne.ready);
+      await waitForFile(setup.ready);
 
-      const ikinci = await bitmesiniBekle(sahne, "ikinci");
-      expect(ikinci.code).not.toBe(0);
-      expect(`${ikinci.stdout}\n${ikinci.stderr}`).toMatch(/başka bir yedek/i);
+      const second = await waitForCompletion(setup, "second");
+      expect(second.code).not.toBe(0);
+      expect(`${second.stdout}\n${second.stderr}`).toMatch(/another backup/i);
 
-      const ikinciCagrilari = (await dockerCagrilari(sahne)).filter((satir) =>
-        satir.startsWith("ikinci|"),
+      const secondCalls = (await getDockerCalls(setup)).filter((line) =>
+        line.startsWith("second|"),
       );
       expect(
-        ikinciCagrilari.some(
-          (satir) => satir.includes("compose stop") || satir.includes("compose start"),
+        secondCalls.some(
+          (line) => line.includes("compose stop") || line.includes("compose start"),
         ),
       ).toBe(false);
     } finally {
-      await writeFile(sahne.release, "devam");
-      const ilkSonuc = await ilk.done;
-      expect(ilkSonuc.code).toBe(0);
+      await writeFile(setup.release, "continue");
+      const firstResult = await first.done;
+      expect(firstResult.code).toBe(0);
     }
   });
 });

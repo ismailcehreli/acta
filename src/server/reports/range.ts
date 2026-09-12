@@ -8,17 +8,15 @@ export type ReportPeriod = "month" | "quarter" | "year" | "all";
 
 export const REPORT_PERIODS: readonly {
   value: ReportPeriod;
-  label: string;
 }[] = [
-  { value: "month", label: "Bu ay" },
-  { value: "quarter", label: "Bu çeyrek" },
-  { value: "year", label: "Bu yıl" },
-  { value: "all", label: "Tüm geçmiş" },
+  { value: "month" },
+  { value: "quarter" },
+  { value: "year" },
+  { value: "all" },
 ];
 
 export interface ReportPeriodRange {
   period: ReportPeriod;
-  label: string;
   startDay: string | null;
   endDay: string;
   startDate: Date | null;
@@ -55,7 +53,7 @@ export function minDay(a: string, b: string): string {
   return a < b ? a : b;
 }
 
-/** Raporların gün aralığı şirket saatine göre, bugünü kapsayacak şekilde kurulur. */
+/** Builds the report day range in company time, including today. */
 export function reportPeriodRange(
   period: ReportPeriod,
   now: Date,
@@ -64,33 +62,26 @@ export function reportPeriodRange(
   const [year, month] = dayParts(today);
 
   let startDay: string | null;
-  let label: string;
-
   switch (period) {
     case "quarter": {
       const quarterStartMonth = Math.floor((month - 1) / 3) * 3 + 1;
       startDay = monthStart(year, quarterStartMonth);
-      label = "Bu çeyrek";
       break;
     }
     case "year":
       startDay = monthStart(year, 1);
-      label = "Bu yıl";
       break;
     case "all":
       startDay = null;
-      label = "Tüm geçmiş";
       break;
     case "month":
     default:
       startDay = monthStart(year, month);
-      label = "Bu ay";
       break;
   }
 
   return {
     period,
-    label,
     startDay,
     endDay: today,
     startDate: startDay ? toDateValue(startDay) : null,

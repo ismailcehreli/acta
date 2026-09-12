@@ -8,10 +8,10 @@ import { saveSettings } from "@/server/settings/system-settings";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Departman bazında özet (ürün sahibi kararı, 19.08.2026).
+// Department-level summary.
 //
-// En kritik iddia sızıntıyla ilgili: özet, akışın **göremediği** bir kaydı
-// sayıya katmamalı. Sayı da bir bilgidir (§18.4).
+// Critical invariant regarding data leak: the summary must not count a record
+// that the feed cannot see. Count is also information (§18.4).
 
 const NOW = new Date("2026-08-18T09:00:00.000Z");
 
@@ -23,65 +23,64 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const direktorluk = await createOrgUnit({ name: "Direktörlük", parentId: root.id });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: direktorluk.id });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: direktorluk.id });
-  // Direktörün kapsamı dışında kalan bir dal: sayıya girmemeli.
-  const muhasebe = await createOrgUnit({ name: "Muhasebe", parentId: root.id });
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
+  const directorate = await createOrgUnit({ name: "Directorate", parentId: root.id });
+  const moldShop = await createOrgUnit({ name: "Mold Shop", parentId: directorate.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: directorate.id });
+  // A branch outside the director scope: must not enter count.
+  const accounting = await createOrgUnit({ name: "Accounting", parentId: root.id });
 
-  const direktor = await createUser(direktorluk.id, {
-    fullName: "Direktör",
+  const director = await createUser(directorate.id, {
+    fullName: "Director",
     isUnitManager: true,
   });
-  const kalipci = await createUser(kaliphane.id, { fullName: "Kalıpçı" });
-  const planci = await createUser(planlama.id, { fullName: "Plancı" });
-  const muhasebeci = await createUser(muhasebe.id, { fullName: "Muhasebeci" });
+  const moldWorker = await createUser(moldShop.id, { fullName: "Mold Worker" });
+  const planner = await createUser(planning.id, { fullName: "Planner" });
+  const accountant = await createUser(accounting.id, { fullName: "Accountant" });
 
   return {
-    direktor,
-    kalipci,
-    planci,
-    muhasebeci,
-    kaliphane,
-    planlama,
-    muhasebe,
+    director,
+    moldWorker,
+    planner,
+    accountant,
+    moldShop,
+    planning,
+    accounting,
   };
 }
 
-async function faaliyetYaz(
-  kisi: { id: string; orgUnitId: string },
-  tarih: string,
-  durum: "APPROVED" | "CANCELLED" | "PENDING_APPROVAL" = "APPROVED",
+async function createActivityRecord(
+  user: { id: string; orgUnitId: string },
+  date: string,
+  status: "APPROVED" | "CANCELLED" | "PENDING_APPROVAL" = "APPROVED",
 ) {
   return testDb.activity.create({
     data: {
-      authorId: kisi.id,
-      authorOrgUnitId: kisi.orgUnitId,
-      activityDate: new Date(`${tarih}T00:00:00.000Z`),
-      title: `Kayıt ${tarih}`,
-      description: "içerik",
-      approvalStatus: durum,
+      authorId: user.id,
+      authorOrgUnitId: user.orgUnitId,
+      activityDate: new Date(`${date}T00:00:00.000Z`),
+      title: `Record ${date}`,
+      description: "content",
+      approvalStatus: status,
       approverId:
-        durum === "PENDING_APPROVAL" ? await onaylayiciIdsi(kisi.id) : null,
+        status === "PENDING_APPROVAL" ? await resolveApproverId(user.id) : null,
     },
   });
 }
 
 /**
- * Onay sürecindeki kayıt onaylayıcı ister (kısıt
- * `Activity_approver_required_in_approval`). §4.4'ün çözdüğü gerçek yönetici
- * kullanılır ki test verisi üretimde doğabilecek bir kayıt olsun.
+ * A record in approval status requires an approver (constraint
+ * `Activity_approver_required_in_approval`). The manager resolved by §4.4
+ * is used so that the test fixture matches production rules.
  */
-async function onaylayiciIdsi(userId: string): Promise<string | null> {
+async function resolveApproverId(userId: string): Promise<string | null> {
   const { resolveManager } = await import("@/server/org/resolve-manager");
-  const sonuc = await resolveManager(testDb, userId);
-  return sonuc.found ? sonuc.managerId : null;
+  const result = await resolveManager(testDb, userId);
+  return result.found ? result.managerId : null;
 }
 
-
-async function ozet(
+async function getSummary(
   viewerId: string,
   period: "today" | "week" | "all" = "week",
   includeRoot = false,
@@ -97,36 +96,36 @@ async function ozet(
   );
 }
 
-describe("departman özeti", () => {
-  it("altındaki her departman için satır döner", async () => {
-    const { direktor, kalipci, planci } = await sirket();
-    await faaliyetYaz(kalipci, "2026-08-18");
-    await faaliyetYaz(kalipci, "2026-08-17");
-    await faaliyetYaz(planci, "2026-08-18");
+describe("department summary", () => {
+  it("returns a row for each subordinate department", async () => {
+    const { director, moldWorker, planner } = await setupCompany();
+    await createActivityRecord(moldWorker, "2026-08-18");
+    await createActivityRecord(moldWorker, "2026-08-17");
+    await createActivityRecord(planner, "2026-08-18");
 
-    const satirlar = await ozet(direktor.id);
+    const rows = await getSummary(director.id);
 
-    expect(satirlar.map((s) => s.name)).toEqual(["Kalıphane", "Planlama"]);
-    expect(satirlar[0]).toMatchObject({ people: 1, activityCount: 2 });
-    expect(satirlar[1]).toMatchObject({ people: 1, activityCount: 1 });
+    expect(rows.map((s) => s.name)).toEqual(["Mold Shop", "Planning"]);
+    expect(rows[0]).toMatchObject({ people: 1, activityCount: 2 });
+    expect(rows[1]).toMatchObject({ people: 1, activityCount: 1 });
   });
 
-  it("aynı birimdeki yöneticinin kaydı yönetilen sayıya girmez", async () => {
-    const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
+  it("manager record in the same unit is excluded from managed count", async () => {
+    const root = await createOrgUnit({ name: "Company", type: "Root" });
     const unit = await createOrgUnit({ name: "Operasyon", parentId: root.id });
     const manager = await createUser(unit.id, {
-      fullName: "Operasyon Müdürü",
+      fullName: "Operations Manager",
       isUnitManager: true,
     });
-    const worker = await createUser(unit.id, { fullName: "Operasyon Çalışanı" });
+    const worker = await createUser(unit.id, { fullName: "Operations Employee" });
 
-    await faaliyetYaz(manager, "2026-08-18");
-    await faaliyetYaz(worker, "2026-08-18");
+    await createActivityRecord(manager, "2026-08-18");
+    await createActivityRecord(worker, "2026-08-18");
 
-    const satirlar = await ozet(manager.id, "week", true);
-    const operasyon = satirlar.find((satir) => satir.name === "Operasyon");
+    const rows = await getSummary(manager.id, "week", true);
+    const operation = rows.find((row) => row.name === "Operasyon");
 
-    expect(operasyon).toMatchObject({
+    expect(operation).toMatchObject({
       people: 1,
       activityCount: 1,
       directPeople: 1,
@@ -134,158 +133,158 @@ describe("departman özeti", () => {
     });
   });
 
-  it("kapsam dışındaki departman hiç görünmez", async () => {
-    const { direktor, muhasebeci } = await sirket();
-    await faaliyetYaz(muhasebeci, "2026-08-18");
+  it("out-of-scope department does not appear at all", async () => {
+    const { director, accountant } = await setupCompany();
+    await createActivityRecord(accountant, "2026-08-18");
 
-    const satirlar = await ozet(direktor.id);
+    const rows = await getSummary(director.id);
 
-    // Muhasebe direktörün altında değil: ne satırı ne sayısı görünmeli.
-    expect(satirlar.map((s) => s.name)).not.toContain("Muhasebe");
-    expect(satirlar.reduce((t, s) => t + s.activityCount, 0)).toBe(0);
+    // Accounting is not under director: neither row nor count should appear.
+    expect(rows.map((s) => s.name)).not.toContain("Accounting");
+    expect(rows.reduce((t, s) => t + s.activityCount, 0)).toBe(0);
   });
 
-  it("yöneticinin göremediği kayıt sayıya girmez", async () => {
-    const { direktor, kalipci, kaliphane } = await sirket();
-    // Kalıphane'ye kendi müdürü atanır: onay bekleyen kayıt **ona** düşer,
-    // direktöre değil. Direktör onu görmemeli (§8.2) ve sayıya girmemeli.
-    await createUser(kaliphane.id, {
-      fullName: "Kalıphane Müdürü",
+  it("records invisible to the manager are not counted", async () => {
+    const { director, moldWorker, moldShop } = await setupCompany();
+    // Mold Shop gets its own manager: pending approval record goes to them,
+    // not to director. Director must not see it (§8.2) and it must not be counted.
+    await createUser(moldShop.id, {
+      fullName: "Mold Shop Manager",
       isUnitManager: true,
     });
-    await faaliyetYaz(kalipci, "2026-08-18", "PENDING_APPROVAL");
-    await faaliyetYaz(kalipci, "2026-08-18");
+    await createActivityRecord(moldWorker, "2026-08-18", "PENDING_APPROVAL");
+    await createActivityRecord(moldWorker, "2026-08-18");
 
-    const satirlar = await ozet(direktor.id);
+    const rows = await getSummary(director.id);
 
-    // İki kayıt var ama direktör birini göremiyor; sayı 1 olmalı. Sayı da bir
-    // bilgidir — görülemeyen kaydın varlığını ele vermemeli (§18.4).
-    expect(satirlar.find((s) => s.name === "Kalıphane")?.activityCount).toBe(1);
+    // Two records exist but director cannot see one; count must be 1. Count is
+    // also information - it must not disclose existence of invisible record (§18.4).
+    expect(rows.find((s) => s.name === "Mold Shop")?.activityCount).toBe(1);
   });
 
-  it("iptal edilmiş kayıt sayılmaz", async () => {
-    const { direktor, kalipci } = await sirket();
-    await faaliyetYaz(kalipci, "2026-08-18", "CANCELLED");
+  it("cancelled record is not counted", async () => {
+    const { director, moldWorker } = await setupCompany();
+    await createActivityRecord(moldWorker, "2026-08-18", "CANCELLED");
 
-    const satirlar = await ozet(direktor.id);
+    const rows = await getSummary(director.id);
 
-    expect(satirlar.find((s) => s.name === "Kalıphane")?.activityCount).toBe(0);
+    expect(rows.find((s) => s.name === "Mold Shop")?.activityCount).toBe(0);
   });
 
-  it("dönem süzgeci sayıyı daraltır", async () => {
-    const { direktor, kalipci } = await sirket();
-    await faaliyetYaz(kalipci, "2026-08-18");
-    await faaliyetYaz(kalipci, "2026-08-11");
+  it("period filter narrows the count", async () => {
+    const { director, moldWorker } = await setupCompany();
+    await createActivityRecord(moldWorker, "2026-08-18");
+    await createActivityRecord(moldWorker, "2026-08-11");
 
-    const buHafta = await ozet(direktor.id, "week");
-    const tumu = await ozet(direktor.id, "all");
+    const thisWeek = await getSummary(director.id, "week");
+    const all = await getSummary(director.id, "all");
 
-    expect(buHafta.find((s) => s.name === "Kalıphane")?.activityCount).toBe(1);
-    expect(tumu.find((s) => s.name === "Kalıphane")?.activityCount).toBe(2);
+    expect(thisWeek.find((s) => s.name === "Mold Shop")?.activityCount).toBe(1);
+    expect(all.find((s) => s.name === "Mold Shop")?.activityCount).toBe(2);
   });
 
-  it("astı olmayan için özet boştur", async () => {
-    const { kalipci } = await sirket();
+  it("summary is empty for user with no subordinates", async () => {
+    const { moldWorker } = await setupCompany();
 
-    expect(await ozet(kalipci.id)).toEqual([]);
+    expect(await getSummary(moldWorker.id)).toEqual([]);
   });
 
-  it("üst yönetici alt dalları tek hiyerarşik toplamda görür", async () => {
-    const { direktor, kalipci, planci, muhasebeci } = await sirket();
-    const kok = await testDb.orgUnit.findFirstOrThrow({
+  it("top manager sees subordinate branches in a hierarchical rollup", async () => {
+    const { director, moldWorker, planner, accountant } = await setupCompany();
+    const root = await testDb.orgUnit.findFirstOrThrow({
       where: { parentId: null },
     });
-    const kurul = await createUser(kok.id, {
-      fullName: "Yönetim Kurulu",
+    const board = await createUser(root.id, {
+      fullName: "Executive Board",
       isUnitManager: true,
     });
 
-    await faaliyetYaz(kalipci, "2026-08-18");
-    await faaliyetYaz(planci, "2026-08-18");
-    await faaliyetYaz(muhasebeci, "2026-08-18");
+    await createActivityRecord(moldWorker, "2026-08-18");
+    await createActivityRecord(planner, "2026-08-18");
+    await createActivityRecord(accountant, "2026-08-18");
 
-    const satirlar = await ozet(kurul.id, "week", true);
+    const rows = await getSummary(board.id, "week", true);
 
-    expect(satirlar.map((s) => s.name)).toEqual([
-      "Şirket",
-      "Direktörlük",
-      "Kalıphane",
-      "Planlama",
-      "Muhasebe",
+    expect(rows.map((s) => s.name)).toEqual([
+      "Company",
+      "Accounting",
+      "Directorate",
+      "Mold Shop",
+      "Planning",
     ]);
-    expect(satirlar[0]).toMatchObject({
+    expect(rows.find((row) => row.name === "Company")).toMatchObject({
       people: 4,
       activityCount: 3,
       isRollup: true,
       depth: 0,
     });
-    expect(satirlar[1]).toMatchObject({
+    expect(rows.find((row) => row.name === "Directorate")).toMatchObject({
       people: 3,
       activityCount: 2,
       isRollup: true,
       depth: 1,
     });
-    expect(satirlar[2]).toMatchObject({
+    expect(rows.find((row) => row.name === "Mold Shop")).toMatchObject({
       people: 1,
       directPeople: 1,
       activityCount: 1,
       directActivityCount: 1,
       depth: 2,
     });
-    expect(satirlar[4]).toMatchObject({
+    expect(rows.find((row) => row.name === "Accounting")).toMatchObject({
       people: 1,
       activityCount: 1,
       depth: 1,
     });
-    expect(direktor.isUnitManager).toBe(true);
+    expect(director.isUnitManager).toBe(true);
   });
 });
 
-describe("katılım sütunu (§12.1)", () => {
-  it("ayar kapalıyken hiç hesaplanmaz", async () => {
-    const { direktor, kalipci } = await sirket();
-    await faaliyetYaz(kalipci, "2026-08-18");
+describe("participation column (§12.1)", () => {
+  it("not calculated when setting is disabled", async () => {
+    const { director, moldWorker } = await setupCompany();
+    await createActivityRecord(moldWorker, "2026-08-18");
 
-    const satirlar = await ozet(direktor.id);
+    const rows = await getSummary(director.id);
 
-    expect(satirlar.every((s) => s.participation === null)).toBe(true);
+    expect(rows.every((s) => s.participation === null)).toBe(true);
   });
 
-  it("ayar açıkken bugün yazanı sayar", async () => {
-    const { direktor, kalipci } = await sirket();
+  it("counts users who wrote today when setting is enabled", async () => {
+    const { director, moldWorker } = await setupCompany();
     await saveSettings(testDb, {
       [SETTING_KEYS.managerParticipationSummary]: "true",
     });
-    await faaliyetYaz(kalipci, "2026-08-18");
+    await createActivityRecord(moldWorker, "2026-08-18");
 
-    const satirlar = await ozet(direktor.id);
+    const rows = await getSummary(director.id);
 
-    expect(satirlar.find((s) => s.name === "Kalıphane")?.participation).toEqual({
+    expect(rows.find((s) => s.name === "Mold Shop")?.participation).toEqual({
       wrote: 1,
       expected: 1,
     });
-    expect(satirlar.find((s) => s.name === "Planlama")?.participation).toEqual({
+    expect(rows.find((s) => s.name === "Planning")?.participation).toEqual({
       wrote: 0,
       expected: 1,
     });
   });
 
-  it("faaliyet yazması beklenmeyen kişi paydaya girmez", async () => {
-    const { direktor, kalipci } = await sirket();
+  it("user not expected to write activities is excluded from denominator", async () => {
+    const { director, moldWorker } = await setupCompany();
     await saveSettings(testDb, {
       [SETTING_KEYS.managerParticipationSummary]: "true",
     });
     await testDb.user.update({
-      where: { id: kalipci.id },
+      where: { id: moldWorker.id },
       data: { writesActivities: false },
     });
 
-    const satirlar = await ozet(direktor.id);
+    const rows = await getSummary(director.id);
 
-    // Kişi sayısı yerinde durur (nötr bilgi), ama beklenti sıfır olduğu için
-    // katılım sütunu çizilmez.
-    const kaliphane = satirlar.find((s) => s.name === "Kalıphane");
-    expect(kaliphane?.people).toBe(1);
-    expect(kaliphane?.participation).toBeNull();
+    // Headcount remains (neutral info), but because expectation is 0,
+    // participation column is not rendered.
+    const moldShop = rows.find((s) => s.name === "Mold Shop");
+    expect(moldShop?.people).toBe(1);
+    expect(moldShop?.participation).toBeNull();
   });
 });

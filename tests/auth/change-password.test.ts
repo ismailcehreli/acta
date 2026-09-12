@@ -13,8 +13,8 @@ import { createOrgUnit, createUserWithPassword } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
-const OLD_PASSWORD = "eski-parola-123";
-const NEW_PASSWORD = "yeni-parola-456";
+const OLD_PASSWORD = "old-password-123";
+const NEW_PASSWORD = "new-password-456";
 
 const noWait = async () => {};
 
@@ -30,34 +30,34 @@ afterAll(async () => {
 async function newUser() {
   const unit = await createOrgUnit();
   return createUserWithPassword(unit.id, OLD_PASSWORD, {
-    email: "mudur@ornek.test",
+    email: "manager@example.test",
   });
 }
 
-describe("parola değişimi", () => {
-  it("mevcut parola yanlışsa değişim yapılmaz", async () => {
+describe("password change", () => {
+  it("change is not made if current password is wrong", async () => {
     const user = await newUser();
 
     const result = await changePassword(
       { db: testDb, now: NOW },
       {
         userId: user.id,
-        currentPassword: "yanlis-parola",
+        currentPassword: "wrong-password",
         newPassword: NEW_PASSWORD,
       },
     );
 
     expect(result).toEqual({ ok: false, reason: "invalid_current_password" });
 
-    // Eski parola çalışmaya devam eder.
+    // Old password continues to work.
     const attempt = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep: noWait },
-      { email: "mudur@ornek.test", password: OLD_PASSWORD },
+      { email: "manager@example.test", password: OLD_PASSWORD },
     );
     expect(attempt.ok).toBe(true);
   });
 
-  it("değişimden sonra yeni parola geçerli, eski parola geçersizdir", async () => {
+  it("after change new password is valid, old password is invalid", async () => {
     const user = await newUser();
 
     await changePassword(
@@ -71,18 +71,18 @@ describe("parola değişimi", () => {
 
     const withNew = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep: noWait },
-      { email: "mudur@ornek.test", password: NEW_PASSWORD },
+      { email: "manager@example.test", password: NEW_PASSWORD },
     );
     const withOld = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.2", sleep: noWait },
-      { email: "mudur@ornek.test", password: OLD_PASSWORD },
+      { email: "manager@example.test", password: OLD_PASSWORD },
     );
 
     expect(withNew.ok).toBe(true);
     expect(withOld.ok).toBe(false);
   });
 
-  it("parola değişiminde açık oturumların tamamı düşer (§15.3)", async () => {
+  it("all open sessions are revoked on password change (§15.3)", async () => {
     const user = await newUser();
     const first = await createSession(testDb, user.id, NOW);
     const second = await createSession(testDb, user.id, NOW);
@@ -101,7 +101,7 @@ describe("parola değişimi", () => {
     expect(await findActiveSession(testDb, second.token, NOW)).toBeNull();
   });
 
-  it("parola değişimi kilidi ve hata sayacını temizler", async () => {
+  it("password change clears lockout and failed attempt counter", async () => {
     const user = await newUser();
     await testDb.userCredential.update({
       where: { userId: user.id },
@@ -126,18 +126,18 @@ describe("parola değişimi", () => {
   });
 });
 
-// Denetim FAZ 2, bulgu 1: kuşak kontrolü duvar saatine dayanıyordu ve
-// yalnızca bir yönü kapatıyordu. Parola değişimi önce başlayıp özet
-// hesaplanırken giriş araya girdiğinde, girişin zaman damgası daha büyük olduğu
-// için oturum geçerli sayılabiliyordu. Artık kuşak monoton bir sayaç.
-describe("parola değişimiyle yarışan giriş", () => {
-  it("giriş sırasında parola değişirse oturum açılmaz", async () => {
+// Audit PHASE 2, finding 1: generation check relied on wall clock and only covered
+// one direction. When password change started first and login intervened while hash
+// was being computed, login timestamp could be greater and session deemed valid.
+// Generation is now a monotonic counter.
+describe("login racing with password change", () => {
+  it("session is not opened if password changes during login", async () => {
     const user = await newUser();
     const loginTime = new Date("2026-08-17T09:00:00.000Z");
     const changeTime = new Date("2026-08-17T09:00:00.500Z");
 
-    // Giriş, kimlik bilgisini okuduktan sonra bekler; tam o sırada parola
-    // değişir ve kuşak ilerler.
+    // Login waits after reading credential; right at that moment password
+    // changes and generation advances.
     const result = await login(
       {
         db: testDb,
@@ -154,19 +154,19 @@ describe("parola değişimiyle yarışan giriş", () => {
           );
         },
       },
-      { email: "mudur@ornek.test", password: OLD_PASSWORD },
+      { email: "manager@example.test", password: OLD_PASSWORD },
     );
 
-    // Eski parola doğrulanmış olsa bile oturum yazılmaz.
+    // Even if old password was verified, session is not written.
     expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
     expect(await testDb.session.count({ where: { userId: user.id } })).toBe(0);
   });
 
-  it("kuşak ilerlemişse oturum yazımı reddedilir", async () => {
+  it("session write is rejected if generation has advanced", async () => {
     const user = await newUser();
     const now = new Date("2026-08-17T09:00:00.000Z");
 
-    // Giriş kuşak 0'ı okudu; yazmadan önce parola değişti.
+    // Login read generation 0; password changed before writing.
     await testDb.userCredential.update({
       where: { userId: user.id },
       data: { version: { increment: 1 } },
@@ -183,7 +183,7 @@ describe("parola değişimiyle yarışan giriş", () => {
     expect(await testDb.session.count({ where: { userId: user.id } })).toBe(0);
   });
 
-  it("kuşak aynıysa oturum yazılır", async () => {
+  it("session is written if generation is the same", async () => {
     const user = await newUser();
     const now = new Date("2026-08-17T09:00:00.000Z");
 
@@ -199,7 +199,7 @@ describe("parola değişimiyle yarışan giriş", () => {
     expect(await findActiveSession(testDb, session.token, now)).not.toBeNull();
   });
 
-  it("eski kuşakta doğmuş oturum sonradan da kullanılamaz", async () => {
+  it("session born in old generation cannot be used later", async () => {
     const user = await newUser();
     const now = new Date("2026-08-17T09:00:00.000Z");
     const session = await createSession(testDb, user.id, now, 0);
@@ -212,14 +212,14 @@ describe("parola değişimiyle yarışan giriş", () => {
     expect(await findActiveSession(testDb, session.token, now)).toBeNull();
   });
 
-  it("parola değişimi ile giriş gerçekten çakışsa da güvenli sonuç verir", async () => {
+  it("yields safe result even if password change and login truly conflict", async () => {
     const user = await newUser();
     const changeTime = new Date("2026-08-17T09:00:00.000Z");
     const loginTime = new Date("2026-08-17T09:00:00.200Z");
 
-    // İki işlem aynı anda: parola değişimi (özet hesaplaması sürerken) ve eski
-    // parolayla giriş. Hangi sıra gerçekleşirse gerçekleşsin sonuç güvenli
-    // olmalı — giriş ya reddedilir ya da açtığı oturum kullanılamaz.
+    // Two operations at the same time: password change (while hash computation is ongoing)
+    // and login with old password. Whichever order occurs, result must be safe — login is
+    // either rejected or session opened cannot be used.
     const [, loginResult] = await Promise.all([
       changePassword(
         { db: testDb, now: changeTime },
@@ -231,7 +231,7 @@ describe("parola değişimiyle yarışan giriş", () => {
       ),
       login(
         { db: testDb, now: loginTime, rateLimitKey: "10.0.0.5", sleep: noWait },
-        { email: "mudur@ornek.test", password: OLD_PASSWORD },
+        { email: "manager@example.test", password: OLD_PASSWORD },
       ),
     ]);
 
@@ -243,31 +243,30 @@ describe("parola değişimiyle yarışan giriş", () => {
       expect(loginResult.reason).toBe("invalid_credentials");
     }
 
-    // Her durumda: eski parola artık hiçbir yeni oturum açamaz.
-    const sonraki = await login(
+    // In all cases: old password can no longer open any new session.
+    const afterwards = await login(
       { db: testDb, now: loginTime, rateLimitKey: "10.0.0.6", sleep: noWait },
-      { email: "mudur@ornek.test", password: OLD_PASSWORD },
+      { email: "manager@example.test", password: OLD_PASSWORD },
     );
-    expect(sonraki.ok).toBe(false);
+    expect(afterwards.ok).toBe(false);
   });
 });
 
-// Denetim (18.08.2026, bulgu 7): önceki tur yalnızca giriş ile parola
-// değişimi arasındaki yarışı kapatmıştı. İki **parola değişimi** aynı eski
-// özeti işlem dışında doğrulayıp sırayla yazabiliyordu; eski parolayı bilen
-// biri, gerçek kullanıcının yeni parolasını böyle ezebilirdi.
-describe("iki eşzamanlı parola değişimi", () => {
-  it("yalnızca biri yazar, diğeri çakışma döner", async () => {
+// Audit (18.08.2026, finding 7): previous round only resolved race between login
+// and password change. Two **password changes** could verify same old hash outside transaction
+// and write sequentially; someone knowing old password could overwrite the real user's new password.
+describe("two concurrent password changes", () => {
+  it("only one writes, the other returns conflict", async () => {
     const user = await newUser();
     const now = new Date("2026-08-17T09:00:00.000Z");
 
-    const [birinci, ikinci] = await Promise.all([
+    const [first, second] = await Promise.all([
       changePassword(
         { db: testDb, now },
         {
           userId: user.id,
           currentPassword: OLD_PASSWORD,
-          newPassword: "gercek-kullanicinin-parolasi",
+          newPassword: "real-user-password",
         },
       ),
       changePassword(
@@ -275,74 +274,73 @@ describe("iki eşzamanlı parola değişimi", () => {
         {
           userId: user.id,
           currentPassword: OLD_PASSWORD,
-          newPassword: "saldirganin-parolasi",
+          newPassword: "attacker-password",
         },
       ),
     ]);
 
-    const basarili = [birinci, ikinci].filter((r) => r.ok);
-    const basarisiz = [birinci, ikinci].filter((r) => !r.ok);
+    const successful = [first, second].filter((r) => r.ok);
+    const failed = [first, second].filter((r) => !r.ok);
 
-    expect(basarili).toHaveLength(1);
-    expect(basarisiz).toHaveLength(1);
-    expect(basarisiz[0]).toEqual({ ok: false, reason: "conflict" });
+    expect(successful).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toEqual({ ok: false, reason: "conflict" });
   });
 
-  it("kaybeden isteğin parolası hiç geçerli olmaz", async () => {
+  it("losing request's password is never valid", async () => {
     const user = await newUser();
     const now = new Date("2026-08-17T09:00:00.000Z");
-    const sonra = new Date("2026-08-17T09:05:00.000Z");
+    const after = new Date("2026-08-17T09:05:00.000Z");
 
     await Promise.all([
       changePassword(
         { db: testDb, now },
-        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "parola-bir-1234" },
+        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "password-one-1234" },
       ),
       changePassword(
         { db: testDb, now },
-        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "parola-iki-1234" },
+        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "password-two-1234" },
       ),
     ]);
 
-    const denemeler = await Promise.all(
-      ["parola-bir-1234", "parola-iki-1234"].map((parola, index) =>
+    const attempts = await Promise.all(
+      ["password-one-1234", "password-two-1234"].map((password, index) =>
         login(
           {
             db: testDb,
-            now: sonra,
+            now: after,
             rateLimitKey: `10.0.0.${20 + index}`,
             sleep: noWait,
           },
-          { email: "mudur@ornek.test", password: parola },
+          { email: "manager@example.test", password },
         ),
       ),
     );
 
-    // Tam olarak biri çalışmalı: iki parola birden geçerli olsaydı, kaybeden
-    // isteğin sahibi de hesaba girebilirdi.
-    expect(denemeler.filter((r) => r.ok)).toHaveLength(1);
+    // Exactly one should work: if both passwords were valid, owner of losing request could also access account.
+    expect(attempts.filter((r) => r.ok)).toHaveLength(1);
   });
 
-  it("eski parola her iki durumda da geçersizleşir", async () => {
+  it("old password is invalidated in both cases", async () => {
     const user = await newUser();
     const now = new Date("2026-08-17T09:00:00.000Z");
 
     await Promise.all([
       changePassword(
         { db: testDb, now },
-        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "parola-bir-1234" },
+        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "password-one-1234" },
       ),
       changePassword(
         { db: testDb, now },
-        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "parola-iki-1234" },
+        { userId: user.id, currentPassword: OLD_PASSWORD, newPassword: "password-two-1234" },
       ),
     ]);
 
-    const eski = await login(
+    const oldLogin = await login(
       { db: testDb, now, rateLimitKey: "10.0.0.30", sleep: noWait },
-      { email: "mudur@ornek.test", password: OLD_PASSWORD },
+      { email: "manager@example.test", password: OLD_PASSWORD },
     );
 
-    expect(eski.ok).toBe(false);
+    expect(oldLogin.ok).toBe(false);
   });
 });

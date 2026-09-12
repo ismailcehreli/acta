@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Geri yükleme (§15.6). **Denenmemiş yedek, yedek sayılmaz** — bu betik
-# kurulum kılavuzundaki tatbikatın aracıdır.
+# Restore (§15.6). An **untested backup is not a backup**; this script is the
+# exercise described in the deployment guide.
 #
-# Kullanım:
-#   scripts/restore.sh yedek/faaliyet-20260818-120000.tar.gz.enc
+# Usage:
+#   scripts/restore.sh backups/acta-20260818-120000.tar.gz.enc
 #
-# Betik mevcut veritabanının üzerine yazar. Bu yüzden onay ister; onaysız
-# çalıştırmak için RESTORE_CONFIRM=evet verilmelidir.
+# The script overwrites the current database and therefore asks for
+# confirmation. Set `RESTORE_CONFIRM=yes` for unattended execution.
 
 set -euo pipefail
 
-KOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$KOK"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 if [[ -f .env ]]; then
   set -a
@@ -20,80 +20,95 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-YEDEK="${1:-}"
-CALISMA="$(mktemp -d)"
-trap 'rm -rf "$CALISMA"' EXIT
+BACKUP_FILE="${1:-}"
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
 
-hata() {
-  echo "[geri yükleme] HATA: $*" >&2
+fail() {
+  echo "[restore] ERROR: $*" >&2
   exit 1
 }
 
 log() {
-  echo "[geri yükleme] $*"
+  echo "[restore] $*"
 }
 
-[[ -n "$YEDEK" ]] || hata "Yedek dosyası verilmedi. Kullanım: scripts/restore.sh <dosya>"
-[[ -f "$YEDEK" ]] || hata "Dosya bulunamadı: $YEDEK"
-[[ -n "${BACKUP_PASSPHRASE:-}" ]] || hata "BACKUP_PASSPHRASE tanımlı değil."
-[[ -n "${POSTGRES_USER:-}" && -n "${POSTGRES_DB:-}" ]] || hata "POSTGRES_USER / POSTGRES_DB tanımlı değil."
+[[ -n "$BACKUP_FILE" ]] || fail "No backup file was provided. Usage: scripts/restore.sh <file>"
+[[ -f "$BACKUP_FILE" ]] || fail "File was not found: $BACKUP_FILE"
+[[ -n "${BACKUP_PASSPHRASE:-}" ]] || fail "BACKUP_PASSPHRASE is not set."
+[[ -n "${POSTGRES_USER:-}" && -n "${POSTGRES_DB:-}" ]] || fail "POSTGRES_USER / POSTGRES_DB are not set."
 
-if [[ "${RESTORE_CONFIRM:-}" != "evet" ]]; then
-  echo "[geri yükleme] UYARI: mevcut veritabanı ve dosya deposu ÜZERİNE yazılacak."
-  echo "[geri yükleme] Hedef: $POSTGRES_DB"
-  read -r -p "[geri yükleme] Devam edilsin mi? (evet/hayır) " cevap
-  [[ "$cevap" == "evet" ]] || hata "Vazgeçildi."
+if [[ "${RESTORE_CONFIRM:-}" != "yes" ]]; then
+  echo "[restore] WARNING: the current database and file stores will be OVERWRITTEN."
+  echo "[restore] Target: $POSTGRES_DB"
+  read -r -p "[restore] Continue? (yes/no) " response
+  [[ "$response" == "yes" ]] || fail "Cancelled."
 fi
 
-log "çözülüyor"
+log "decrypting"
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-  -in "$YEDEK" -out "$CALISMA/paket.tar.gz" \
-  -pass env:BACKUP_PASSPHRASE || hata "Şifre çözülemedi (parola yanlış olabilir)."
+  -in "$BACKUP_FILE" -out "$WORK_DIR/archive.tar.gz" \
+  -pass env:BACKUP_PASSPHRASE || fail "Could not decrypt the backup (the passphrase may be wrong)."
 
-tar -C "$CALISMA" -xzf "$CALISMA/paket.tar.gz" || hata "Paket açılamadı."
-[[ -s "$CALISMA/veritabani.dump" ]] || hata "Pakette veritabanı dökümü yok."
+tar -C "$WORK_DIR" -xzf "$WORK_DIR/archive.tar.gz" || fail "Could not extract the archive."
 
-# Uygulama süreçleri durdurulur: geri yükleme sırasında yazan bir istemci
-# tutarsızlık yaratır.
-log "uygulama ve işleyici durduruluyor"
+DATABASE_DUMP="$WORK_DIR/database.dump"
+if [[ ! -s "$DATABASE_DUMP" ]]; then
+  # Backward compatibility for backups created before the English archive names.
+  DATABASE_DUMP="$WORK_DIR/veritabani.dump"
+fi
+[[ -s "$DATABASE_DUMP" ]] || fail "The archive does not contain a database dump."
+
+# Stop application processes: a client writing during restore would create
+# inconsistent data.
+log "stopping app and worker"
 docker compose stop app worker >/dev/null 2>&1 || true
 
-log "veritabanı geri yükleniyor"
+log "restoring database"
 docker compose exec -T postgres pg_restore \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
   --clean --if-exists --no-owner \
-  < "$CALISMA/veritabani.dump" || hata "pg_restore başarısız."
+  < "$DATABASE_DUMP" || fail "pg_restore failed."
 
-if [[ -s "$CALISMA/ekler.tar" || -s "$CALISMA/avatarlar.tar" ]]; then
-  log "dosya deposu geri yükleniyor"
+ATTACHMENTS_ARCHIVE="$WORK_DIR/attachments.tar"
+if [[ ! -s "$ATTACHMENTS_ARCHIVE" ]]; then
+  ATTACHMENTS_ARCHIVE="$WORK_DIR/ekler.tar"
+fi
+
+AVATARS_ARCHIVE="$WORK_DIR/avatars.tar"
+if [[ ! -s "$AVATARS_ARCHIVE" ]]; then
+  AVATARS_ARCHIVE="$WORK_DIR/avatarlar.tar"
+fi
+
+if [[ -s "$ATTACHMENTS_ARCHIVE" || -s "$AVATARS_ARCHIVE" ]]; then
+  log "restoring file stores"
   docker compose start app >/dev/null
-  # Konteynerin ayağa kalkmasını bekle.
+  # Wait for the container to become ready.
   for _ in $(seq 1 30); do
     docker compose exec -T app true >/dev/null 2>&1 && break
     sleep 1
   done
 fi
 
-if [[ -s "$CALISMA/ekler.tar" ]]; then
-  # Dizinin kendisi bir bağlama noktasıdır ve silinemez; **içi** boşaltılır.
+if [[ -s "$ATTACHMENTS_ARCHIVE" ]]; then
+  # The directory is a mount point and cannot be removed; clear its contents.
   docker compose exec -T app sh -c 'mkdir -p /veri/ekler && find /veri/ekler -mindepth 1 -delete' </dev/null
-  docker compose exec -T app tar -C /veri -xf - < "$CALISMA/ekler.tar" \
-    || hata "Ek dosyaları geri yüklenemedi."
+  docker compose exec -T app tar -C /veri -xf - < "$ATTACHMENTS_ARCHIVE" \
+    || fail "Could not restore attachments."
 fi
 
-# Profil resimleri ayrı arşivde. **Eski yedeklerde bu dosya yok**; olmaması
-# hata değil, o yedeğin avatar taşımadığı anlamına gelir ve mevcut resimlere
-# dokunulmaz.
-if [[ -s "$CALISMA/avatarlar.tar" ]]; then
+# Profile pictures are stored in a separate archive. **Older backups may not
+# contain it**; that is not an error and existing pictures remain untouched.
+if [[ -s "$AVATARS_ARCHIVE" ]]; then
   docker compose exec -T app sh -c 'mkdir -p /veri/avatarlar && find /veri/avatarlar -mindepth 1 -delete' </dev/null
-  docker compose exec -T app tar -C /veri -xf - < "$CALISMA/avatarlar.tar" \
-    || hata "Profil resimleri geri yüklenemedi."
+  docker compose exec -T app tar -C /veri -xf - < "$AVATARS_ARCHIVE" \
+    || fail "Could not restore profile pictures."
 else
-  log "yedekte profil resmi arşivi yok; avatarlara dokunulmadı."
+  log "no profile-picture archive in the backup; existing pictures were left untouched."
 fi
 
-log "servisler başlatılıyor"
+log "starting services"
 docker compose start app worker >/dev/null
 
-log "bitti. Sağlık ucunu ve birkaç kaydı gözle doğrulayın."
+log "finished. Verify the health endpoint and a few records manually."

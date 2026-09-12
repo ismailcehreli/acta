@@ -4,8 +4,8 @@ import { hashPassword } from "@/server/auth/password";
 
 import { testDb } from "./test-db";
 
-// Testlerin okunur kalması için asgari kurulum yardımcıları. Her çağrı benzersiz
-// ad/e-posta üretir ki tekillik kısıtları istemeden tetiklenmesin.
+// Minimal test fixtures to keep tests readable and isolated.
+// Each call generates unique names/emails so uniqueness constraints are not violated unintentionally.
 
 let counter = 0;
 
@@ -20,22 +20,17 @@ export async function createOrgUnit(
   const n = unique();
   return testDb.orgUnit.create({
     data: {
-      name: data.name ?? `Birim ${n}`,
-      type: data.type ?? "Departman",
+      name: data.name ?? `Unit ${n}`,
+      type: data.type ?? "Department",
       ...data,
     },
   });
 }
 
 /**
- * Kişinin **var olduğu an**; testlerin sahte takviminden önce.
- *
- * Fixture kullanıcıyı gerçek saatle damgalıyordu. Skor kapanışı artık
- * "dönemde var mıydı" diye soruyor (denetim 25.08.2026, P8-R2-3) ve
- * gerçek saat testlerin 2026 Ağustos takviminin ilerisine düştüğü için
- * hiç kimse kapanışa giremiyordu. Parola kurulum anında da aynı gerekçe var.
+ * Timestamp when the user already existed; prior to tests' mock calendar dates.
  */
-const KURULUS_ANI = new Date("2026-01-01T00:00:00.000Z");
+const FOUNDING_TIME = new Date("2026-01-01T00:00:00.000Z");
 
 export async function createUser(
   orgUnitId: string,
@@ -44,10 +39,10 @@ export async function createUser(
   const n = unique();
   return testDb.user.create({
     data: {
-      fullName: data.fullName ?? `Kullanıcı ${n}`,
-      email: data.email ?? `kullanici${n}@ornek.test`,
+      fullName: data.fullName ?? `User ${n}`,
+      email: data.email ?? `user${n}@example.test`,
       orgUnitId,
-      createdAt: KURULUS_ANI,
+      createdAt: FOUNDING_TIME,
       ...data,
     },
   });
@@ -63,29 +58,22 @@ export async function createActivity(
   const activity = await testDb.activity.create({
     data: {
       authorId: author.id,
-      // Yazım anındaki birim dondurulur (§4.6).
       authorOrgUnitId: author.orgUnitId,
       activityDate: data.activityDate ?? new Date("2026-08-17T00:00:00.000Z"),
-      title: data.title ?? `Faaliyet ${n}`,
-      description: data.description ?? `Açıklama ${n}`,
+      title: data.title ?? `Activity ${n}`,
+      description: data.description ?? `Description ${n}`,
       ...data,
     },
   });
 
-  // Uygun onaylayıcılar listesi, gerçek yazma yolunda da kayıtla birlikte
-  // doğuyor (20.08.2026 kararı). Fixture bunu atlarsa görünürlük sorgusu
-  // testte üretimden farklı davranır — kayıt onaylayıcının kapsamına hiç
-  // girmez ve test yeşil kalarak yalan söyler.
+  // Automatically attach approver relationship if approverId is specified
   if (activity.approverId) {
     await testDb.activityApprover.create({
       data: { activityId: activity.id, userId: activity.approverId },
     });
   }
 
-  // Onay turu da kayıtla birlikte doğuyor (denetim 23.08.2026,
-  // P3-R2-1). Fixture bunu atlarsa karar servisi "açık tur yok" diye
-  // patlar ve testler üretimden farklı bir dünyada koşar — aynı gerekçe,
-  // uygun onaylayıcılar listesinde de yazılı.
+  // Create open approval round if status is PENDING_APPROVAL
   if (activity.approvalStatus === "PENDING_APPROVAL" && activity.approvalSubmittedAt) {
     await testDb.approvalRound.create({
       data: {
@@ -96,29 +84,19 @@ export async function createActivity(
     });
   }
 
-  // **Karara bağlanmış kayıt kapalı bir tur taşır** (denetim
-  // 25.08.2026, P8-2 çalışmasında yakalandı).
-  //
-  // Onaya tabi birimde karar her zaman `approveActivity`/`requestChanges`/
-  // `rejectActivity` üzerinden veriliyor ve o servisler turu kapatıyor.
-  // Fixture doğrudan `approvalStatus: "APPROVED"` yazdığında tursuz bir kayıt
-  // doğuyordu: üretimde imkânsız. Kabul artık tur geçmişinden okunduğu için
-  // böyle bir satır testte üretimden farklı davranır — ve nitekim davrandı.
-  const KARARLAR = ["APPROVED", "REJECTED", "CHANGES_REQUESTED"] as const;
-  const karar = KARARLAR.find((k) => k === activity.approvalStatus);
-  if (activity.approverId && karar) {
-    // Zaman verilmediyse **faaliyet günü** kullanılıyor: `createdAt`
-    // gerçek saatten geliyor ve testlerin sahte takviminin (2026 Ağustos)
-    // ilerisine düşüp kararı dönem dışına atıyordu.
-    const gonderim = activity.approvalSubmittedAt ?? activity.activityDate;
+  // Decided records must carry a closed approval round
+  const DECISIONS = ["APPROVED", "REJECTED", "CHANGES_REQUESTED"] as const;
+  const decision = DECISIONS.find((d) => d === activity.approvalStatus);
+  if (activity.approverId && decision) {
+    const submission = activity.approvalSubmittedAt ?? activity.activityDate;
     await testDb.approvalRound.create({
       data: {
         activityId: activity.id,
         roundNo: 1,
-        submittedAt: gonderim,
-        decidedAt: activity.approvalDecidedAt ?? gonderim,
+        submittedAt: submission,
+        decidedAt: activity.approvalDecidedAt ?? submission,
         decidedById: activity.approverId,
-        decision: karar,
+        decision,
       },
     });
   }
@@ -127,10 +105,7 @@ export async function createActivity(
 }
 
 /**
- * Parolası kurulmuş kullanıcı; giriş testleri bunun üzerinden çalışır.
- * Parola kurulum anı bilerek geçmişe alınır: oturumlar parola değişiminden
- * sonra doğmuş olmalıdır (bkz. `findActiveSession` kuşak kontrolü), testlerin
- * sahte saati ise 2026 Ağustos'unu kullanır.
+ * Creates a user with an initialized Argon2id password hash.
  */
 export async function createUserWithPassword(
   orgUnitId: string,
@@ -151,8 +126,7 @@ export async function createUserWithPassword(
 }
 
 /**
- * Onay kararı gerekçesi. Katalog geçişte tohumlanıyor ama `resetDatabase`
- * her testten önce tabloları boşaltıyor; testler kendi gerekçesini kurar.
+ * Creates an approval reason record for testing.
  */
 export async function createApprovalReason(
   kind: "CHANGES_REQUESTED" | "REJECTED",
@@ -160,7 +134,7 @@ export async function createApprovalReason(
 ): Promise<{ id: string; label: string }> {
   const n = unique();
   return testDb.approvalReason.create({
-    data: { kind, label: label ?? `Gerekçe ${n}`, sortOrder: 10 },
+    data: { kind, label: label ?? `Reason ${n}`, sortOrder: 10 },
     select: { id: true, label: true },
   });
 }

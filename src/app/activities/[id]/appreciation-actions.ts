@@ -4,24 +4,27 @@ import { revalidatePath } from "next/cache";
 
 import { getCurrentUser } from "@/server/auth/current-user";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
 import { appreciateActivity } from "@/server/scoring/appreciation";
+import { localizeServiceMessage } from "@/shared/i18n/message";
 
 import type { AppreciationState } from "./appreciation-state";
 
-// Takdir verme (Görev 11.11). Yetki ve görünürlük kararı servistedir; burası
-// yalnız oturumu çözüp sonucu forma taşır.
+
+
 
 export async function appreciateAction(
   _previous: AppreciationState,
   formData: FormData,
 ): Promise<AppreciationState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const activityId = String(formData.get("activityId") ?? "");
-  const sonuc = await appreciateActivity(prisma, user.id, activityId, new Date());
+  const result = await appreciateActivity(prisma, user.id, activityId, new Date());
 
-  if (!sonuc.ok) return { error: sonuc.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "appreciation", result) };
 
   revalidatePath(`/activities/${activityId}`);
   return { error: null };

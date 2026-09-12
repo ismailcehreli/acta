@@ -8,21 +8,6 @@ function average(total: number, count: number): number | null {
   return count === 0 ? null : Math.round((total / count) * 10) / 10;
 }
 
-function feedbackCategoryLabel(category: string): string {
-  switch (category) {
-    case "BUG":
-      return "Hata";
-    case "SUGGESTION":
-      return "Öneri";
-    case "CRITIQUE":
-      return "Eleştiri";
-    case "QUESTION":
-      return "Soru";
-    default:
-      return "Diğer";
-  }
-}
-
 export async function readFeedbackReport(
   db: ReportDb,
   isSystemAdmin: boolean,
@@ -71,7 +56,7 @@ export async function readFeedbackReport(
     inReview: rows.filter((row) => row.status === "IN_REVIEW").length,
     resolved: rows.filter((row) => row.status === "RESOLVED").length,
     byCategory: [...categories.entries()]
-      .map(([category, count]) => ({ label: feedbackCategoryLabel(category), count }))
+      .map(([category, count]) => ({ key: category, count }))
       .sort((a, b) => b.count - a.count),
     averageFirstReadHours: average(firstReadTotal / 3_600_000, firstReadCount),
     averageResolutionHours: average(resolutionTotal / 3_600_000, resolutionCount),

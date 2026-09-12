@@ -35,26 +35,19 @@ export interface HistoricalScoreEnvironment {
   followUpThreshold: number;
 }
 
-/**
- * Bir ayın sonundaki geriye giriş süresi.
- *
- * Kapanış günü güncel ayarı okumak, sonraki ay yapılan değişikliğin önceki
- * dönemi yeniden açmasına veya erkenden kapatmasına yol açardı. Tarihçe olayı
- * yoksa güncel `SystemSetting` yedek değildir; kayıt defterindeki varsayılan
- * kullanılır (kesimden önceki geçmiş tahmin edilmez).
- */
+
 export async function retroactiveEntryDaysAtPeriodEnd(
   db: Prisma.TransactionClient,
   periodEnd: Date,
 ): Promise<number> {
   const definition = findSetting(SETTING_KEYS.retroactiveEntryDays);
   if (!definition) {
-    throw new Error("Geriye giriş ayarı kayıt defterinde tanımlı değil.");
+    throw new Error("The backdated-entry setting is not defined in the registry.");
   }
 
-  // Kesim şirket saatindedir: Ağustos'un İstanbul'daki ilk üç saati UTC'de
-  // hâlâ 31 Temmuz görünür. UTC takvim gününe göre kesmek, yeni ayın ilk
-  // ayarını yanlışlıkla önceki döneme uygular.
+
+
+
   const until = nextCompanyDayStart(companyDay(periodEnd));
   const event = await db.scoreSettingEvent.findFirst({
     where: {
@@ -70,7 +63,7 @@ export async function retroactiveEntryDaysAtPeriodEnd(
   });
   const value = Number(event?.value ?? definition.defaultValue);
   if (!Number.isInteger(value) || value < 0) {
-    throw new Error("Dönem sonundaki geriye giriş ayarı geçersiz.");
+    throw new Error("The backdated-entry setting at period end is invalid.");
   }
   return value;
 }
@@ -111,9 +104,9 @@ function eligible(state: {
 }
 
 /**
- * Belirli ayın sonu itibarıyla kullanıcı/organizasyon/takvim görüntüsünü kurar.
- * Olay sorguları etkili tarih, kayıt tarihi ve kimlikle kararlı sıralanır;
- * aynı etkili tarihe sonradan yazılan gerekçeli düzeltme kazanır.
+ * Build the user/organization/calendar view as of the end of a given month.
+ * Events are deterministically ordered by effective date, recorded date, and id;
+ * a reasoned correction recorded later on the same effective date wins.
  */
 export async function loadHistoricalScoreEnvironment(
   db: Prisma.TransactionClient,
@@ -259,19 +252,19 @@ export async function loadHistoricalScoreEnvironment(
     });
   }
 
-  // Tarihsel ağaç, takvim devralmasının temelidir.
+  // The dated tree is the basis for calendar inheritance.
   const unitCalendarIndex: UnitCalendarIndex = {
-    birimler: new Map(
+    units: new Map(
       [...unitById.values()].map((unit) => [
         unit.id,
         { id: unit.id, parentId: unit.parentId, name: unit.name },
       ]),
     ),
-    // Güncel takvim satırı geçmiş dönem için yedek değildir. Birim dönem
-    // bittikten sonra ilk kez kendi takvimini almış olabilir; o satırı buraya
-    // kopyalamak yeni pencereyi geriye yürütürdü.
-    takvimler: new Map(),
-    sirket: { ...DEFAULT_WORK_CALENDAR },
+    // The current calendar row is not a historical fallback. A unit may have
+    // received its own calendar for the first time after the period ended; copying
+    // that row here would move the new window backwards in time.
+    calendars: new Map(),
+    company: { ...DEFAULT_WORK_CALENDAR },
   };
 
   const latestUnitCalendars = latestBy(
@@ -280,10 +273,10 @@ export async function loadHistoricalScoreEnvironment(
   );
   for (const [orgUnitId, event] of latestUnitCalendars) {
     if (!event.hasOwnCalendar) {
-      unitCalendarIndex.takvimler.delete(orgUnitId);
+      unitCalendarIndex.calendars.delete(orgUnitId);
       continue;
     }
-    unitCalendarIndex.takvimler.set(orgUnitId, {
+    unitCalendarIndex.calendars.set(orgUnitId, {
       workingDays: event.workingDays,
       workStartMinute: event.workStartMinute,
       workEndMinute: event.workEndMinute,
@@ -294,7 +287,7 @@ export async function loadHistoricalScoreEnvironment(
   const historicalCompany = companyCalendarEvents.at(-1);
   const companyWorkingDays =
     historicalCompany?.workingDays ?? DEFAULT_WORK_CALENDAR.workingDays;
-  unitCalendarIndex.sirket = {
+  unitCalendarIndex.company = {
     workingDays: companyWorkingDays,
     workStartMinute:
       historicalCompany?.workStartMinute ??
@@ -303,9 +296,9 @@ export async function loadHistoricalScoreEnvironment(
       historicalCompany?.workEndMinute ?? DEFAULT_WORK_CALENDAR.workEndMinute,
   };
 
-  // Tatilin güncel tabloda bulunması, hedef dönemde de bilindiğinin kanıtı
-  // değildir. Migration mevcut tatilleri CUTOVER olayıyla tohumlar; sonraki
-  // ekleme/kaldırmalar yalnız kendi etkili tarihinden itibaren görünür.
+  // A holiday's presence in the current table does not prove it was known during
+  // the target period. The migration seeds existing holidays with a CUTOVER event;
+  // later additions/removals appear only from their effective date.
   const holidayByDay = new Map<string, boolean>();
   for (const event of holidayEvents) {
     holidayByDay.set(day(event.holidayDate).toISOString().slice(0, 10), event.isHoliday);
@@ -321,10 +314,10 @@ export async function loadHistoricalScoreEnvironment(
     if (historical) return Number(historical.value);
 
     const definition = findSetting(key);
-    if (!definition) throw new Error(`Tanımsız tarihsel ayar anahtarı: ${key}`);
-    // Güncel ayar geçmiş dönemin yedeği olamaz. Migration bütün mevcut
-    // değerleri CUTOVER olayıyla taşır; daha sonra ilk kez eklenen bir ayar,
-    // önceki dönemlerde kendi kayıt defteri varsayılanıyla değerlendirilir.
+    if (!definition) throw new Error(`Unknown historical setting key: ${key}`);
+    // The current setting cannot be a historical fallback. The migration carries
+    // all existing values through a CUTOVER event; settings added later use their
+    // catalog default in earlier periods.
     return Number(definition.defaultValue);
   };
 

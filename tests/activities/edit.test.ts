@@ -6,9 +6,9 @@ import { SETTING_KEYS } from "@/server/settings/system-settings";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §5.5: onaylanmış faaliyet, kayıttan sonraki kısa pencere içinde ve **henüz
-// kimse okumadıysa** düzeltilebilir. Sonrasında değiştirilemez — üst kademeler
-// okumuş olabilir ve sonradan değişmesi güveni bozar (İlke 5).
+// §5.5: approved activity can be edited within a short window after creation
+// and **if no one has read it yet**. Afterwards it cannot be changed — higher
+// tiers may have read it and subsequent edits destroy trust (Principle 5).
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 const TODAY = "2026-08-17";
@@ -22,10 +22,10 @@ afterAll(async () => {
 });
 
 async function setupWithActivity() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
   const department = await createOrgUnit({
-    name: "Kalıphane",
-    type: "Departman",
+    name: "Tooling Workshop",
+    type: "Department",
     parentId: root.id,
   });
   const user = await createUser(department.id);
@@ -37,14 +37,14 @@ async function setupWithActivity() {
     author,
     {
       activityDate: TODAY,
-      title: "İlk başlık",
-      description: "İlk açıklama",
+      title: "Initial title",
+      description: "Initial description",
       targetDepartmentIds: [department.id],
     },
     NOW,
   );
 
-  if (!created.ok) throw new Error("kurulum başarısız");
+  if (!created.ok) throw new Error("setup failed");
 
   return { root, department, author, reader, activity: created.activity };
 }
@@ -53,15 +53,15 @@ function editInput(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
     activityDate: TODAY,
-    title: "Düzeltilmiş başlık",
-    description: "Düzeltilmiş açıklama",
+    title: "Edited title",
+    description: "Edited description",
     targetDepartmentIds: [] as string[],
     ...overrides,
   };
 }
 
-describe("düzeltme penceresi", () => {
-  it("15 dakika içinde ve okunmamışsa düzeltilebilir", async () => {
+describe("edit window", () => {
+  it("can be edited within 15 minutes if unread", async () => {
     const { author, department, activity } = await setupWithActivity();
     const fourteenMinutesLater = new Date(NOW.getTime() + 14 * 60_000);
 
@@ -74,10 +74,10 @@ describe("düzeltme penceresi", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.activity.title).toBe("Düzeltilmiş başlık");
+    expect(result.activity.title).toBe("Edited title");
   });
 
-  it("15 dakika geçtikten sonra düzeltilemez", async () => {
+  it("cannot be edited after 15 minutes", async () => {
     const { author, department, activity } = await setupWithActivity();
     const sixteenMinutesLater = new Date(NOW.getTime() + 16 * 60_000);
 
@@ -93,13 +93,13 @@ describe("düzeltme penceresi", () => {
     expect(result.error).toBe("window_closed");
   });
 
-  it("pencere süresi sistem ayarından okunur", async () => {
+  it("reads window duration from system setting", async () => {
     const { author, department, activity } = await setupWithActivity();
     await testDb.systemSetting.create({
       data: {
         key: SETTING_KEYS.editWindowMinutes,
         value: "60",
-        description: "Düzeltme penceresi (dakika)",
+        description: "Edit window (minutes)",
       },
     });
 
@@ -114,8 +114,8 @@ describe("düzeltme penceresi", () => {
   });
 });
 
-describe("okundu bilgisi düzeltmeyi kapatır (§10 bağlantısı)", () => {
-  it("başkası okuduysa pencere içinde bile düzeltilemez", async () => {
+describe("read receipt closes edit window (§10 link)", () => {
+  it("cannot be edited within window if read by another user", async () => {
     const { author, department, reader, activity } = await setupWithActivity();
 
     await testDb.readReceipt.create({
@@ -134,7 +134,7 @@ describe("okundu bilgisi düzeltmeyi kapatır (§10 bağlantısı)", () => {
     expect(result.error).toBe("already_read");
   });
 
-  it("yazanın kendi okuması düzeltmeyi kapatmaz", async () => {
+  it("author reading own activity does not close edit window", async () => {
     const { author, department, activity } = await setupWithActivity();
 
     await testDb.readReceipt.create({
@@ -152,8 +152,8 @@ describe("okundu bilgisi düzeltmeyi kapatır (§10 bağlantısı)", () => {
   });
 });
 
-describe("düzeltme yetkisi", () => {
-  it("başkasının faaliyeti düzeltilemez", async () => {
+describe("edit authorization", () => {
+  it("cannot edit another user's activity", async () => {
     const { department, activity } = await setupWithActivity();
     const stranger = await createUser(department.id);
 
@@ -166,19 +166,19 @@ describe("düzeltme yetkisi", () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    // Dışarıya "bulunamadı" denir: "senin değil" demek kaydın varlığını
-    // ele verirdi (denetim 18.08.2026, bulgu 1).
+    // Returns "not_found" externally: returning "not yours" leaks record existence
+    // (audit 2026-08-18, finding 1).
     expect(result.error).toBe("not_found");
-    expect(result.message).toBe("Faaliyet bulunamadı.");
+    expect(result.message).toBe("Activity not found.");
 
-    // İçerik gerçekten değişmemiş olmalı.
+    // Verify stored content was not altered.
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
-    expect(stored.title).toBe("İlk başlık");
+    expect(stored.title).toBe("Initial title");
   });
 
-  it("iptal edilmiş faaliyet düzeltilemez", async () => {
+  it("cannot edit cancelled activity", async () => {
     const { author, department, activity } = await setupWithActivity();
     await testDb.activity.update({
       where: { id: activity.id },
@@ -198,8 +198,8 @@ describe("düzeltme yetkisi", () => {
   });
 });
 
-describe("revizyon geçmişi (§5.5)", () => {
-  it("her düzeltme yeni bir revizyon bırakır ve eski içerik korunur", async () => {
+describe("revision history (§5.5)", () => {
+  it("creates new revision for each edit and preserves prior content", async () => {
     const { author, department, activity } = await setupWithActivity();
 
     await updateActivity(
@@ -215,8 +215,8 @@ describe("revizyon geçmişi (§5.5)", () => {
     });
 
     expect(revisions).toHaveLength(2);
-    expect(revisions[0].title).toBe("İlk başlık");
-    expect(revisions[1].title).toBe("Düzeltilmiş başlık");
+    expect(revisions[0].title).toBe("Initial title");
+    expect(revisions[1].title).toBe("Edited title");
 
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
@@ -224,15 +224,15 @@ describe("revizyon geçmişi (§5.5)", () => {
     expect(stored.currentRevisionNo).toBe(2);
   });
 
-  it("muhatap listesi değişince revizyon o anki listeyi dondurur", async () => {
+  it("freezes recipient list snapshot when target departments change", async () => {
     const { author, department, root, activity } = await setupWithActivity();
-    const digerDepartman = await createOrgUnit({ parentId: root.id });
+    const otherDepartment = await createOrgUnit({ parentId: root.id });
 
     await updateActivity(
       testDb,
       author.id,
       editInput(activity.id, {
-        targetDepartmentIds: [digerDepartman.id],
+        targetDepartmentIds: [otherDepartment.id],
       }),
       new Date(NOW.getTime() + 60_000),
     );
@@ -243,16 +243,16 @@ describe("revizyon geçmişi (§5.5)", () => {
     });
 
     expect(revisions[0].targetOrgUnitIds).toEqual([department.id]);
-    expect(revisions[1].targetOrgUnitIds).toEqual([digerDepartman.id]);
+    expect(revisions[1].targetOrgUnitIds).toEqual([otherDepartment.id]);
 
-    // Güncel muhatap listesi de değişmiş olmalı.
+    // Current target list must also be updated.
     const current = await testDb.activityTargetDept.findMany({
       where: { activityId: activity.id },
     });
-    expect(current.map((row) => row.orgUnitId)).toEqual([digerDepartman.id]);
+    expect(current.map((row) => row.orgUnitId)).toEqual([otherDepartment.id]);
   });
 
-  it("revizyon kayıtları değiştirilemez ve silinemez", async () => {
+  it("revision records are immutable and cannot be deleted", async () => {
     const { author, activity } = await setupWithActivity();
 
     const revision = await testDb.activityRevision.findFirstOrThrow({

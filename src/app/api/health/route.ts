@@ -5,7 +5,7 @@ import { buildHealthReport, toPublicReport } from "@/server/health/report";
 import { JOB_NAMES, listJobHealth, worstLagSeconds } from "@/server/jobs/status";
 import { readBooleanSetting, SETTING_KEYS } from "@/server/settings/system-settings";
 
-// Sağlık kontrolü her istekte gerçekten ölçüm yapmalı, önbellekten dönmemeli.
+
 export const dynamic = "force-dynamic";
 
 export async function GET() {
@@ -31,8 +31,7 @@ export async function GET() {
   });
 
   if (report.database.error) {
-    // Ayrıntı yalnızca sunucu günlüğüne; dış cevap durum bilgisiyle sınırlı.
-    console.error(`[health] veritabanı erişilemiyor: ${report.database.error}`);
+    console.error(`[health] database unavailable: ${report.database.error}`);
   }
 
   return NextResponse.json(toPublicReport(report), {

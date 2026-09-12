@@ -1,13 +1,16 @@
-import type { ReactNode } from "react";
+"use client";
 
-// Durum işareti (§9).
+import type { HTMLAttributes, ReactNode } from "react";
+import { useTranslations } from "@/components/i18n";
+
+
 //
-// **Durum hiçbir zaman yalnız renkle anlatılmaz.** Her işaret üç taşıyıcı
-// kullanır: bir ikon şekli, bir metin ve bir renk. Renk körü bir kullanıcı,
-// siyah beyaz çıktı ya da düşük kontrastlı ekran durumu yine okuyabilmeli.
+
+
+
 //
-// Şekil dili köşeli: rozet hap değil dikdörtgendir (2px yarıçap). Durumu
-// şekil değil metin taşır; hap biçimi yalnız görsel gürültü eklerdi.
+
+
 
 export type BadgeTone =
   | "neutral"
@@ -30,10 +33,7 @@ const TONES: Record<BadgeTone, string> = {
   cancelled: "bg-cancelled-soft text-cancelled border-cancelled-line",
 };
 
-/**
- * Duruma ait ikon. Renkten bağımsız ikinci taşıyıcı: her ton kendi
- * şeklini kullanır, böylece iki durum gri tonlamada bile ayrışır.
- */
+
 function ToneIcon({ tone }: { tone: BadgeTone }) {
   const ortak = { width: 11, height: 11, viewBox: "0 0 12 12", "aria-hidden": true } as const;
 
@@ -92,15 +92,16 @@ export function Badge({
   children,
   icon = true,
   className,
+  ...rest
 }: {
   tone?: BadgeTone;
   children: ReactNode;
-  /** İkon gizlenebilir; yalnız metnin zaten durumu taşıdığı yerlerde. */
   icon?: boolean;
   className?: string;
-}) {
+} & HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
+      {...rest}
       className={`inline-flex items-center gap-1.5 rounded-(--radius-xs) border px-1.5 py-0.5 text-[length:var(--text-xs)] leading-[var(--leading-tight)] font-medium ${TONES[tone]} ${className ?? ""}`}
     >
       {icon ? <ToneIcon tone={tone} /> : null}
@@ -110,12 +111,13 @@ export function Badge({
 }
 
 /**
- * Okunmamış işareti (§10.1).
+ * Unread indicator (§10.1).
  *
- * Nokta **tek başına yeterli değil** (brief §6): işaretin ekran okuyucu
- * metni ve görsel ikinci taşıyıcısı (dolu/boş kare) vardır.
+ * A dot is **not enough on its own** (brief §6): the indicator has screen-reader
+ * text and a second visual carrier (a filled or empty square).
  */
 export function ReadDot({ read }: { read: boolean }) {
+  const t = useTranslations();
   return (
     <>
       <span
@@ -126,7 +128,7 @@ export function ReadDot({ read }: { read: boolean }) {
             : "mt-[7px] size-2 shrink-0 bg-primary"
         }
       />
-      <span className="sr-only">{read ? "Okundu" : "Okunmadı"}</span>
+      <span className="sr-only">{read ? t("common.read") : t("activities.unread")}</span>
     </>
   );
 }

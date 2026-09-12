@@ -7,16 +7,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §15.4: dosya eki güvenliği. Tür uzantıdan değil içerikten doğrulanır,
-// saklama adı sunucuda üretilir, indirme görünürlükten geçer.
+// §15.4: file attachment security. Type is validated from content not extension,
+// storage name is server-generated, downloads pass through visibility authorization.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
 let storageDir: string;
 
 beforeAll(async () => {
-  // Depo geçici bir dizine kurulur: testler gerçek depoya yazmaz.
-  storageDir = await mkdtemp(path.join(tmpdir(), "ek-testi-"));
+  // Storage is initialized in a temporary directory: tests never write to real storage.
+  storageDir = await mkdtemp(path.join(tmpdir(), "attachment-test-"));
   process.env.ATTACHMENT_STORAGE_DIR = storageDir;
 });
 
@@ -29,18 +29,18 @@ beforeEach(async () => {
   await resetDatabase();
 });
 
-/** Gerçek dosyalar: tür içerikten okunuyor mu, ancak böyle sınanır. */
-// 1×1 piksel PNG.
+/** Real files: type sniffing from content can only be tested this way. */
+// 1x1 pixel PNG.
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   "base64",
 );
 const PDF = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(64, 2)]);
-/** Windows çalıştırılabilir dosya imzası. */
+/** Windows executable header signature. */
 const EXE = Buffer.concat([Buffer.from("MZ"), Buffer.alloc(128, 3)]);
 /**
- * Asgari ama **gerçek** bir MP4 başlığı (`ftyp` kutusu, isom markası). Tür
- * doğrulaması içerik imzasına baktığı için uydurma bayt yeterli olmaz.
+ * Minimal but valid MP4 header (`ftyp` box, isom brand).
+ * Since mime detection checks content signatures, mock bytes are insufficient.
  */
 const MP4 = Buffer.concat([
   Buffer.from([0x00, 0x00, 0x00, 0x18]),
@@ -51,17 +51,17 @@ const MP4 = Buffer.concat([
 ]);
 
 async function scenario() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-  const moldShop = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
-  const planning = await createOrgUnit({ name: "Planlama", parentId: root.id });
+  const root = await createOrgUnit({ name: "Headquarters", type: "Root" });
+  const moldShop = await createOrgUnit({ name: "Tooling Workshop", parentId: root.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: root.id });
 
   const manager = await createUser(moldShop.id, {
-    fullName: "Kalıphane Müdürü",
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const author = await createUser(moldShop.id, { fullName: "Çalışan" });
+  const author = await createUser(moldShop.id, { fullName: "Worker" });
   const peer = await createUser(planning.id, {
-    fullName: "Planlama Müdürü",
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
 
@@ -70,8 +70,8 @@ async function scenario() {
       authorId: author.id,
       authorOrgUnitId: moldShop.id,
       activityDate: new Date("2026-08-17T00:00:00.000Z"),
-      title: "Kalıp bakımı",
-      description: "Açıklama",
+      title: "Tooling maintenance",
+      description: "Description",
       approvalStatus: "APPROVED",
     },
   });
@@ -81,84 +81,84 @@ async function scenario() {
 
 const viewer = (user: { id: string }) => ({ id: user.id, isSystemAdmin: false });
 
-describe("tür doğrulama içerikten yapılır (§15.4)", () => {
-  it("uzantısı pdf olan çalıştırılabilir dosya reddedilir", async () => {
+describe("type validation performs content sniffing (§15.4)", () => {
+  it("rejects executable disguised with pdf extension", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { author, activity } = await scenario();
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "rapor.pdf", content: EXE }],
+      [{ originalName: "report.pdf", content: EXE }],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("unsupported_type");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("unsupported_type");
     expect(await testDb.attachment.count()).toBe(0);
   });
 
-  it("gerçek PDF kabul edilir ve türü içerikten yazılır", async () => {
+  it("accepts genuine PDF and determines mime type from content", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { author, activity } = await scenario();
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "rapor.txt", content: PDF }],
+      [{ originalName: "report.txt", content: PDF }],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    // Uzantı .txt olsa da tür içerikten belirlenir.
-    expect(sonuc.value[0].mimeType).toBe("application/pdf");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Determined from content despite .txt extension.
+    expect(result.value[0].mimeType).toBe("application/pdf");
   });
 
-  it("video kabul edilir (ürün sahibi kararı, 03.09.2026)", async () => {
+  it("accepts video (product owner decision, 2026-09-03)", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { author, activity } = await scenario();
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "hat-kaydi.mp4", content: MP4 }],
+      [{ originalName: "line-record.mp4", content: MP4 }],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value[0].mimeType).toBe("video/mp4");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0].mimeType).toBe("video/mp4");
   });
 
-  it("boş dosya reddedilir", async () => {
+  it("rejects empty file", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { author, activity } = await scenario();
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "bos.pdf", content: Buffer.alloc(0) }],
+      [{ originalName: "empty.pdf", content: Buffer.alloc(0) }],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("empty_file");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("empty_file");
   });
 });
 
-describe("saklama adı ve bütünlük", () => {
-  it("kullanıcının verdiği ad diske yazılmaz", async () => {
+describe("storage naming and integrity", () => {
+  it("user-supplied filename is never written to disk", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { author, activity } = await scenario();
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       author.id,
       activity.id,
@@ -166,244 +166,241 @@ describe("saklama adı ve bütünlük", () => {
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
-    const ek = sonuc.value[0];
-    // Orijinal ad yalnızca veritabanında durur; saklama adı yol ayırıcı
-    // içermez, dolayısıyla yol enjeksiyonu imkânsızdır.
-    expect(ek.originalName).toBe("../../etc/passwd.png");
-    expect(ek.storedName).toMatch(/^[a-f0-9]+$/);
-    expect(ek.storedName).not.toContain("/");
-    expect(ek.storagePath).not.toContain("..");
+    const attachment = result.value[0];
+    // Original name only stored in database; storedName has no path separators,
+    // making path traversal injection impossible.
+    expect(attachment.originalName).toBe("../../etc/passwd.png");
+    expect(attachment.storedName).toMatch(/^[a-f0-9]+$/);
+    expect(attachment.storedName).not.toContain("/");
+    expect(attachment.storagePath).not.toContain("..");
   });
 
-  it("SHA-256 özeti saklanır", async () => {
+  it("stores SHA-256 digest", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { sha256Of } = await import("@/server/attachments/storage");
     const { author, activity } = await scenario();
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "resim.png", content: PNG }],
+      [{ originalName: "image.png", content: PNG }],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value[0].sha256).toBe(sha256Of(PNG));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0].sha256).toBe(sha256Of(PNG));
   });
 
-  // Denetim 21.08.2026, bulgu 9: özet yükleme sırasında hesaplanıp
-  // saklanıyor ama indirmede **hiçbir karar vermiyordu**. Bütünlük alanı,
-  // bütünlük kontrolü yapmadığı sürece süstür.
-  it("depodaki dosya değiştirilmişse indirilmez", async () => {
+  // Audit 2026-08-21, finding 9: digest was stored on upload but verified on download.
+  it("does not download file if storage copy has been tampered with", async () => {
     const { attachFiles, loadAttachmentForDownload } = await import(
       "@/server/attachments/service"
     );
     const { author, activity } = await scenario();
 
-    const yuklenen = await attachFiles(
+    const uploaded = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "resim.png", content: PNG }],
+      [{ originalName: "image.png", content: PNG }],
       NOW,
     );
-    if (!yuklenen.ok) throw new Error("kurulum");
-    const ek = yuklenen.value[0];
+    if (!uploaded.ok) throw new Error("setup");
+    const attachment = uploaded.value[0];
 
-    // Kontrol: bozulmadan önce indirilebiliyor.
-    const once = await loadAttachmentForDownload(
+    // Verification: can be downloaded before modification.
+    const before = await loadAttachmentForDownload(
       testDb,
       { id: author.id, isSystemAdmin: false },
-      ek.id,
+      attachment.id,
     );
-    expect(once.ok).toBe(true);
+    expect(before.ok).toBe(true);
 
-    // Dosya sunucu tarafında değiştiriliyor: depo bozulması ya da müdahale.
+    // Tamper file content in storage.
     const { writeFile } = await import("node:fs/promises");
     const path = await import("node:path");
-    const kok =
+    const rootDir =
       process.env.ATTACHMENT_STORAGE_DIR ??
       path.join(process.cwd(), "storage", "attachments");
-    await writeFile(path.resolve(kok, ek.storagePath), Buffer.from("baska icerik"));
+    await writeFile(path.resolve(rootDir, attachment.storagePath), Buffer.from("tampered content"));
 
-    const sonra = await loadAttachmentForDownload(
+    const after = await loadAttachmentForDownload(
       testDb,
       { id: author.id, isSystemAdmin: false },
-      ek.id,
+      attachment.id,
     );
 
-    expect(sonra.ok).toBe(false);
-    if (sonra.ok) return;
-    expect(sonra.error).toBe("integrity_failed");
+    expect(after.ok).toBe(false);
+    if (after.ok) return;
+    expect(after.error).toBe("integrity_failed");
   });
 });
 
-describe("sınırlar (§5.2)", () => {
-  it("beş dosya kabul edilir, altıncı reddedilir", async () => {
+describe("limits (§5.2)", () => {
+  it("accepts five files, rejects sixth", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { author, activity } = await scenario();
 
-    const bes = Array.from({ length: 5 }, (_, index) => ({
-      originalName: `dosya-${index}.png`,
+    const five = Array.from({ length: 5 }, (_, index) => ({
+      originalName: `file-${index}.png`,
       content: PNG,
     }));
 
-    expect((await attachFiles(testDb, author.id, activity.id, bes, NOW)).ok).toBe(
+    expect((await attachFiles(testDb, author.id, activity.id, five, NOW)).ok).toBe(
       true,
     );
 
-    const altinci = await attachFiles(
+    const sixth = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "altinci.png", content: PNG }],
+      [{ originalName: "sixth.png", content: PNG }],
       NOW,
     );
 
-    expect(altinci.ok).toBe(false);
-    if (altinci.ok) return;
-    expect(altinci.error).toBe("too_many");
+    expect(sixth.ok).toBe(false);
+    if (sixth.ok) return;
+    expect(sixth.error).toBe("too_many");
     expect(await testDb.attachment.count()).toBe(5);
   });
 
-  it("boyut sınırı ayardan okunur", async () => {
+  it("reads file size limit from system settings", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { SETTING_KEYS } = await import("@/server/settings/system-settings");
     const { author, activity } = await scenario();
 
-    // Sınır 1 MB'a çekilir; ayarlar tam sayı MB kabul eder (§16.5 kayıt
-    // defteri). Dosya sınırın üstünde olacak kadar büyük üretilir.
+    // Limit set to 1 MB.
     await testDb.systemSetting.create({
       data: {
         key: SETTING_KEYS.attachmentMaxMb,
         value: "1",
-        description: "Ek dosya azami boyut (MB)",
+        description: "Attachment max size (MB)",
       },
     });
 
-    const buyukDosya = Buffer.concat([
+    const largeFile = Buffer.concat([
       PNG,
       Buffer.alloc(2 * 1024 * 1024, 0),
     ]);
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       author.id,
       activity.id,
-      [{ originalName: "resim.png", content: buyukDosya }],
+      [{ originalName: "image.png", content: largeFile }],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("too_large");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("too_large");
   });
 
-  it("başkasının faaliyetine ek yüklenemez", async () => {
+  it("cannot upload attachment to another user's activity", async () => {
     const { attachFiles } = await import("@/server/attachments/service");
     const { manager, activity } = await scenario();
 
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       manager.id,
       activity.id,
-      [{ originalName: "resim.png", content: PNG }],
+      [{ originalName: "image.png", content: PNG }],
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.message).toBe("Faaliyet bulunamadı.");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe("Activity not found.");
   });
 });
 
-describe("indirme görünürlükten geçer (§15.4)", () => {
-  async function ekliFaaliyet() {
+describe("downloads pass through visibility authorization (§15.4)", () => {
+  async function activityWithAttachment() {
     const { attachFiles } = await import("@/server/attachments/service");
     const context = await scenario();
-    const sonuc = await attachFiles(
+    const result = await attachFiles(
       testDb,
       context.author.id,
       context.activity.id,
-      [{ originalName: "resim.png", content: PNG }],
+      [{ originalName: "image.png", content: PNG }],
       NOW,
     );
-    if (!sonuc.ok) throw new Error("kurulum");
-    return { ...context, attachment: sonuc.value[0] };
+    if (!result.ok) throw new Error("setup");
+    return { ...context, attachment: result.value[0] };
   }
 
-  it("yazan kendi ekini indirebilir", async () => {
+  it("author can download own attachment", async () => {
     const { loadAttachmentForDownload } = await import(
       "@/server/attachments/service"
     );
-    const { author, attachment } = await ekliFaaliyet();
+    const { author, attachment } = await activityWithAttachment();
 
-    const sonuc = await loadAttachmentForDownload(
+    const result = await loadAttachmentForDownload(
       testDb,
       viewer(author),
       attachment.id,
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value.content.equals(PNG)).toBe(true);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.content.equals(PNG)).toBe(true);
   });
 
-  it("faaliyeti görebilen üst kademe ekini de indirebilir", async () => {
+  it("manager authorized to view activity can also download attachment", async () => {
     const { loadAttachmentForDownload } = await import(
       "@/server/attachments/service"
     );
-    const { manager, attachment } = await ekliFaaliyet();
+    const { manager, attachment } = await activityWithAttachment();
 
     expect(
       (await loadAttachmentForDownload(testDb, viewer(manager), attachment.id)).ok,
     ).toBe(true);
   });
 
-  it("faaliyeti göremeyen ekini de indiremez", async () => {
+  it("user unauthorized to view activity cannot download attachment", async () => {
     const { loadAttachmentForDownload } = await import(
       "@/server/attachments/service"
     );
-    const { peer, attachment } = await ekliFaaliyet();
+    const { peer, attachment } = await activityWithAttachment();
 
-    const sonuc = await loadAttachmentForDownload(
+    const result = await loadAttachmentForDownload(
       testDb,
       viewer(peer),
       attachment.id,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    // Dosyanın varlığı da bildirilmez.
-    expect(sonuc.message).toBe("Dosya bulunamadı.");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // Existence of file is not revealed.
+    expect(result.message).toBe("Attachment not found.");
   });
 
-  it("iptal edilen faaliyetin eki silinmez, erişim faaliyeti izler", async () => {
+  it("attachment of cancelled activity is preserved, follows activity visibility", async () => {
     const { loadAttachmentForDownload } = await import(
       "@/server/attachments/service"
     );
-    const { author, manager, peer, activity, attachment } = await ekliFaaliyet();
+    const { author, manager, peer, activity, attachment } = await activityWithAttachment();
 
     const { cancelActivity } = await import("@/server/activities/cancel");
     await cancelActivity(
       testDb,
       { id: author.id, isSystemAdmin: false },
       activity.id,
-      "Yanlış girildi.",
+      "Entered incorrectly.",
       NOW,
     );
 
-    // Dosya duruyor ve faaliyeti görenler hâlâ indirebiliyor.
+    // File remains and users with visibility can still download it.
     expect(await testDb.attachment.count()).toBe(1);
     expect(
       (await loadAttachmentForDownload(testDb, viewer(manager), attachment.id)).ok,
     ).toBe(true);
-    // Göremeyen yine göremiyor.
+    // Unauthorized users still cannot.
     expect(
       (await loadAttachmentForDownload(testDb, viewer(peer), attachment.id)).ok,
     ).toBe(false);

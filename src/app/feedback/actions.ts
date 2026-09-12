@@ -11,6 +11,11 @@ import {
 import { getCurrentUser } from "@/server/auth/current-user";
 import { canManageFeedback } from "@/server/authz/feedback";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   feedbackArchiveSchema,
   feedbackCreateSchema,
@@ -20,7 +25,7 @@ import {
 
 import type { FeedbackFormState } from "./form-state";
 
-function hata(message: string): FeedbackFormState {
+function error(message: string): FeedbackFormState {
   return { error: message, success: null };
 }
 
@@ -34,7 +39,8 @@ export async function createFeedbackAction(
   formData: FormData,
 ): Promise<FeedbackFormState> {
   const me = await getCurrentUser();
-  if (!me) return hata("Oturum bulunamadı.");
+  const t = await getTranslations();
+  if (!me) return error(t("auth.sessionNotFound"));
 
   const parsed = feedbackCreateSchema.safeParse({
     category: formData.get("category"),
@@ -44,16 +50,18 @@ export async function createFeedbackAction(
     adminsOnly: false,
   });
   if (!parsed.success) {
-    return hata(parsed.error.issues[0]?.message ?? "Geri bildirim bilgileri geçersiz.");
+    return error(
+      localizeValidationIssue(t, parsed.error.issues[0], "screens.feedback.invalid"),
+    );
   }
 
   const result = await createFeedback(prisma, me.id, parsed.data);
-  if (!result.ok) return hata(result.message);
+  if (!result.ok) return error(localizeServiceMessage(t, "feedback", result));
 
   revalidatePath("/feedback");
   return {
     error: null,
-    success: "Geri bildiriminiz kaydedildi. Durumunu bu sayfadan takip edebilirsiniz.",
+    success: t("screens.feedback.saved"),
   };
 }
 
@@ -73,7 +81,8 @@ export async function updateFeedbackAction(
   formData: FormData,
 ): Promise<FeedbackFormState> {
   const me = await requireFeedbackManager();
-  if (!me) return hata("Bu işlem için yönetici yetkisi gerekir.");
+  const t = await getTranslations();
+  if (!me) return error(t("screens.feedback.permission"));
 
   const rawResponse = formData.get("response");
   const parsed = feedbackUpdateSchema.safeParse({
@@ -82,7 +91,9 @@ export async function updateFeedbackAction(
     response: typeof rawResponse === "string" ? rawResponse : undefined,
   });
   if (!parsed.success) {
-    return hata(parsed.error.issues[0]?.message ?? "Geri bildirim bilgileri geçersiz.");
+    return error(
+      localizeValidationIssue(t, parsed.error.issues[0], "screens.feedback.invalid"),
+    );
   }
 
   const result = await updateFeedback(
@@ -91,10 +102,10 @@ export async function updateFeedbackAction(
     parsed.data.id,
     parsed.data,
   );
-  if (!result.ok) return hata(result.message);
+  if (!result.ok) return error(localizeServiceMessage(t, "feedback", result));
 
   revalidatePath("/feedback");
-  return { error: null, success: "Geri bildirim güncellendi." };
+  return { error: null, success: t("screens.feedback.updated") };
 }
 
 export async function archiveFeedbackAction(formData: FormData): Promise<void> {

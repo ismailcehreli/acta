@@ -1,13 +1,10 @@
 import { companyDay } from "@/server/activities/date-rules";
 import { companyHour } from "@/shared/format/date-time";
 
-// Gönderim kararı (§12.3). Saf fonksiyonlarda tutulur: sahte saatle ve
-// veritabanı olmadan sınanabilsin diye.
 
-/**
- * Artan aralıklı yeniden deneme. Beşinci denemeden sonra bildirim "başarısız"
- * işaretlenir ve operasyon ekranında görünür — sessizce kaybolmaz.
- */
+
+
+
 export const RETRY_DELAYS_MS = [
   60_000, // 1 dk
   5 * 60_000, // 5 dk
@@ -18,7 +15,7 @@ export const RETRY_DELAYS_MS = [
 
 export const MAX_ATTEMPTS = RETRY_DELAYS_MS.length;
 
-/** Günlük özetin gönderileceği saat (şirket saati). */
+
 export const DIGEST_HOUR = 18;
 
 export interface QueuedNotification {
@@ -30,10 +27,7 @@ export interface QueuedNotification {
   createdAt: Date;
 }
 
-/**
- * Sıradaki deneme zamanı geldi mi? Hiç denenmemiş bildirim beklemez; denenmiş
- * olan, deneme sayısına göre artan bir süre bekler.
- */
+
 export function isRetryDue(
   notification: Pick<QueuedNotification, "attemptCount" | "lastAttemptAt">,
   now: Date,
@@ -46,18 +40,12 @@ export function isRetryDue(
   return now.getTime() - notification.lastAttemptAt.getTime() >= delay;
 }
 
-/** Denemeler tükendi mi? Tükendiyse bildirim `FAILED` olur. */
+
 export function isExhausted(attemptCount: number): boolean {
   return attemptCount >= MAX_ATTEMPTS;
 }
 
-/**
- * Günlük özet modundaki kullanıcıya bugün gönderim yapılır mı?
- *
- * Koşul iki parçalı: özet saati gelmiş olmalı **ve** bugün henüz özet
- * gitmemiş olmalı. İkincisi olmadan, saat 18'den sonraki her turda yeni bir
- * özet giderdi.
- */
+
 export function isDigestDue(
   now: Date,
   lastDigestAt: Date | null,

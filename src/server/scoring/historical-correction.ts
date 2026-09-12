@@ -46,11 +46,7 @@ function periodStart(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
 }
 
-/**
- * Geçmiş kullanıcı skor durumunu gerekçeli ve append-only biçimde düzeltir.
- * Güncel kullanıcı satırını değiştirmez; yalnız tarihsel gerçeği düzeltir ve
- * etkilenmiş bütün donmuş aylar için yeni sürüm ister.
- */
+
 export async function correctUserScoreHistory(
   db: HistoricalCorrectionDb,
   actorId: string,
@@ -62,20 +58,20 @@ export async function correctUserScoreHistory(
     return {
       ok: false,
       error: "invalid_reason",
-      message: "Geçmiş düzeltmesinin gerekçesi en az 5 karakter olmalı.",
+      message: "The historical correction reason must contain at least 5 characters.",
     };
   }
   if (input.effectiveAt >= now) {
     return {
       ok: false,
       error: "future_effective_at",
-      message: "Geçmiş düzeltmesi gelecekte yürürlüğe giremez.",
+      message: "A historical correction cannot take effect in the future.",
     };
   }
 
   return db.$transaction(async (tx) => {
     await acquireScoreClosureLock(tx);
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('faaliyet:skor_tarihcesi'))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('acta:score_history'))`;
 
     const actor = await tx.user.findFirst({
       where: { id: actorId, isActive: true, isSystemAdmin: true },
@@ -85,7 +81,7 @@ export async function correctUserScoreHistory(
       return {
         ok: false as const,
         error: "not_allowed" as const,
-        message: "Bu işlem yalnız aktif sistem yöneticisine açıktır.",
+        message: "Only an active system administrator can perform this action.",
       };
     }
 
@@ -103,14 +99,14 @@ export async function correctUserScoreHistory(
       return {
         ok: false as const,
         error: "not_found" as const,
-        message: "Geçmişi düzeltilecek kullanıcı bulunamadı.",
+        message: "The user whose history should be corrected was not found.",
       };
     }
     if (!unit) {
       return {
         ok: false as const,
         error: "invalid_org_unit" as const,
-        message: "Geçmiş düzeltmesindeki birim bulunamadı.",
+        message: "The organizational unit in the historical correction was not found.",
       };
     }
 

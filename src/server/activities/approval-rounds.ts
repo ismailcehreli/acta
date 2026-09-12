@@ -1,42 +1,41 @@
 import type { PrismaClient } from "@prisma/client";
 
-// Onay turunun **değişmez** kaydı (denetim 23.08.2026, P3-R2-1).
+// Immutable record of an approval round (audit 23.08.2026, P3-R2-1).
 //
-// `Activity.approvalSubmittedAt` "şu an ne zamandır bekliyor" demektir ve
-// karar verilirken **boşaltılır** — hatırlatma sayacı için doğru, ölçüm için
-// yıkıcı: karar anında gönderim anı kayboluyor ve "kaç iş gününde karara
-// bağladı" sorusu cevapsız kalıyordu. Skor bu yüzden canlı sütunlardan değil
-// buradan besleniyor.
+// `Activity.approvalSubmittedAt` means "how long has it been waiting currently"
+// and is cleared when a decision is made — correct for reminder counters, but
+// destructive for measurement: at the moment of decision, submission time is lost
+// and the question of "how many work days did it take to decide" remained unanswered.
+// Scoring is therefore fed from here instead of live columns.
 //
-// Ayrı tablo olmasının ikinci sebebi: bir kayıt düzeltilip **yeniden
-// gönderilebiliyor**. Tek sütun ikinci turu yazarken birincinin üstüne yazar;
-// tur başına satır, her turun kendi süresini korur.
+// Second reason for a separate table: an activity can be revised and resubmitted.
+// A single column overwrites the first round when writing the second;
+// a row per round preserves each round's own duration.
 
 export type ApprovalRoundDb = Pick<PrismaClient, "approvalRound">;
 
 /**
- * Turu kapatabilen kararlar.
+ * Decisions that can close a round.
  *
- * Bütün `ActivityApprovalStatus` kümesi değil: **iptal bir onay kararı
- * değildir** (kaydı yazan ya da üst zincir iptal eder, onay kuyruğu o anda
- * zaten boştur) ve "yönetici bulunamadı" da karar değil, bir arıza durumudur.
- * Veritabanı aynı daraltmayı `ApprovalRound_gecerli_karar` kısıtıyla tutuyor
- * (denetim 23.08.2026, P3-R3-1).
+ * Not the entire `ActivityApprovalStatus` set: cancellation is not an approval
+ * decision (the author or upstream chain cancels; the approval queue is empty
+ * at that point) and "manager not found" is not a decision, but a failure state.
+ * The database enforces the same restriction via `ApprovalRound_gecerli_karar` constraint.
  */
 export type ApprovalDecision = "APPROVED" | "CHANGES_REQUESTED" | "REJECTED";
 
 /**
- * Yeni tur açar: iş onaylayıcının önüne düştü.
+ * Opens a new round: work has appeared before the approver.
  *
- * Tur numarası mevcut en büyüğün bir fazlası; kısmi tekil indeks aynı anda
- * ikinci bir açık turu veritabanı düzeyinde engelliyor.
+ * Round number is max + 1; partial unique index prevents a second open round
+ * at the database level.
  */
 export async function openApprovalRound(
   db: ApprovalRoundDb,
   activityId: string,
   now: Date,
 ): Promise<void> {
-  const sonTur = await db.approvalRound.findFirst({
+  const latestRound = await db.approvalRound.findFirst({
     where: { activityId },
     orderBy: { roundNo: "desc" },
     select: { roundNo: true },
@@ -45,17 +44,18 @@ export async function openApprovalRound(
   await db.approvalRound.create({
     data: {
       activityId,
-      roundNo: (sonTur?.roundNo ?? 0) + 1,
+      roundNo: (latestRound?.roundNo ?? 0) + 1,
       submittedAt: now,
     },
   });
 }
 
 /**
- * Açık turu karara bağlar. **Ret de karardır** ve aynı satırı kapatır.
+ * Decides on an open round. Rejection is also a decision and closes the same row.
  *
- * Açık tur bulunamazsa sessizce geçilmez: kararın geçmişi eksik kalırsa skor
- * o kararı hiç görmez ve yönetici ölçülmediği bir boyuttan tam puan alır.
+ * An open round cannot be silently ignored: if the decision history is missing,
+ * scoring never sees that decision and the manager receives full score for an
+ * unmeasured dimension.
  */
 export async function closeApprovalRound(
   db: ApprovalRoundDb,
@@ -64,35 +64,33 @@ export async function closeApprovalRound(
   decision: ApprovalDecision,
   now: Date,
   /**
-   * Açık tur yoksa ne olacağı.
+   * Action to take if no open round exists.
    *
-   * `hata` varsayılandır: karar, iş onaylayıcının önündeyken verilir ve o
-   * hâlde açık bir tur **olmak zorundadır**; bulunamaması geçmişin eksik
-   * kalması demektir ve sessizce geçilirse yönetici ölçülmediği bir boyuttan
-   * tam puan alır.
+   * "error" is default: decision is made while work is before approver and in that
+   * state an open round must exist; missing round means incomplete history.
    *
-   * `atla` yalnız tek bir durumda geçerli: düzeltme istenmiş kayıt
-   * reddedildiğinde. O sırada iş **yazarın** önündedir, onaylayıcı
-   * beklenmiyordur; ölçülecek bir süre yoktur.
+   * "skip" is valid in one case only: when changes were requested and the activity
+   * is subsequently rejected. At that time work is before the author, approver is
+   * not awaited; there is no duration to measure.
    */
-  acikTurYoksa: "hata" | "atla" = "hata",
+  onMissingRound: "error" | "skip" = "error",
 ): Promise<void> {
-  const acik = await db.approvalRound.findFirst({
+  const openRound = await db.approvalRound.findFirst({
     where: { activityId, decidedAt: null },
     orderBy: { roundNo: "desc" },
     select: { id: true },
   });
 
-  if (!acik) {
-    if (acikTurYoksa === "atla") return;
+  if (!openRound) {
+    if (onMissingRound === "skip") return;
 
     throw new Error(
-      `Onay turu bulunamadı: ${activityId}. Karar, açık bir tur olmadan verilemez.`,
+      `Approval round not found: ${activityId}. A decision cannot be made without an open round.`,
     );
   }
 
   await db.approvalRound.update({
-    where: { id: acik.id },
+    where: { id: openRound.id },
     data: { decidedAt: now, decidedById, decision },
   });
 }

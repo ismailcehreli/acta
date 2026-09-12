@@ -2,13 +2,7 @@ import webpush from "web-push";
 
 import type { PushEndpoint, PushMessage, PushSendOutcome, PushTransport } from "./push";
 
-// Gerçek push taşıyıcısı. İşleyici bunu, testler sahtesini kullanır.
-//
-// Push servisinin **404/410** cevabı aboneliğin kalıcı olarak yok olduğunu
-// söyler; onu geçici hatadan ayırmak önemlidir, yoksa ölü abonelik her turda
-// yeniden denenir ve kuyruk hiç boşalmaz.
-
-const KALICI_HATALAR = new Set([404, 410]);
+const PERMANENT_ERRORS = new Set([404, 410]);
 
 export const webPushTransport: PushTransport = {
   async send(
@@ -40,7 +34,7 @@ export const webPushTransport: PushTransport = {
           ? Number((error as { statusCode: unknown }).statusCode)
           : 0;
 
-      if (KALICI_HATALAR.has(statusCode)) return { ok: false, gone: true };
+      if (PERMANENT_ERRORS.has(statusCode)) return { ok: false, gone: true };
 
       return {
         ok: false,

@@ -3,9 +3,8 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createActivity, createOrgUnit, createUser } from "../../helpers/fixtures";
 import { resetDatabase, testDb } from "../../helpers/test-db";
 
-// İdari kapatmanın gerekçesi veritabanı kısıtıyla da zorlanır
-// (`Conversation_close_reason_matches_type`). Kısıtın değeri, uygulama katmanı
-// devre dışıyken — elle SQL, veri aktarımı — de geçerli olmasındadır.
+// Administrative conversation closure requires a reason enforced by constraint
+// (`Conversation_close_reason_matches_type`).
 
 beforeEach(async () => {
   await resetDatabase();
@@ -31,8 +30,8 @@ async function openConversation() {
   });
 }
 
-describe("kapanış gerekçesi kısıtı", () => {
-  it("gerekçesiz idari kapatma veritabanınca reddedilir", async () => {
+describe("conversation close reason constraint", () => {
+  it("rejects administrative close without reason", async () => {
     const conversation = await openConversation();
 
     await expect(
@@ -43,7 +42,7 @@ describe("kapanış gerekçesi kısıtı", () => {
     ).rejects.toThrow(/Conversation_close_reason_matches_type/);
   });
 
-  it("boşluktan ibaret gerekçe de reddedilir", async () => {
+  it("rejects whitespace only reason", async () => {
     const conversation = await openConversation();
 
     await expect(
@@ -59,7 +58,7 @@ describe("kapanış gerekçesi kısıtı", () => {
     ).rejects.toThrow(/Conversation_close_reason_matches_type/);
   });
 
-  it("gerekçeli idari kapatma kabul edilir", async () => {
+  it("accepts administrative close with valid reason", async () => {
     const conversation = await openConversation();
 
     const closed = await testDb.conversation.update({
@@ -68,17 +67,15 @@ describe("kapanış gerekçesi kısıtı", () => {
         status: "CLOSED",
         closedAt: new Date(),
         closeType: "ADMINISTRATIVE",
-        closeReason: "Taraf işten ayrıldı.",
+        closeReason: "Party left company.",
       },
     });
 
-    expect(closed.closeReason).toBe("Taraf işten ayrıldı.");
+    expect(closed.closeReason).toBe("Party left company.");
   });
 
-  // Her test kendi kökünü kurar; tek kök kısıtı yüzünden aynı test içinde
-  // ikinci bir organizasyon açılamaz.
   it.each(["NORMAL", "CANCELLED_ACTIVITY"] as const)(
-    "%s kapanışında gerekçe alanı dolamaz",
+    "rejects reason on %s closure",
     async (closeType) => {
       const conversation = await openConversation();
 
@@ -89,12 +86,11 @@ describe("kapanış gerekçesi kısıtı", () => {
             status: "CLOSED",
             closedAt: new Date(),
             closeType,
-            closeReason: "buraya yazılmamalı",
+            closeReason: "should not be set",
           },
         }),
       ).rejects.toThrow(/Conversation_close_reason_matches_type/);
 
-      // Gerekçesiz hâli geçerli olmalı.
       const closed = await testDb.conversation.update({
         where: { id: conversation.id },
         data: { status: "CLOSED", closedAt: new Date(), closeType },

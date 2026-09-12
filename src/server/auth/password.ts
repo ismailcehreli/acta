@@ -6,12 +6,12 @@ import {
   ARGON2_TIME_COST,
 } from "./config";
 
-// Parolalar Argon2id ile özetlenir, asla düz metin saklanmaz (§15.3).
+
 //
-// Algoritma açıkça yazılmaz: kütüphanenin `Algorithm` numaralandırması
-// `const enum` olduğu için `isolatedModules` altında kullanılamıyor ve sayısını
-// elle yazmak sessizce yanlışa dönebilir. Varsayılan zaten Argon2id'dir ve
-// üretilen özetin `$argon2id$` ile başladığı testle güvence altındadır
+
+
+
+
 // (tests/auth/password.test.ts).
 const options = {
   memoryCost: ARGON2_MEMORY_COST_KIB,
@@ -30,8 +30,8 @@ export async function verifyPassword(
   try {
     return await verify(storedHash, plain, options);
   } catch {
-    // Bozuk veya tanınmayan özet, doğrulanamamış paroladır. Hatayı yukarı
-    // taşımak giriş ucunda bilgi sızdırır; sonuç "eşleşmedi" olur.
+
+
     return false;
   }
 }

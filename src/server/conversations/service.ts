@@ -23,11 +23,11 @@ import { publishRealtimeEvent } from "@/server/realtime/publish";
 
 import { decideClose, type CloseRefusal } from "./close-rules";
 
-// Soru–cevap döngüsü (§9) — sistemin ana değer önerisi.
+// Question-answer cycle (§9) — platform's core value proposition.
 //
-// Bir faaliyet üzerinde birbirinden bağımsız birden fazla konuşma olabilir
-// (§9.1). Her konuşmanın **tek sorumlusu** vardır: iş kimde, her an bellidir.
-// Cevap yalnızca ait olduğu konuşmayı ilerletir.
+// Multiple independent conversations can exist on a single activity (§9.1).
+// Each conversation has a single responsible party: who holds the ball is always clear.
+// A reply only advances the conversation it belongs to.
 
 export type ConversationDb = Pick<
   PrismaClient,
@@ -61,18 +61,18 @@ export type ConversationResult<T> =
   | { ok: false; error: ConversationError; message: string };
 
 const MESSAGES: Record<ConversationError, string> = {
-  // Görülemeyen faaliyetin varlığı da bildirilmez (§18.4).
-  activity_not_found: "Faaliyet bulunamadı.",
-  cannot_ask: "Bu faaliyete soru soramazsınız.",
-  conversation_not_found: "Konuşma bulunamadı.",
-  not_a_party: "Bu konuşmaya yazamazsınız.",
-  closed: "Bu konuşma kapatılmış.",
+  // Non-visible activity existence is never disclosed (§18.4).
+  activity_not_found: "Activity not found.",
+  cannot_ask: "You cannot ask questions on this activity.",
+  conversation_not_found: "Conversation not found.",
+  not_a_party: "You cannot participate in this conversation.",
+  closed: "This conversation is closed.",
   responsible_cannot_close:
-    "Sorunun sorumlusu konuşmayı kapatamaz; cevabınızı yazın, kapatma kararı soruyu sorana aittir.",
+    "The person responsible for the question cannot close the conversation; reply instead, closing decision belongs to the asker.",
   supervisor_too_early:
-    "Bu konuşmayı henüz kapatamazsınız; soruyu soran kişi uzun süredir işlem yapmadıysa devreye girebilirsiniz.",
-  reason_required: "Kapatma nedeni yazmalısınız.",
-  already_closed: "Bu konuşma zaten kapatılmış.",
+    "You cannot close this conversation yet; you may intervene if the asker has been inactive for an extended period.",
+  reason_required: "A closing reason must be provided.",
+  already_closed: "This conversation is already closed.",
 };
 
 function fail(
@@ -82,21 +82,19 @@ function fail(
 }
 
 /**
- * Konuşmayı **faaliyetin güncel görünürlüğünden geçirerek** yükler.
+ * Loads conversation verifying current activity visibility.
  *
- * Konuşma kimliğini bilmek yetki değildir: kimlik zaten sayfada ve bildirim
- * içeriğinde taraflara veriliyor. Ayrıca görünürlük güncel ağaçtan hesaplanır
- * (§4.6) — başka bir dala taşınan kişi, eski konuşmasına yazmaya devam
- * edememelidir (denetim 18.08.2026, bulgu 1).
+ * Knowing conversation ID does not grant authorization. Visibility is computed
+ * from current tree (§4.6) — a user transferred to another branch cannot continue
+ * participating in old conversations (audit 18.08.2026, finding 1).
  */
 async function loadVisibleConversation(
   db: ConversationDb,
   actor: Actor,
   conversationId: string,
   /**
-   * Sistem yöneticisinin idari kapatması içerik erişimi gerektirmez (§9.3,
-   * §15.1): yönetim işlevini yürütür, faaliyeti görmez. Yalnızca kapatma
-   * yolunda açılır; yazma yollarında asla.
+   * Admin closure by system admin does not require content access (§9.3, §15.1).
+   * Only permitted in closing path, never in writing paths.
    */
   options: { allowSystemAdminWithoutContent?: boolean } = {},
 ) {
@@ -126,9 +124,8 @@ async function loadVisibleConversation(
 }
 
 /**
- * Soru sorma yetkisi (§9.2): faaliyeti görebilen üst kademe. Yazarın kendisi
- * kendi faaliyetine soru açmaz; görünürlük kuralı gereği akranlar zaten
- * faaliyeti göremez.
+ * Permission to ask question (§9.2): management chain with full visibility.
+ * The author cannot ask question on their own activity.
  */
 export async function canAskQuestion(
   db: ConversationDb,
@@ -162,9 +159,7 @@ export async function askQuestion(
   if (!(await canAskQuestion(db, actor, activity))) return fail("cannot_ask");
 
   const conversation = await db.$transaction(async (tx) => {
-    // Faaliyet satırı kilitlenir: iptal ile soru açma yarışabiliyordu ve iptal
-    // sonrasında yeni bir açık konuşma doğabiliyordu (denetim FAZ 4,
-    // bulgu 2). Soru yalnızca kayda geçmiş faaliyette açılır.
+    // Activity row is locked to prevent race condition between cancel and question creation.
     await lockActivityForMaintenance(tx, activity.id);
 
     const fresh = await activityMaintenanceReader(tx).findUnique({
@@ -178,7 +173,7 @@ export async function askQuestion(
       data: {
         activityId: activity.id,
         askerId: actor.id,
-        // Sorumlu, faaliyeti yazan kişidir: iş onun listesine düşer (§9.2).
+        // Responsible party is activity author: enters author's work queue (§9.2).
         responsibleId: activity.authorId,
         openedAt: now,
       },
@@ -193,8 +188,7 @@ export async function askQuestion(
       },
     });
 
-    // Faaliyete hareket geldi: açık takip maddesinin hareketsizlik sayacı
-    // sıfırlanır (§11.1). Konuşma sürüyorsa konu ölü değildir.
+    // Activity saw movement: open follow-up inactivity counter resets (§11.1).
     await touchFollowUps(tx, activity.id, actor.id, now);
 
     await enqueueNotification(tx, {
@@ -214,8 +208,6 @@ export async function askQuestion(
       now,
     });
 
-    // Haber iş işleminin içinde yayımlanır; PostgreSQL bildirimi commit'te
-    // gönderir. Açılmamış bir konuşmanın haberi çıkmaz (Görev 7.3).
     await publishRealtimeEvent(tx, {
       kind: REALTIME_EVENTS.questionAsked,
       userIds: [activity.authorId, actor.id],
@@ -224,15 +216,14 @@ export async function askQuestion(
     return created;
   });
 
-  // İptal araya girdi: soru açılmadı.
   if (conversation === null) return fail("activity_not_found");
 
   return { ok: true, value: conversation };
 }
 
 /**
- * Mesaj yazma (§9.2). Sorumluluk her mesajda karşı tarafa geçer: iş kimde,
- * her an bellidir. Tur sınırı yoktur (§9.4).
+ * Message reply (§9.2). Responsibility shifts to counterpart with each message.
+ * No round limit (§9.4).
  */
 export async function replyToConversation(
   db: ConversationDb,
@@ -242,14 +233,9 @@ export async function replyToConversation(
 ): Promise<ConversationResult<Conversation>> {
   const conversation = await loadVisibleConversation(db, actor, input.conversationId);
 
-  // Görünmeyen, var olmayan ve taraf olunmayan konuşma dışarıya **aynı** cevabı
-  // verir; durum bilgisi ancak taraflık doğrulandıktan sonra açıklanır.
   if (!conversation) return fail("conversation_not_found");
 
-  // Konuşmanın **tarafları sabittir**: soran ve faaliyeti yazan kişi.
-  // `responsibleId` yalnızca "iş şu an kimde" göstergesidir ve her mesajda el
-  // değiştirir; taraflığı ona bağlamak, sırası gelmeyen tarafı kendi
-  // konuşmasından dışarı atardı.
+  // Parties are fixed: asker and author of activity.
   const respondentId = conversation.activity.authorId;
   const isParty = conversation.askerId === actor.id || respondentId === actor.id;
   if (!isParty) return fail("conversation_not_found");
@@ -259,9 +245,6 @@ export async function replyToConversation(
     actor.id === conversation.askerId ? respondentId : conversation.askerId;
 
   const updated = await db.$transaction(async (tx) => {
-    // Konuşma satırı kilitlenir: iki mesaj aynı anda yazıldığında sorumluluk
-    // yanlış tarafta kalabiliyor, kapatma ile mesaj yarışabiliyordu
-    // (denetim FAZ 4, bulgu 3).
     await tx.$executeRaw`SELECT "id" FROM "Conversation" WHERE "id" = ${conversation.id} FOR UPDATE`;
 
     const fresh = await tx.conversation.findUnique({
@@ -318,7 +301,6 @@ export async function replyToConversation(
     return next;
   });
 
-  // Konuşma bu sırada kapandı.
   if (updated === null) return fail("closed");
 
   return { ok: true, value: updated };
@@ -329,7 +311,7 @@ export async function closeConversation(
   actor: Actor,
   conversationId: string,
   now: Date,
-  /** İdari kapatmada zorunlu; diğer türlerde yok sayılır (§9.3). */
+  /** Mandatory for administrative close; ignored in other modes (§9.3). */
   reason?: string,
 ): Promise<ConversationResult<Conversation>> {
   const conversation = await loadVisibleConversation(db, actor, conversationId, {
@@ -337,18 +319,12 @@ export async function closeConversation(
   });
   if (!conversation) return fail("conversation_not_found");
 
-  // Soranın son hareketi doğrudan sorgulanır. Son N mesaj çekip içinde aramak,
-  // konuşma uzadığında soranın mesajını pencerenin dışında bırakıyor ve sayacı
-  // açılış tarihine döndürüyordu — üst, hak ettiğinden erken kapatabiliyordu
-  // (denetim 18.08.2026, bulgu 6).
   const lastAskerMessage = await db.conversationMessage.findFirst({
     where: { conversationId, authorId: conversation.askerId },
     orderBy: { createdAt: "desc" },
     select: { createdAt: true },
   });
 
-  // Konuşmanın hedefi faaliyetin yazarıdır; sorumluluk cevapla el değiştirse
-  // de "sorumlu kapatamaz" kuralı bu sabit role bağlıdır (§9.3).
   const respondentId = conversation.activity.authorId;
 
   const respondent = await db.user.findUnique({
@@ -356,10 +332,6 @@ export async function closeConversation(
     select: { isActive: true },
   });
 
-  // İş günü sayacı şirketin çalışma takviminden beslenir. Saf fonksiyona
-  // parametre olarak veriliyordu ama üretim yolu hiç doldurmuyordu: birim testi
-  // elle tatil vererek yeşil oluyor, çalışan uç hafta sonu dışında hiçbir günü
-  // atlamıyordu (denetim 18.08.2026, bulgu 6).
   const [workCalendar, supervisorTakeoverDays] = await Promise.all([
     loadWorkCalendar(db, conversation.openedAt, now),
     readNumericSetting(db, SETTING_KEYS.supervisorTakeoverBusinessDays),
@@ -388,8 +360,6 @@ export async function closeConversation(
 
   if (!decision.allowed) return fail(decision.reason);
 
-  // Gerekçe yalnız idari kapatmada saklanır; diğer türlerde alan boş kalmak
-  // zorundadır (veritabanı kısıtı `Conversation_close_reason_matches_type`).
   const trimmedReason = reason?.trim() ?? "";
   if (decision.requiresReason && trimmedReason === "") {
     return fail("reason_required");
@@ -404,10 +374,9 @@ export async function closeConversation(
       select: { status: true },
     });
 
-    // Araya başka bir kapatma girmiş olabilir; ikinci kapatma yazmaz.
     if (!fresh || fresh.status !== "OPEN") return null;
 
-    const kapali = await tx.conversation.update({
+    const closedConversation = await tx.conversation.update({
       where: { id: conversationId },
       data: {
         status: "CLOSED",
@@ -423,20 +392,16 @@ export async function closeConversation(
       objectType: AUDIT_OBJECTS.conversation,
       objectId: conversationId,
       action: AUDIT_ACTIONS.conversationClosed,
-      // İdari kapatma gerekçesi konuşma kaydındadır; denetim izi
-      // içerik taşımaz (§15.1).
       detail: { closeType: decision.closeType },
       now,
     });
 
-    // Kapatan sistem yöneticisi taraf olmayabilir; yine de kendi ekranı
-    // tazelensin diye listeye giriyor.
     await publishRealtimeEvent(tx, {
       kind: REALTIME_EVENTS.conversationClosed,
       userIds: [conversation.askerId, respondentId, actor.id],
     });
 
-    return kapali;
+    return closedConversation;
   });
 
   if (closed === null) return fail("already_closed");

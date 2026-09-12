@@ -1,41 +1,44 @@
 import type { OperationsSummary } from "@/server/dashboard/summary";
+import { getTranslations } from "@/server/i18n/server";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 
-// Sistem yöneticisinin işletim bloğu (§12.4, §15.1).
-//
-// **Faaliyet içeriği yoktur ve olamaz:** sistem yöneticisinin yetkisi
-// işlevseldir, içeriğe erişim vermez. Burada yalnız sistemin çalışıp
-// çalışmadığı görünür — zamanlayıcı durursa sistem "çalışıyor" görünür ama
-// hatırlatmalar sessizce ölür; bu blok o arızayı ana ekrana taşır.
 
-function yedekMetni(
+//
+
+
+
+
+
+function formatBackupAge(
   hours: number | null,
-  izleniyor: boolean,
-): { metin: string; sorunlu: boolean } {
-  if (!izleniyor) return { metin: "izleme kapalı", sorunlu: false };
-  if (hours === null) return { metin: "hiç alınmadı", sorunlu: true };
-  if (hours < 1) return { metin: "bir saatten yeni", sorunlu: false };
-  if (hours < 48) return { metin: `${hours} saat önce`, sorunlu: false };
-  return { metin: `${Math.floor(hours / 24)} gün önce`, sorunlu: true };
+  monitoringEnabled: boolean,
+  t: Awaited<ReturnType<typeof getTranslations>>,
+): { text: string; isProblematic: boolean } {
+  if (!monitoringEnabled) return { text: t("dashboard.monitoringDisabled"), isProblematic: false };
+  if (hours === null) return { text: t("dashboard.noBackupYet"), isProblematic: true };
+  if (hours < 1) return { text: t("dashboard.lessThanHourAgo"), isProblematic: false };
+  if (hours < 48) return { text: t("dashboard.hoursAgo", { count: hours }), isProblematic: false };
+  return { text: t("dashboard.daysAgo", { count: Math.floor(hours / 24) }), isProblematic: true };
 }
 
-export function OperationsBlock({ summary }: { summary: OperationsSummary }) {
-  const yedek = yedekMetni(summary.backupAgeHours, summary.backupMonitoring);
-  const sorunVar =
-    summary.jobsDelayed > 0 || summary.queueFailed > 0 || yedek.sorunlu;
+export async function OperationsBlock({ summary }: { summary: OperationsSummary }) {
+  const t = await getTranslations();
+  const backup = formatBackupAge(summary.backupAgeHours, summary.backupMonitoring, t);
+  const hasIssue =
+    summary.jobsDelayed > 0 || summary.queueFailed > 0 || backup.isProblematic;
 
   return (
-    <Card data-test="sistem-durumu">
+    <Card data-test="system-status">
       <CardHeader
-        title="Sistem durumu"
-        description="Yalnız sistem yöneticisine görünür. Faaliyet içeriği içermez."
+        title={t("dashboard.systemStatus")}
+        description={t("dashboard.systemStatusDescription")}
         action={
-          sorunVar ? (
-            <Badge tone="correction">ilgi bekliyor</Badge>
+          hasIssue ? (
+            <Badge tone="correction">{t("dashboard.needsAttention")}</Badge>
           ) : (
-            <Badge tone="success">her şey yolunda</Badge>
+            <Badge tone="success">{t("dashboard.everythingHealthy")}</Badge>
           )
         }
       />
@@ -43,7 +46,7 @@ export function OperationsBlock({ summary }: { summary: OperationsSummary }) {
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div>
             <dt className="text-[length:var(--text-xs)] font-medium tracking-[var(--tracking-wide)] text-muted uppercase">
-              Zamanlanmış iş
+              {t("dashboard.scheduledJob")}
             </dt>
             <dd
               className={
@@ -54,14 +57,14 @@ export function OperationsBlock({ summary }: { summary: OperationsSummary }) {
             >
               {summary.jobsTotal - summary.jobsDelayed}/{summary.jobsTotal}
               <span className="ml-1 text-[length:var(--text-xs)] font-normal text-muted">
-                çalışıyor
+                {t("dashboard.running")}
               </span>
             </dd>
           </div>
 
           <div>
             <dt className="text-[length:var(--text-xs)] font-medium tracking-[var(--tracking-wide)] text-muted uppercase">
-              Bekleyen bildirim
+              {t("dashboard.pendingNotifications")}
             </dt>
             <dd className="text-[length:var(--text-lg)] font-semibold tabular text-ink">
               {summary.queuePending}
@@ -70,7 +73,7 @@ export function OperationsBlock({ summary }: { summary: OperationsSummary }) {
 
           <div>
             <dt className="text-[length:var(--text-xs)] font-medium tracking-[var(--tracking-wide)] text-muted uppercase">
-              Başarısız bildirim
+              {t("dashboard.failedNotifications")}
             </dt>
             <dd
               className={
@@ -85,29 +88,29 @@ export function OperationsBlock({ summary }: { summary: OperationsSummary }) {
 
           <div>
             <dt className="text-[length:var(--text-xs)] font-medium tracking-[var(--tracking-wide)] text-muted uppercase">
-              Son yedek
+              {t("dashboard.latestBackup")}
             </dt>
             <dd
               className={
-                yedek.sorunlu
+                backup.isProblematic
                   ? "text-[length:var(--text-lg)] font-semibold text-correction"
                   : "text-[length:var(--text-lg)] font-semibold text-ink"
               }
             >
-              {yedek.metin}
+              {backup.text}
             </dd>
           </div>
         </dl>
 
         <div className="flex flex-wrap gap-2">
           <ButtonLink href="/admin/jobs" size="sm">
-            İşler
+            {t("nav.jobs")}
           </ButtonLink>
           <ButtonLink href="/admin/audit" size="sm">
-            İşlem kayıtları
+            {t("nav.audit")}
           </ButtonLink>
           <ButtonLink href="/admin/settings" size="sm">
-            Ayarlar
+            {t("nav.settings")}
           </ButtonLink>
         </div>
       </CardBody>

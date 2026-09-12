@@ -1,9 +1,9 @@
-// Sağlık raporu (tasarım §12.4): veritabanı bağlantısı, bildirim kuyruğu
-// derinliği ve zamanlayıcı gecikmesi dışarıdan izlenebilir olmalıdır.
+
+
 //
-// Üç ölçüm de gerçektir (Görev 5.6). `source` alanı yine döner: ölçüm bir
-// sebeple yapılamazsa `placeholder` kalır ve izleme tarafı ölçülmemiş bir
-// değeri ölçülmüş sanmaz.
+
+
+
 
 export type CheckStatus = "ok" | "down";
 
@@ -35,12 +35,7 @@ export interface HealthReport {
   scheduler: SchedulerCheck;
 }
 
-/**
- * Uç noktanın dışarıya verdiği biçim. Sağlık ucu kimlik doğrulaması istemez
- * (dışarıdan izlenebilmesi gerekir, §12.4); bu yüzden veritabanı hata metni
- * dışarı çıkmaz — host, port, kullanıcı adı gibi iç ayrıntılar taşıyabilir.
- * Ayrıntı sunucu günlüğüne yazılır (denetim 17.08.2026, bulgu 14).
- */
+
 export type PublicHealthReport = Omit<HealthReport, "database"> & {
   database: Omit<DatabaseCheck, "error">;
 };
@@ -56,13 +51,13 @@ export function toPublicReport(report: HealthReport): PublicHealthReport {
 }
 
 export interface HealthProbes {
-  /** Veritabanına en ucuz sorguyu atar; hata fırlatırsa bağlantı yok demektir. */
+
   pingDatabase: () => Promise<unknown>;
-  /** Ölçüm anını verir; testte sahte saat bağlanabilsin diye dışarıdan gelir. */
+
   now: () => Date;
-  /** Bekleyen bildirim sayısı. */
+
   queueDepth?: () => Promise<number>;
-  /** En çok gecikmiş işin gecikmesi (saniye) ve gecikme durumu. */
+
   schedulerLag?: () => Promise<{ lagSeconds: number | null; delayed: boolean }>;
 }
 
@@ -92,8 +87,8 @@ async function checkQueue(probes: HealthProbes): Promise<QueueCheck> {
   try {
     return { status: "ok", depth: await probes.queueDepth(), source: "live" };
   } catch {
-    // Ölçüm alınamadıysa "sağlıklı" denmez; veritabanı kontrolü zaten durumu
-    // yansıtacaktır.
+
+
     return { status: "down", depth: null, source: "placeholder" };
   }
 }
@@ -105,8 +100,8 @@ async function checkScheduler(probes: HealthProbes): Promise<SchedulerCheck> {
 
   try {
     const { lagSeconds, delayed } = await probes.schedulerLag();
-    // Gecikme "down" sayılır: zamanlayıcı durduğunda sistem çalışıyor görünür,
-    // asıl tehlike budur (§12.4).
+
+
     return { status: delayed ? "down" : "ok", lagSeconds, source: "live" };
   } catch {
     return { status: "down", lagSeconds: null, source: "placeholder" };
@@ -118,7 +113,7 @@ export async function buildHealthReport(
 ): Promise<HealthReport> {
   const database = await checkDatabase(probes);
 
-  // Veritabanı yoksa diğer ölçümler zaten alınamaz; boş yere denenmez.
+
   const [notificationQueue, scheduler] =
     database.status === "ok"
       ? await Promise.all([checkQueue(probes), checkScheduler(probes)])

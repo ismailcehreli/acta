@@ -1,22 +1,20 @@
 import { businessDaysBetween } from "@/server/calendar/business-days";
 
-// Kapatma kuralları (§9.3). Tablo:
+// Closing rules (§9.3). Table:
 //
-//   Soruyu soran            → her zaman
-//   Sorunun sorumlusu       → hayır; cevaplar, kapatamaz
-//   Soranın üstündeki yönetici → soran 10 iş günü işlem yapmazsa
-//   Sistem yöneticisi       → gerekçeli idari kapatma
+//   Asker                     -> always
+//   Responsible for question  -> no; replies, cannot close
+//   Asker's supervisor        -> if asker has been inactive for 10 business days
+//   System administrator      -> justified administrative closure
 //
-// Faaliyet iptalinin kapattığı konuşmalar bu karardan geçmez; ayrı bir kapanış
-// türü (`CANCELLED_ACTIVITY`) alır ve gerekçe iptal kaydında durur.
+// Conversations closed by activity cancellation do not pass through this decision;
+// they receive a separate close type (CANCELLED_ACTIVITY) and the reason stays in cancellation record.
 //
-// Kurallar saf fonksiyonda tutulur: sahte saatle ve veritabanı olmadan
-// sınanabilsinler diye.
+// Rules are kept in a pure function so they can be tested with mock clock and without database.
 
 /**
- * Soranın üstünün devreye girmesi için geçmesi gereken iş günü sayısı.
- * Varsayılan; güncel değer sistem ayarlarından gelir (§16.5) ve karar
- * bağlamında taşınır.
+ * Number of business days before asker's supervisor can intervene.
+ * Default; live value comes from system settings (§16.5) and is carried in context.
  */
 export const SUPERVISOR_TAKEOVER_BUSINESS_DAYS = 10;
 
@@ -24,41 +22,41 @@ export type CloseDecision =
   | {
       allowed: true;
       closeType: "NORMAL" | "ADMINISTRATIVE";
-      /** İdari kapatmada gerekçe zorunludur (§9.3). */
+      /** Reason is mandatory for administrative closure (§9.3). */
       requiresReason: boolean;
     }
   | { allowed: false; reason: CloseRefusal };
 
 export type CloseRefusal =
-  /** Sorumlu cevaplar, kapatamaz (§9.3). */
+  /** Responsible replies, cannot close (§9.3). */
   | "responsible_cannot_close"
-  /** Soranın üstü henüz devreye giremez. */
+  /** Asker's supervisor cannot intervene yet. */
   | "supervisor_too_early"
-  /** Konuşmayla ilgisi olmayan kişi. */
+  /** Person unrelated to the conversation. */
   | "not_a_party"
-  /** İdari kapatma gerekçesiz yapılamaz. */
+  /** Administrative closure requires a reason. */
   | "reason_required"
   | "already_closed";
 
 export interface CloseContext {
   status: "OPEN" | "CLOSED";
   askerId: string;
-  /** Konuşmanın hedefi: faaliyeti yazan kişi. Cevapla el değiştirmez. */
+  /** Target of conversation: author of activity. Does not change with replies. */
   respondentId: string;
   openedAt: Date;
-  /** Soranın son işlemi; yoksa açılış anı. */
+  /** Asker's last action; otherwise opening timestamp. */
   lastAskerActionAt: Date;
   now: Date;
-  /** Karar veren kişi. */
+  /** Person making the decision. */
   actorId: string;
   actorIsSystemAdmin: boolean;
-  /** Karar veren, soranın üst zincirinde mi (§4.4). */
+  /** Whether actor is in asker's management chain (§4.4). */
   actorIsAskerSupervisor: boolean;
-  /** Taraflardan biri pasifleştirildi mi. */
+  /** Whether either party was deactivated. */
   anyPartyInactive: boolean;
-  /** Şirketin çalışma günleri; verilmezse hafta içi varsayılır. */
+  /** Company working days; defaults to weekdays if omitted. */
   workingDays?: number[];
-  /** Üstün devreye girmesi için gereken iş günü; verilmezse varsayılan. */
+  /** Business days required for supervisor takeover; defaults to default constant if omitted. */
   supervisorTakeoverDays?: number;
   holidays?: string[];
 }
@@ -68,13 +66,12 @@ export function decideClose(context: CloseContext): CloseDecision {
     return { allowed: false, reason: "already_closed" };
   }
 
-  // Soran her zaman kapatabilir.
+  // Asker can always close.
   if (context.actorId === context.askerId) {
     return { allowed: true, closeType: "NORMAL", requiresReason: false };
   }
 
-  // Sorumlu asla kapatamaz: cevap vermek kapatmak değildir. Aksi hâlde soru
-  // sahibi tatmin olmadan konuşma kapanırdı.
+  // Responsible party can never close: replying is not closing.
   if (context.actorId === context.respondentId) {
     return { allowed: false, reason: "responsible_cannot_close" };
   }
@@ -86,25 +83,19 @@ export function decideClose(context: CloseContext): CloseDecision {
       { workingDays: context.workingDays, holidays: context.holidays },
     );
 
-    const esik =
+    const threshold =
       context.supervisorTakeoverDays ?? SUPERVISOR_TAKEOVER_BUSINESS_DAYS;
 
-    if (idleBusinessDays >= esik) {
+    if (idleBusinessDays >= threshold) {
       return { allowed: true, closeType: "NORMAL", requiresReason: false };
     }
 
     return { allowed: false, reason: "supervisor_too_early" };
   }
 
-  // Sistem yöneticisinin idari kapatması (§9.3), pasifleştirme sürecini mümkün
-  // kılmak içindir: §4.6 açık konuşması olan kullanıcının pasifleştirilmesini
-  // engelliyor, §9.3 ise idari kapatmayı "taraf pasifleştirildiyse" koşuluna
-  // bağlıyor. İkisi birlikte kilit oluşturuyordu — kimse pasifleştirilemiyor,
-  // çünkü konuşma kapanamıyor. Kilit, idari kapatmayı sistem yöneticisine
-  // açarak çözüldü; karar ürün sahibine soruldu (açık soru 10).
-  // Gerekçe zorunludur: içerik görme yetkisi olmayan işlevsel yönetici bir
-  // konuşmayı kapatıyorsa, bunun nedeni sonradan okunabilmelidir (ürün sahibi
-  // kararı, açık soru 10).
+  // System administrator's administrative closure (§9.3) enables deactivation:
+  // §4.6 prevents deactivation if user has open conversations.
+  // Administrative closure requires a reason.
   if (context.actorIsSystemAdmin) {
     return { allowed: true, closeType: "ADMINISTRATIVE", requiresReason: true };
   }

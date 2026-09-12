@@ -9,11 +9,16 @@ import {
   saveWorkCalendar,
 } from "@/server/calendar/settings";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
 import {
   holidaySchema,
   workCalendarSchema,
   timeToMinute,
 } from "@/shared/schemas/calendar";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 
 import type { CalendarFormState } from "./form-state";
 import {
@@ -21,7 +26,7 @@ import {
   saveUnitWorkCalendar,
 } from "@/server/calendar/unit-calendar";
 
-function hata(message: string): CalendarFormState {
+function error(message: string): CalendarFormState {
   return { error: message, success: null };
 }
 
@@ -30,27 +35,28 @@ export async function saveWorkCalendarAction(
   formData: FormData,
 ): Promise<CalendarFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
-  const baslangic = timeToMinute(String(formData.get("workStart") ?? ""));
-  const bitis = timeToMinute(String(formData.get("workEnd") ?? ""));
-  if (baslangic === null || bitis === null) {
-    return hata("Mesai saatleri SS:DD biçiminde girilmeli.");
+  const start = timeToMinute(String(formData.get("workStart") ?? ""));
+  const end = timeToMinute(String(formData.get("workEnd") ?? ""));
+  if (start === null || end === null) {
+    return error(t("screens.calendar.invalidWorkingHours"));
   }
 
   const parsed = workCalendarSchema.safeParse({
     workingDays: formData.getAll("workingDays"),
-    workStartMinute: baslangic,
-    workEndMinute: bitis,
+    workStartMinute: start,
+    workEndMinute: end,
   });
 
   if (!parsed.success) {
-    return hata(parsed.error.issues[0]?.message ?? "Girdi geçersiz");
+    return error(localizeValidationIssue(t, parsed.error.issues[0]));
   }
 
   await saveWorkCalendar(prisma, parsed.data, me.id);
   revalidatePath("/admin/calendar");
 
-  return { error: null, success: "Çalışma takvimi kaydedildi." };
+  return { error: null, success: t("screens.calendar.saved") };
 }
 
 export async function addHolidayAction(
@@ -58,6 +64,7 @@ export async function addHolidayAction(
   formData: FormData,
 ): Promise<CalendarFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = holidaySchema.safeParse({
     date: formData.get("date"),
@@ -65,14 +72,17 @@ export async function addHolidayAction(
   });
 
   if (!parsed.success) {
-    return hata(parsed.error.issues[0]?.message ?? "Girdi geçersiz");
+    return error(localizeValidationIssue(t, parsed.error.issues[0]));
   }
 
-  const sonuc = await addHoliday(prisma, parsed.data, me.id);
-  if (!sonuc.ok) return hata(sonuc.message);
+  const result = await addHoliday(prisma, parsed.data, me.id);
+  if (!result.ok) return error(localizeServiceMessage(t, "calendar", result));
 
   revalidatePath("/admin/calendar");
-  return { error: null, success: `${parsed.data.date} tatil olarak eklendi.` };
+  return {
+    error: null,
+    success: t("screens.calendar.holidayAdded", { date: parsed.data.date }),
+  };
 }
 
 export async function removeHolidayAction(
@@ -80,67 +90,70 @@ export async function removeHolidayAction(
   formData: FormData,
 ): Promise<CalendarFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const date = String(formData.get("date") ?? "");
-  const kaldirildi = await removeHoliday(prisma, date, me.id);
+  const removed = await removeHoliday(prisma, date, me.id);
 
-  // Bulunamayan kayıt sessizce başarılı sayılmaz.
-  if (!kaldirildi) return hata("Bu tarih tatil listesinde yok.");
+  // A missing record must not be reported as a silent success.
+  if (!removed) return error(t("screens.calendar.holidayNotFound"));
 
   revalidatePath("/admin/calendar");
-  return { error: null, success: `${date} tatil listesinden çıkarıldı.` };
+  return {
+    error: null,
+    success: t("screens.calendar.holidayRemoved", { date }),
+  };
 }
 
 /**
- * Birime özel mesai penceresi (Görev 11.9).
+ * Unit-specific work window (Task 11.9).
  *
- * Yalnız sistem yöneticisi (ürün sahibi kararı, 21.08.2026): bölüm müdürü
- * kendi biriminin takvimini değiştiremez. Mesai penceresi hatırlatma
- * zamanlamasını belirliyor ve bir birimin saatini değiştirmek o birimdeki
- * herkesin akşamını etkiliyor.
+ * Only system administrators can change it (product decision, 2026-08-21).
+ * The work window controls reminder timing for everyone in the unit.
  */
 export async function saveUnitCalendarAction(
   _previous: CalendarFormState,
   formData: FormData,
 ): Promise<CalendarFormState> {
   await requireSystemAdmin();
+  const t = await getTranslations();
 
   const orgUnitId = String(formData.get("orgUnitId") ?? "");
-  if (!orgUnitId) return { error: "Birim seçilmedi.", success: null };
+  if (!orgUnitId) return { error: t("screens.calendar.noUnitSelected"), success: null };
 
-  // "Devral" seçeneği: birimin kendi tanımı kaldırılır, üstünden devralır.
+  // Inherit removes the unit's own definition and uses the parent's window.
   if (formData.get("inherit") === "on") {
     await clearUnitWorkCalendar(prisma, orgUnitId);
     revalidatePath("/admin/calendar");
     return {
       error: null,
-      success: "Birim artık mesai penceresini üstünden devralıyor.",
+      success: t("screens.calendar.unitCalendarInherited"),
     };
   }
 
-  const gunler = [1, 2, 3, 4, 5, 6, 7].filter(
-    (gun) => formData.get(`day-${gun}`) === "on",
+  const days = [1, 2, 3, 4, 5, 6, 7].filter(
+    (day) => formData.get(`day-${day}`) === "on",
   );
-  if (gunler.length === 0) {
-    return { error: "En az bir çalışma günü seçilmeli.", success: null };
+  if (days.length === 0) {
+    return { error: t("screens.calendar.selectWorkingDay"), success: null };
   }
 
-  const bas = timeToMinute(String(formData.get("workStart") ?? ""));
+  const start = timeToMinute(String(formData.get("workStart") ?? ""));
   const bit = timeToMinute(String(formData.get("workEnd") ?? ""));
-  if (bas === null || bit === null) {
-    return { error: "Mesai saatleri geçersiz.", success: null };
+  if (start === null || bit === null) {
+    return { error: t("screens.calendar.invalidWorkingHours"), success: null };
   }
-  if (bit <= bas) {
-    return { error: "Mesai bitişi başlangıçtan sonra olmalı.", success: null };
+  if (bit <= start) {
+    return { error: t("screens.calendar.endAfterStart"), success: null };
   }
 
   await saveUnitWorkCalendar(prisma, orgUnitId, {
-    workingDays: gunler,
-    workStartMinute: bas,
+    workingDays: days,
+    workStartMinute: start,
     workEndMinute: bit,
     worksOnHolidays: formData.get("worksOnHolidays") === "on",
   });
 
   revalidatePath("/admin/calendar");
-  return { error: null, success: "Birimin mesai penceresi kaydedildi." };
+  return { error: null, success: t("screens.calendar.unitCalendarSaved") };
 }

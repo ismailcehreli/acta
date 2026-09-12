@@ -8,15 +8,14 @@ import { periodStart, type FeedFilters } from "@/server/activities/scope-feed";
 
 import { approveActivity, type ApprovalDb } from "./approval";
 
-// Kişi + gün bazlı toplu onay (Görev 10.6, tasarım §6).
+
 //
-// Müdür günde 5–12 faaliyet için tek tek sayfa açıp geri dönüyordu. Tasarım
-// onayı zaten kişi ve gün bazında gruplu gösteriyor; eksik olan ekrandı.
+
+
 //
-// **Toplu onay yeni bir yetki yolu açmaz.** Her kayıt tek tek `approveActivity`
-// üzerinden geçiyor: aynı kilit protokolü, aynı denetim izi, aynı bildirim.
-// Toplu bir `updateMany` yazmak, onayın bütün kurallarını ikinci kez —ve
-// eksik— yazmak olurdu.
+
+// The queue is built from the exact records selected by the manager; processing
+// a broader query here would approve records the manager never reviewed.
 
 export type ApprovalGroupsDb = ApprovalDb;
 
@@ -32,54 +31,38 @@ export interface ApprovalGroup {
   authorId: string;
   authorName: string;
   authorUnitName: string;
-  /** Şirket günü (`YYYY-MM-DD`). */
+
   day: string;
   activityDate: Date;
   items: GroupedActivity[];
 }
 
-/**
- * Onay kuyruğunun daraltmaları (Görev 11.3).
- *
- * Müdür "Kadir'in bu haftaki kayıtları" ya da "Planlama'dan gelenler" diye
- * bakabilmeli. Alanlar kuyruk koşulunun **üstüne** eklenir; hiçbiri başka
- * bir müdürün kuyruğunu açamaz.
- */
+
 export interface ApprovalGroupFilters {
   period?: FeedFilters["period"];
   authorId?: string;
-  /** Yazarın kendi birimi; kayıt hangi birimde yazıldıysa o (§4.6). */
+
   authorOrgUnitId?: string;
 }
 
-/** Süzgeç koşulları; kuyruk koşulu buraya girmez, o her zaman ayrıca eklenir. */
+
 function approvalFilterWhere(
   filters: ApprovalGroupFilters,
   now: Date,
 ): Prisma.ActivityWhereInput[] {
-  const kosullar: Prisma.ActivityWhereInput[] = [];
+  const conditions: Prisma.ActivityWhereInput[] = [];
   const start = periodStart(filters.period, now);
 
-  if (start) kosullar.push({ activityDate: { gte: start } });
-  if (filters.authorId) kosullar.push({ authorId: filters.authorId });
+  if (start) conditions.push({ activityDate: { gte: start } });
+  if (filters.authorId) conditions.push({ authorId: filters.authorId });
   if (filters.authorOrgUnitId) {
-    kosullar.push({ authorOrgUnitId: filters.authorOrgUnitId });
+    conditions.push({ authorOrgUnitId: filters.authorOrgUnitId });
   }
 
-  return kosullar;
+  return conditions;
 }
 
-/**
- * Onayı bekleyen kayıtları kişi ve güne göre gruplar.
- *
- * Sıralama en eski günden başlar: en uzun bekleyen iş en üstte olmalı.
- *
- * **Sayfalama grup bazındadır ve bellekte yapılır.** Satırları veritabanında
- * sayfalamak grupları ortadan bölerdi: müdür aynı kişinin aynı gününü iki
- * sayfada görür, "hepsini onayla" düğmesi grubun yarısına basardı. Kuyruk
- * bir müdürün önündeki iştir ve küçüktür (tasarım §6: günde 5–12 kayıt);
- * satırların tamamını okumak burada doğru takas.
- */
+
 export async function listApprovalGroups(
   db: Pick<PrismaClient, "activity" | "noActivityPeriod">,
   approverId: string,
@@ -87,36 +70,36 @@ export async function listApprovalGroups(
   filters: ApprovalGroupFilters = {},
   options: { limit?: number; skip?: number } = {},
 ): Promise<ApprovalGroup[]> {
-  const gruplar = await gruplaKuyruk(db, approverId, now, filters);
+  const groups = await groupQueue(db, approverId, now, filters);
   const { limit, skip = 0 } = options;
 
-  return limit === undefined ? gruplar : gruplar.slice(skip, skip + limit);
+  return limit === undefined ? groups : groups.slice(skip, skip + limit);
 }
 
-/** Süzgeçli kuyruktaki **grup** sayısı; sayfa sayısı buradan çıkar. */
+
 export async function countApprovalGroups(
   db: Pick<PrismaClient, "activity" | "noActivityPeriod">,
   approverId: string,
   now: Date = new Date(),
   filters: ApprovalGroupFilters = {},
 ): Promise<number> {
-  return (await gruplaKuyruk(db, approverId, now, filters)).length;
+  return (await groupQueue(db, approverId, now, filters)).length;
 }
 
-async function gruplaKuyruk(
+async function groupQueue(
   db: Pick<PrismaClient, "activity" | "noActivityPeriod">,
   approverId: string,
   now: Date,
   filters: ApprovalGroupFilters,
 ): Promise<ApprovalGroup[]> {
   const rows = await listAuthorizedActivities(db, approvalQueueWhere(approverId, now), {
-    // Kuyruk koşulu görünürlük modülünden gelir; `listPendingApprovals` ile
-    // **aynı** işlevi paylaşırlar. Daha önce ikisi ayrı ayrı yazılmıştı ve
-    // yalnız biri güncellendiğinde gezinmedeki rozet sayıyı gösterip onay
-    // ekranı boş geliyordu. Şimdi ayrışmaları imkânsız.
-    // Koşullar `AND` ile birleşiyor: nesne yaymada aynı alan iki kez
-    // verilirse sonuncusu kazanır ve bir süzgeç kuyruk koşulunu sessizce
-    // ezebilirdi (Görev 11.4'te ekip izin listesinde bu hata bulundu).
+
+
+
+
+
+
+
     where: {
       AND: [{ approvalStatus: "PENDING_APPROVAL" }, ...approvalFilterWhere(filters, now)],
     },
@@ -134,15 +117,15 @@ async function gruplaKuyruk(
     },
   });
 
-  const gruplar = new Map<string, ApprovalGroup>();
+  const groups = new Map<string, ApprovalGroup>();
 
   for (const row of rows) {
     const day = companyDay(row.activityDate);
-    const anahtar = `${row.authorId}:${day}`;
+    const key = `${row.authorId}:${day}`;
 
-    let grup = gruplar.get(anahtar);
-    if (!grup) {
-      grup = {
+    let group = groups.get(key);
+    if (!group) {
+      group = {
         authorId: row.authorId,
         authorName: row.author.fullName,
         authorUnitName: row.authorOrgUnit.name,
@@ -150,37 +133,37 @@ async function gruplaKuyruk(
         activityDate: row.activityDate,
         items: [],
       };
-      gruplar.set(anahtar, grup);
+      groups.set(key, group);
     }
 
-    grup.items.push({
+    group.items.push({
       id: row.id,
       activityNo: row.activityNo,
       title: row.title,
       description: row.description,
-      targetDepartmentNames: row.targetDepts.map((hedef) => hedef.orgUnit.name),
+      targetDepartmentNames: row.targetDepts.map((target) => target.orgUnit.name),
     });
   }
 
-  return [...gruplar.values()];
+  return [...groups.values()];
 }
 
 export interface BulkApprovalResult {
   approved: number;
-  /** Onaylanamayanlar; sayı değil **kimlik** döner ki ekranda söylenebilsin. */
-  skipped: { id: string; message: string }[];
+  /** Skipped records return their **identities**, not only a count, so the UI can explain them. */
+  skipped: { id: string; error: string; message: string }[];
 }
 
 /**
- * Verilen kayıtları onaylar.
+ * Approve the records supplied by the caller.
  *
- * **Kimlikler ekrandan gelir, sorgudan değil.** Müdür ekranı açtıktan sonra
- * yeni bir faaliyet gelirse, "hepsini onayla" onu da kapsasaydı müdür
- * **okumadığı bir kaydı** onaylamış olurdu. Bu yüzden gönderilen liste neyse
- * o işlenir; arada gelen kayıt bir sonraki turda görünür.
+ * **Identities come from the screen, not from a fresh query.** If a new activity
+ * arrives after the manager opens the screen, an "approve all" query could approve
+ * a record the manager **never read**. The submitted list is therefore processed
+ * as-is; newly arrived records appear in the next batch.
  *
- * Onayı düşmeyen ya da durumu değişmiş kayıtlar sessizce atlanmaz; sayısı ve
- * sebebi çağırana döner.
+ * Records that are no longer eligible or whose status changed are not silently
+ * skipped; their count and reasons are returned to the caller.
  */
 export async function approveMany(
   db: ApprovalGroupsDb,
@@ -188,13 +171,13 @@ export async function approveMany(
   activityIds: string[],
   now: Date,
 ): Promise<BulkApprovalResult> {
-  const sonuc: BulkApprovalResult = { approved: 0, skipped: [] };
+  const result: BulkApprovalResult = { approved: 0, skipped: [] };
 
   for (const id of activityIds) {
-    const karar = await approveActivity(db, actorId, id, now);
-    if (karar.ok) sonuc.approved += 1;
-    else sonuc.skipped.push({ id, message: karar.message });
+    const decision = await approveActivity(db, actorId, id, now);
+    if (decision.ok) result.approved += 1;
+    else result.skipped.push({ id, error: decision.error, message: decision.message });
   }
 
-  return sonuc;
+  return result;
 }

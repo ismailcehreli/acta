@@ -7,17 +7,11 @@ import {
   type Viewer,
 } from "./visibility";
 
-/**
- * Faaliyet okumasının tek depo sınırı.
- *
- * Çağıranlar kendi daraltmalarını verebilir; görünürlük koşulunu veremez veya
- * değiştiremez. Depo her sorguda aynı §8 kapsamını AND ile ekler.
- */
+
 export type ActivityRepositoryDb = Pick<PrismaClient, "activity" | "$queryRaw"> &
   VisibilityDb;
 
-/** Ham SQL gereken arama gibi yollar için kapsamı depo kurar ve sorguyu depo
- * çalıştırır. Çağıran yalnızca kapsamın üstüne daraltma ekleyebilir. */
+
 export async function queryVisibleActivities<T>(
   db: ActivityRepositoryDb,
   viewer: Viewer,
@@ -91,7 +85,7 @@ export async function groupVisibleActivities<T extends Prisma.ActivityGroupByArg
   } as Parameters<PrismaClient["activity"]["groupBy"]>[0]) as unknown as unknown[];
 }
 
-/** Kendi ast kümesi önceden görünürlükten çözülmüş özet yolları için kapı. */
+
 export async function listActivitiesByAuthors<
   T extends Prisma.ActivityFindManyArgs,
 >(
@@ -105,8 +99,7 @@ export async function listActivitiesByAuthors<
   }) as Promise<Prisma.ActivityGetPayload<T>[]>;
 }
 
-/** Onay kuyruğu gibi yetkisi kendi özel SQL/Prisma koşuluyla tanımlanan
- * yolların da model erişim kapısı. Yetki koşulu çağırandan açıkça alınır. */
+
 export async function listAuthorizedActivities<
   T extends Prisma.ActivityFindManyArgs,
 >(
@@ -193,11 +186,7 @@ export async function listVisibleAttachments(
   });
 }
 
-/**
- * Kapsam dışı bakım/işçi okumaları için açık isimli kapı. Kullanıcıya dönük
- * yollar bu işlevi kullanamaz; bu ayrım envanter sınırının okunabilir kalması
- * içindir.
- */
+
 export function activityMaintenanceReader(db: Pick<PrismaClient, "activity">) {
   return db.activity;
 }
@@ -208,9 +197,7 @@ export function attachmentMaintenanceReader(
   return db.attachment;
 }
 
-/** Demo temizliği için faaliyet satırlarını kilitleyen ham sorgu da depo
- * sınırında kalır. Bu yol görünürlük sorgusu değildir; yalnızca bakım işlemi
- * ile kullanıcı işlemleri arasında atomiklik sağlar. */
+
 export async function lockActivitiesForMaintenance(
   db: Pick<PrismaClient, "$queryRaw">,
   activityIds: string[],
@@ -223,7 +210,7 @@ export async function lockActivitiesForMaintenance(
   `;
 }
 
-/** Tekil mutasyon yollarının faaliyet satırı kilidi de aynı sınırda tutulur. */
+/** Single-record mutation paths use the same activity-row lock boundary. */
 export async function lockActivityForMaintenance(
   db: Pick<PrismaClient, "$executeRaw">,
   activityId: string,

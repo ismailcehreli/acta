@@ -1,179 +1,179 @@
 import Link from "next/link";
 
 import type { DashboardMetrics } from "@/server/dashboard/metrics";
+import { getTranslations } from "@/server/i18n/server";
 
-// Ana ekranın ölçüm şeridi.
+
 //
-// Dekoratif "istatistik kartı" koleksiyonu değil: yan yana okunan, aynı
-// hizada duran sayılar. Her sayı bir soruya cevap verir ve **tıklanabilir** —
-// "3 onay bekliyor" gördükten sonra kullanıcının o listeyi elle bulması
+
+
+
 // gerekmiyor.
 //
-// Sıfır olan sayı da gösterilir; şeridin sütun sayısı sayfadan sayfaya
-// değişirse göz her seferinde yeniden hizalanmak zorunda kalır. Ama sıfır
-// **sessizdir**: rengi yoktur, dikkat çekmez.
-//
-// Her ölçüm **kendi listesini** açar. Önce üçü `/?period=…#kapsam` adresine
-// gidiyordu — yani aynı sayfada bir bölüme atlıyordu; kullanıcı filtrelenmiş
-// bir liste beklerken sayfa aşağı kayıyordu. Bir sayı soruya cevap veriyorsa,
-// tıklama o cevabın dayanağını göstermeli (Görev 11.2). Kişisel şerit kendi
-// arşivine, yönetilen şerit yönetim akışına gider; iki bağlantı ailesi
-// birbirine karıştırılmaz.
-//
-// **Sıfır sayaç da tıklanabilir.** Önceki kural ("sıfırken bağlantı verilmez")
-// kaldırıldı: boş bir liste yalan söylemez, kullanıcıya nerede olduğunu ve
-// süzgeci nasıl gevşeteceğini gösterir. Bağlantının kaybolması, aradığı şeyin
-// nerede olduğunu öğrenmesini engelliyordu.
 
-interface Olcum {
-  etiket: string;
-  deger: number;
-  ipucu?: string;
+
+
+//
+
+
+
+
+
+
+//
+
+
+
+
+
+interface Metric {
+  label: string;
+  value: number;
+  hint?: string;
   href?: string;
-  /** Sıfırdan büyükken vurgulanacak ton. */
-  ton?: "primary" | "correction" | "danger";
+  tone?: "primary" | "correction" | "danger";
 }
 
-export function MetricStrip({
-  metrics,
-  donemEtiketi,
+export async function MetricStrip({
+  metrics: dashboardMetrics,
+  periodLabel,
   period,
-  onaylayici,
-  headingId = "olcum-basligi",
+  isApprover,
+  headingId = "metrics-heading",
   ownOnly = false,
   authorId,
 }: {
   metrics: DashboardMetrics;
-  donemEtiketi: string;
-  /** Daraltma bağlantılarında korunacak dönem. */
+  periodLabel: string;
+
   period: string;
-  /** Bu kişinin onay görevi var mı; "Onay bekleyen" bağlantısı buna göre. */
-  onaylayici: boolean;
-  /** Aynı sayfada birden fazla şerit olduğunda erişilebilir başlık kimliği. */
+
+  isApprover: boolean;
+
   headingId?: string;
-  /** Bağlantıları yalnız oturum sahibinin kayıtlarına daraltır. */
+
   ownOnly?: boolean;
-  /** `ownOnly` açıkken kullanılacak yazar kimliği. */
+
   authorId?: string;
 }) {
-  // Bağlantılar dönemi korur: kullanıcı "Bu hafta"ya bakarken sayaca
-  // tıklayınca ay başına atlamaz.
-  const akis = (ek: Record<string, string> = {}) =>
+
+
+  const t = await getTranslations();
+  const feedAddress = (attachment: Record<string, string> = {}) =>
     `/feed?${new URLSearchParams({
       period,
-      ...ek,
+      ...attachment,
     }).toString()}`;
-  const kendiArsivim = (ek: Record<string, string> = {}) =>
-    `/activities?${new URLSearchParams({ period, ...ek }).toString()}`;
-  const liste = (ek: Record<string, string> = {}) =>
-    ownOnly ? kendiArsivim(ek) : akis(ek);
+  const ownArchiveAddress = (attachment: Record<string, string> = {}) =>
+    `/activities?${new URLSearchParams({ period, ...attachment }).toString()}`;
+  const listAddress = (attachment: Record<string, string> = {}) =>
+    ownOnly ? ownArchiveAddress(attachment) : feedAddress(attachment);
 
-  const olcumler: Olcum[] = [
+  const metricCards: Metric[] = [
     {
-      etiket: `${donemEtiketi} yazılan`,
-      deger: metrics.activities,
-      ipucu:
-        metrics.contributors > 0
-          ? `${metrics.contributors} kişi yazdı`
-          : "Bu aralıkta kayıt yok",
-      href: liste(),
+      label: t("screens.dashboard.activitiesWritten", { period: periodLabel }),
+      value: dashboardMetrics.activities,
+      hint:
+        dashboardMetrics.contributors > 0
+          ? t("screens.dashboard.peopleWrote", { count: dashboardMetrics.contributors })
+          : t("screens.dashboard.noRecords"),
+      href: listAddress(),
     },
     {
-      etiket: "Onay bekleyen",
-      deger: metrics.pendingApproval,
-      ipucu: onaylayici
-        ? "Kararınızı bekliyor"
-        : "Yöneticisine düşmüş, henüz karara bağlanmamış",
-      // Yönetilen şeritte onay görevi olan kişi doğrudan onay kuyruğuna
-      // gider; olmayan kişi aynı kayıtları yönetim akışında görür. Kişisel
-      // şerit ise her durumda kendi arşivindeki bekleyen kayda gider.
-      href: !ownOnly && onaylayici ? "/approvals" : liste({ durum: "onay" }),
-      ton: "primary",
+      label: t("screens.dashboard.pendingApproval"),
+      value: dashboardMetrics.pendingApproval,
+      hint: isApprover
+        ? t("screens.dashboard.waitingForDecision")
+        : t("screens.dashboard.assignedToManager"),
+      // Approvers go to the approval queue; other users see the same records
+      // in the managed feed. Personal metrics always link to the own archive.
+      href: !ownOnly && isApprover ? "/approvals" : listAddress({ status: "approval" }),
+      tone: "primary",
     },
     {
-      etiket: "Düzeltme istenen",
-      deger: metrics.correctionRequested,
-      ipucu: "Yazarına geri gönderildi, yeniden gönderilmesi bekleniyor",
-      href: liste({ durum: "duzeltme" }),
-      ton: "correction",
+      label: t("screens.dashboard.changesRequested"),
+      value: dashboardMetrics.correctionRequested,
+      hint: t("screens.dashboard.waitingForResubmission"),
+      href: listAddress({ status: "changesRequested" }),
+      tone: "correction",
     },
     {
-      etiket: "Cevap bekleyen faaliyet",
-      deger: metrics.openQuestions,
-      ipucu:
-        "Başkasının sorduğu açık sorusu olan faaliyetler; her faaliyet bir kez sayılır",
-      // Açık işler dönemden bağımsızdır: eski bir soruyu bu haftanın
-      // seçili dönemi yüzünden sayaçtan açılan listede saklamayalım.
-      href: liste({ period: "all", durum: "soru" }),
-      ton: "primary",
+      label: t("screens.dashboard.awaitingAnswers"),
+      value: dashboardMetrics.openQuestions,
+      hint: t("screens.dashboard.openQuestionsHint"),
+      // Open questions are independent of the selected period.
+      href: listAddress({ period: "all", status: "questions" }),
+      tone: "primary",
     },
     {
-      etiket: "Açık takip",
-      deger: metrics.openFollowUps,
-      ipucu:
-        metrics.staleFollowUps > 0
-          ? `${metrics.staleFollowUps} tanesi ${metrics.staleThreshold} iş günüdür bekliyor`
-          : `Hiçbiri ${metrics.staleThreshold} iş gününden uzun süredir beklemiyor`,
+      label: t("screens.dashboard.openFollowUp"),
+      value: dashboardMetrics.openFollowUps,
+      hint:
+        dashboardMetrics.staleFollowUps > 0
+          ? t("screens.dashboard.staleFollowUps", {
+              count: dashboardMetrics.staleFollowUps,
+              days: dashboardMetrics.staleThreshold,
+            })
+          : t("screens.dashboard.noStaleFollowUps", { days: dashboardMetrics.staleThreshold }),
       href: ownOnly && authorId
-        ? `/follow-ups?sorumlu=${encodeURIComponent(authorId)}`
+        ? `/follow-ups?assigneeId=${encodeURIComponent(authorId)}`
         : "/follow-ups",
-      ton: metrics.staleFollowUps > 0 ? "danger" : "primary",
+      tone: dashboardMetrics.staleFollowUps > 0 ? "danger" : "primary",
     },
   ];
 
   return (
     <section aria-labelledby={headingId}>
       <h2 id={headingId} className="sr-only">
-        Özet sayılar
+        {t("screens.dashboard.metricsHeading")}
       </h2>
       <dl className="grid grid-cols-2 border-y border-line sm:grid-cols-3 lg:grid-cols-5">
-        {olcumler.map((olcum) => (
-          <Olcuk key={olcum.etiket} olcum={olcum} />
+        {metricCards.map((metric) => (
+          <MetricCard key={metric.label} metric={metric} />
         ))}
       </dl>
     </section>
   );
 }
 
-function Olcuk({ olcum }: { olcum: Olcum }) {
-  const vurgu = olcum.deger > 0 && olcum.ton;
-  const renk =
-    vurgu === "danger"
+function MetricCard({ metric }: { metric: Metric }) {
+  const activeTone = metric.value > 0 && metric.tone;
+  const color =
+    activeTone === "danger"
       ? "text-danger"
-      : vurgu === "correction"
+      : activeTone === "correction"
         ? "text-correction"
-        : vurgu === "primary"
+        : activeTone === "primary"
           ? "text-primary"
           : "text-ink";
 
-  const govde = (
+  const content = (
     <>
-      <dt className="section-label">{olcum.etiket}</dt>
-      <dd className={`mt-1 text-[length:var(--text-2xl)] font-semibold tabular ${renk}`}>
-        {olcum.deger}
+      <dt className="section-label">{metric.label}</dt>
+      <dd className={`mt-1 text-[length:var(--text-2xl)] font-semibold tabular ${color}`}>
+        {metric.value}
       </dd>
-      {olcum.ipucu ? (
+      {metric.hint ? (
         <p className="mt-0.5 text-[length:var(--text-2xs)] leading-[var(--leading-snug)] text-faint">
-          {olcum.ipucu}
+          {metric.hint}
         </p>
       ) : null}
     </>
   );
 
-  // Sıfır sayaç da bağlantılıdır: boş liste kullanıcıya süzgeci ve onu
-  // temizleme yolunu gösterir (Görev 11.2).
-  if (olcum.href) {
+  // Zero-count metrics remain links so users can inspect or clear the filter.
+  if (metric.href) {
     return (
       <div className="border-line not-last:border-e">
         <Link
-          href={olcum.href}
+          href={metric.href}
           className="block px-3 py-3 transition-colors duration-(--duration-fast) hover:bg-surface-hover"
         >
-          {govde}
+          {content}
         </Link>
       </div>
     );
   }
 
-  return <div className="border-line px-3 py-3 not-last:border-e">{govde}</div>;
+  return <div className="border-line px-3 py-3 not-last:border-e">{content}</div>;
 }

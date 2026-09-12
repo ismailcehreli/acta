@@ -10,12 +10,12 @@ export const classifyLegacyDemoOriginsSchema = z
     selections: z
       .array(
         z.object({
-          orgUnitId: z.string().uuid("Geçersiz birim kimliği"),
+          orgUnitId: z.string().uuid("Invalid unit ID"),
           origin: demoObjectOriginSchema,
         }),
       )
-      .min(1, "En az bir birim sınıflandırılmalı")
-      .max(50, "Tek işlemde en fazla 50 birim sınıflandırılabilir"),
+      .min(1, "Select at least one unit")
+      .max(50, "At most 50 units can be classified in one operation"),
   })
   .superRefine(({ selections }, ctx) => {
     const ids = selections.map((selection) => selection.orgUnitId);
@@ -23,7 +23,7 @@ export const classifyLegacyDemoOriginsSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["selections"],
-        message: "Aynı birim birden fazla kez gönderilemez",
+        message: "A unit cannot be submitted more than once",
       });
     }
   });
@@ -32,4 +32,3 @@ export type DemoObjectOriginInput = z.infer<typeof demoObjectOriginSchema>;
 export type ClassifyLegacyDemoOriginsInput = z.infer<
   typeof classifyLegacyDemoOriginsSchema
 >;
-

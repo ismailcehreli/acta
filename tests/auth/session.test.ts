@@ -26,8 +26,8 @@ async function newUser() {
   return createUser(unit.id);
 }
 
-describe("oturum oluşturma", () => {
-  it("belirtecin kendisi veritabanına yazılmaz, özeti yazılır", async () => {
+describe("session creation", () => {
+  it("token itself is not written to database, hash is written", async () => {
     const user = await newUser();
 
     const session = await createSession(testDb, user.id, NOW);
@@ -39,7 +39,7 @@ describe("oturum oluşturma", () => {
     expect(stored.tokenHash).not.toBe(session.token);
   });
 
-  it("her oturum farklı belirteç alır", async () => {
+  it("each session receives a different token", async () => {
     const user = await newUser();
 
     const first = await createSession(testDb, user.id, NOW);
@@ -49,8 +49,8 @@ describe("oturum oluşturma", () => {
   });
 });
 
-describe("oturum doğrulama", () => {
-  it("geçerli belirteç kullanıcıyı verir", async () => {
+describe("session verification", () => {
+  it("valid token returns user", async () => {
     const user = await newUser();
     const session = await createSession(testDb, user.id, NOW);
 
@@ -59,13 +59,13 @@ describe("oturum doğrulama", () => {
     expect(active?.userId).toBe(user.id);
   });
 
-  it("bilinmeyen belirteç kabul edilmez", async () => {
+  it("unknown token is rejected", async () => {
     await newUser();
 
-    expect(await findActiveSession(testDb, "uydurma-belirtec", NOW)).toBeNull();
+    expect(await findActiveSession(testDb, "bogus-token", NOW)).toBeNull();
   });
 
-  it("süresi geçmiş oturum kabul edilmez", async () => {
+  it("expired session is rejected", async () => {
     const user = await newUser();
     const session = await createSession(testDb, user.id, NOW);
 
@@ -74,7 +74,7 @@ describe("oturum doğrulama", () => {
     expect(await findActiveSession(testDb, session.token, afterExpiry)).toBeNull();
   });
 
-  it("iptal edilmiş oturum kabul edilmez", async () => {
+  it("revoked session is rejected", async () => {
     const user = await newUser();
     const session = await createSession(testDb, user.id, NOW);
 
@@ -83,7 +83,7 @@ describe("oturum doğrulama", () => {
     expect(await findActiveSession(testDb, session.token, NOW)).toBeNull();
   });
 
-  it("kullanıcı pasifleştirilirse oturumu geçersizleşir", async () => {
+  it("session becomes invalid if user is deactivated", async () => {
     const root = await createOrgUnit();
     const user = await createUser(root.id);
     const session = await createSession(testDb, user.id, NOW);
@@ -97,8 +97,8 @@ describe("oturum doğrulama", () => {
   });
 });
 
-describe("toplu iptal", () => {
-  it("kullanıcının tüm açık oturumları düşer", async () => {
+describe("bulk revocation", () => {
+  it("all open sessions of user are dropped", async () => {
     const user = await newUser();
     const first = await createSession(testDb, user.id, NOW);
     const second = await createSession(testDb, user.id, NOW);
@@ -110,7 +110,7 @@ describe("toplu iptal", () => {
     expect(await findActiveSession(testDb, second.token, NOW)).toBeNull();
   });
 
-  it("başka kullanıcının oturumuna dokunmaz", async () => {
+  it("does not affect another user's session", async () => {
     const root = await createOrgUnit();
     const user = await createUser(root.id);
     const other = await createUser(root.id);

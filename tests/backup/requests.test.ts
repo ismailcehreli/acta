@@ -15,21 +15,21 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-describe("yedek isteği", () => {
-  it("isteği ve denetim kaydını aynı işlemde oluşturur", async () => {
-    const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
+describe("backup request", () => {
+  it("creates request and audit log in same transaction", async () => {
+    const unit = await createOrgUnit({ name: "Company", type: "Root" });
     const admin = await createUser(unit.id, {
-      fullName: "Sistem Yöneticisi",
+      fullName: "System Admin",
       isSystemAdmin: true,
     });
 
-    const sonuc = await requestBackup(testDb, admin.id, NOW);
+    const result = await requestBackup(testDb, admin.id, NOW);
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
     const request = await testDb.backupRequest.findUniqueOrThrow({
-      where: { id: sonuc.id },
+      where: { id: result.id },
     });
     expect(request).toMatchObject({
       source: "MANUAL",
@@ -40,7 +40,7 @@ describe("yedek isteği", () => {
 
     await expect(
       testDb.auditLog.findFirstOrThrow({
-        where: { objectId: sonuc.id },
+        where: { objectId: result.id },
         select: { objectType: true, action: true, userId: true },
       }),
     ).resolves.toEqual({
@@ -50,31 +50,32 @@ describe("yedek isteği", () => {
     });
   });
 
-  it("aynı anda ikinci bekleyen istek kabul edilmez", async () => {
-    const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
+  it("rejects second concurrent pending request", async () => {
+    const unit = await createOrgUnit({ name: "Company", type: "Root" });
     const firstAdmin = await createUser(unit.id, {
       isSystemAdmin: true,
-      fullName: "Birinci Yönetici",
+      fullName: "First Admin",
     });
     const secondAdmin = await createUser(unit.id, {
       isSystemAdmin: true,
-      fullName: "İkinci Yönetici",
+      fullName: "Second Admin",
     });
 
     expect((await requestBackup(testDb, firstAdmin.id, NOW)).ok).toBe(true);
 
-    const ikinci = await requestBackup(
+    const secondResult = await requestBackup(
       testDb,
       secondAdmin.id,
       new Date(NOW.getTime() + 1_000),
     );
-    expect(ikinci).toEqual({
+    expect(secondResult).toEqual({
       ok: false,
-      message: "Bekleyen ya da çalışan bir yedek var. Bitmesini bekleyin.",
+      error: "already_waiting",
+      message: "A backup is already waiting or running. Wait for it to finish.",
     });
     expect(await testDb.backupRequest.count()).toBe(1);
 
-    // Servis katmanını atlayan bir yazma da aynı kısmi tekil indekse takılır.
+    // Bypassing service layer also trips partial unique index constraint.
     await expect(
       testDb.backupRequest.create({
         data: {
@@ -87,8 +88,8 @@ describe("yedek isteği", () => {
     ).rejects.toThrow();
   });
 
-  it("panel için tarih ve büyük sayı alanlarını serileştirir", async () => {
-    const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
+  it("serializes dates and bigint fields for admin panel", async () => {
+    const unit = await createOrgUnit({ name: "Company", type: "Root" });
     const admin = await createUser(unit.id, { isSystemAdmin: true });
     const request = await testDb.backupRequest.create({
       data: {
@@ -100,7 +101,7 @@ describe("yedek isteği", () => {
         finishedAt: new Date(NOW.getTime() + 10_000),
         fileName: "faaliyet-20260828-120000.tar.gz.enc",
         sizeBytes: BigInt(1024 * 1024),
-        message: "Yedek dosyası hazır.",
+        message: "Backup file ready.",
       },
     });
 
@@ -114,7 +115,7 @@ describe("yedek isteği", () => {
         finishedAt: new Date(NOW.getTime() + 10_000).toISOString(),
         fileName: "faaliyet-20260828-120000.tar.gz.enc",
         sizeBytes: "1048576",
-        message: "Yedek dosyası hazır.",
+        message: "Backup file ready.",
       },
     ]);
   });

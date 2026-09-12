@@ -16,9 +16,9 @@ import {
 } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §13: ekran düzeni her kademede aynıdır, yalnızca kapsam genişler. Akış her
-// zaman görünürlük modülünün filtresiyle başlar; buradaki filtreler yalnızca
-// daraltır (§8.4).
+// §13: screen layout is identical across tiers, only scope expands.
+// Feed always begins with visibility authorization module filter; filters here
+// only narrow the result set (§8.4).
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
@@ -31,26 +31,26 @@ afterAll(async () => {
 });
 
 async function buildCompany() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-  const directorate = await createOrgUnit({ name: "Direktörlük", parentId: root.id });
-  const moldShop = await createOrgUnit({ name: "Kalıphane", parentId: directorate.id });
-  const planning = await createOrgUnit({ name: "Planlama", parentId: directorate.id });
+  const root = await createOrgUnit({ name: "Headquarters", type: "Root" });
+  const directorate = await createOrgUnit({ name: "Directorate", parentId: root.id });
+  const moldShop = await createOrgUnit({ name: "Tooling Workshop", parentId: directorate.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: directorate.id });
 
   const generalManager = await createUser(root.id, {
-    fullName: "Genel Müdür",
+    fullName: "General Manager",
     isUnitManager: true,
   });
   const director = await createUser(directorate.id, {
-    fullName: "Direktör",
+    fullName: "Director",
     isUnitManager: true,
   });
   const manager = await createUser(moldShop.id, {
-    fullName: "Kalıphane Müdürü",
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const worker = await createUser(moldShop.id, { fullName: "Kalıphane Çalışanı" });
+  const worker = await createUser(moldShop.id, { fullName: "Tooling Worker" });
   const peerManager = await createUser(planning.id, {
-    fullName: "Planlama Müdürü",
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
 
@@ -76,7 +76,7 @@ async function write(
       authorOrgUnitId: author.orgUnitId,
       activityDate: new Date(`${day}T00:00:00.000Z`),
       title,
-      description: "Açıklama",
+      description: "Description",
       approvalStatus: "APPROVED",
     },
   });
@@ -90,8 +90,8 @@ async function write(
   return activity;
 }
 
-describe("kapsam başlığı kademeye göre genişler (§13)", () => {
-  it("astı olmayan kişide kapsam yoktur", async () => {
+describe("scope title expands according to tier (§13)", () => {
+  it("user without subordinates has no scope", async () => {
     const { worker } = await buildCompany();
 
     const scope = await describeScope(testDb, {
@@ -103,7 +103,7 @@ describe("kapsam başlığı kademeye göre genişler (§13)", () => {
     expect(scope.personCount).toBe(0);
   });
 
-  it("tek departmanı olan müdürde 'Departmanım'", async () => {
+  it("manager with a single department gets the single-department key", async () => {
     const { manager } = await buildCompany();
 
     const scope = await describeScope(testDb, {
@@ -111,11 +111,11 @@ describe("kapsam başlığı kademeye göre genişler (§13)", () => {
       isSystemAdmin: false,
     });
 
-    expect(scope.label).toBe("Departmanım");
+    expect(scope.label).toBe("scopes.myDepartment");
     expect(scope.personCount).toBe(1);
   });
 
-  it("birden çok departmanı olan direktörde 'Departmanlarım'", async () => {
+  it("director with multiple departments gets the multi-department key", async () => {
     const { director } = await buildCompany();
 
     const scope = await describeScope(testDb, {
@@ -123,10 +123,10 @@ describe("kapsam başlığı kademeye göre genişler (§13)", () => {
       isSystemAdmin: false,
     });
 
-    expect(scope.label).toBe("Departmanlarım");
+    expect(scope.label).toBe("scopes.myDepartments");
   });
 
-  it("kök birimdeki yöneticide 'Tüm şirket'", async () => {
+  it("manager in root unit gets the company-wide key", async () => {
     const { generalManager } = await buildCompany();
 
     const scope = await describeScope(testDb, {
@@ -134,15 +134,15 @@ describe("kapsam başlığı kademeye göre genişler (§13)", () => {
       isSystemAdmin: false,
     });
 
-    expect(scope.label).toBe("Tüm şirket");
+    expect(scope.label).toBe("scopes.entireCompany");
   });
 });
 
-describe("akış görünürlük modülünden beslenir", () => {
-  it("akran müdürün faaliyeti kapsam dışındadır", async () => {
+describe("feed is powered by visibility authorization module", () => {
+  it("excludes peer manager activities from user scope feed", async () => {
     const { manager, worker, peerManager } = await buildCompany();
-    const own = await write(worker, "2026-08-17", "Kalıphane işi");
-    const peerActivity = await write(peerManager, "2026-08-17", "Planlama işi");
+    const own = await write(worker, "2026-08-17", "Tooling task");
+    const peerActivity = await write(peerManager, "2026-08-17", "Planning task");
 
     const { items: feed } = await listScopeActivities(
       testDb,
@@ -156,25 +156,22 @@ describe("akış görünürlük modülünden beslenir", () => {
     expect(ids).not.toContain(peerActivity.id);
   });
 
-  it("onay sürecindeki kayıt üst kademelerin akışında görünmez", async () => {
-    // Onay akışı Sürüm 1'e alınınca (19.08.2026) bu testin iddiası daraldı:
-    // kaydı **aktif onaylayıcı** görür (§8.2), onun üstündekiler görmez.
-    // Akışın varlık sebebi zaten bu.
+  it("excludes activities pending approval from higher management feed", async () => {
+    // Only the active approver sees pending approval activity (§8.2); higher managers do not.
     const { manager, worker, director, generalManager } = await buildCompany();
     const pending = await testDb.activity.create({
       data: {
         authorId: worker.id,
         authorOrgUnitId: worker.orgUnitId,
         activityDate: new Date("2026-08-17T00:00:00.000Z"),
-        title: "Onay bekleyen",
-        description: "Açıklama",
+        title: "Pending approval",
+        description: "Description",
         approvalStatus: "PENDING_APPROVAL",
         approverId: manager.id,
       },
     });
 
-    // Uygun onaylayıcılar listesi üretimde kayıtla birlikte doğuyor
-    // (20.08.2026: birimde birden fazla müdür olabilir).
+    // Approvers list created alongside record.
     await testDb.activityApprover.create({
       data: { activityId: pending.id, userId: manager.id },
     });
@@ -189,8 +186,7 @@ describe("akış görünürlük modülünden beslenir", () => {
       expect(items.map((item) => item.id)).not.toContain(pending.id);
     }
 
-    // Onaylayıcının akışında ise görünür: kendi önündeki iştir ve durumu
-    // ekranda rozetle yazılıdır.
+    // Appears in approver's feed: it is work awaiting their review.
     const { items: feed } = await listScopeActivities(
       testDb,
       { id: manager.id, isSystemAdmin: false },
@@ -201,16 +197,16 @@ describe("akış görünürlük modülünden beslenir", () => {
     expect(feed.map((item) => item.id)).toContain(pending.id);
   });
 
-  it("filtreler yalnızca daraltır, kapsam dışını açamaz", async () => {
+  it("filters only narrow results, cannot expose out-of-scope records", async () => {
     const { manager, peerManager, units } = await buildCompany();
     const peerActivity = await write(
       peerManager,
       "2026-08-17",
-      "Planlama işi",
+      "Planning task",
       units.moldShop.id,
     );
 
-    // Kalıphane muhatap filtresi uygulansa bile akranın kaydı gelmez.
+    // Even if Tooling Shop target filter is applied, peer record is excluded.
     const { items: feed } = await listScopeActivities(
       testDb,
       { id: manager.id, isSystemAdmin: false },
@@ -222,35 +218,35 @@ describe("akış görünürlük modülünden beslenir", () => {
   });
 });
 
-describe("filtreler", () => {
-  it("dönem filtresi eski kayıtları eler", async () => {
+describe("filters", () => {
+  it("period filter filters out older records", async () => {
     const { director, worker } = await buildCompany();
-    const today = await write(worker, "2026-08-17", "Bugünkü");
-    const old = await write(worker, "2026-07-01", "Eski");
+    const today = await write(worker, "2026-08-17", "Today's");
+    const old = await write(worker, "2026-07-01", "Old");
 
-    const { items: bugun } = await listScopeActivities(
+    const { items: todayItems } = await listScopeActivities(
       testDb,
       { id: director.id, isSystemAdmin: false },
       { period: "today" },
       NOW,
     );
-    const { items: tumu } = await listScopeActivities(
+    const { items: all } = await listScopeActivities(
       testDb,
       { id: director.id, isSystemAdmin: false },
       { period: "all" },
       NOW,
     );
 
-    expect(bugun.map((i) => i.id)).toEqual([today.id]);
-    expect(tumu.map((i) => i.id)).toEqual(
+    expect(todayItems.map((i) => i.id)).toEqual([today.id]);
+    expect(all.map((i) => i.id)).toEqual(
       expect.arrayContaining([today.id, old.id]),
     );
   });
 
-  it("kişi filtresi tek yazara indirir", async () => {
+  it("person filter narrows to single author", async () => {
     const { director, worker, manager } = await buildCompany();
-    const workerActivity = await write(worker, "2026-08-17", "Çalışanın işi");
-    await write(manager, "2026-08-17", "Müdürün işi");
+    const workerActivity = await write(worker, "2026-08-17", "Worker's task");
+    await write(manager, "2026-08-17", "Manager's task");
 
     const { items: feed } = await listScopeActivities(
       testDb,
@@ -262,15 +258,15 @@ describe("filtreler", () => {
     expect(feed.map((i) => i.id)).toEqual([workerActivity.id]);
   });
 
-  it("muhatap filtresi etiketlenen kayıtları seçer", async () => {
+  it("target department filter selects tagged activities", async () => {
     const { director, worker, units } = await buildCompany();
     const tagged = await write(
       worker,
       "2026-08-17",
-      "Planlamayı ilgilendiren",
+      "Relevant to planning",
       units.planning.id,
     );
-    await write(worker, "2026-08-17", "Etiketsiz");
+    await write(worker, "2026-08-17", "Untagged");
 
     const { items: feed } = await listScopeActivities(
       testDb,
@@ -283,11 +279,11 @@ describe("filtreler", () => {
   });
 });
 
-describe("yönetim görünümü", () => {
-  it("yöneticinin kendi kaydını dışarıda bırakır ve listeyle sayaç aynı kümeyi kullanır", async () => {
+describe("management view", () => {
+  it("excludes manager's own record and list and counter use same set", async () => {
     const { manager, worker } = await buildCompany();
-    const workerActivity = await write(worker, "2026-08-17", "Çalışanın işi");
-    const managerActivity = await write(manager, "2026-08-17", "Müdürün işi");
+    const workerActivity = await write(worker, "2026-08-17", "Worker's task");
+    const managerActivity = await write(manager, "2026-08-17", "Manager's task");
     const selection = { subordinates: [worker.id], managedOnly: true };
 
     const viewer = { id: manager.id, isSystemAdmin: false };
@@ -302,13 +298,12 @@ describe("yönetim görünümü", () => {
   });
 });
 
-describe("okundu rozeti", () => {
-  it("kişinin kendi okuması işaretlenir, başkasınınki görünmez", async () => {
+describe("read receipt badge", () => {
+  it("user's own read receipt is marked, other's is not visible", async () => {
     const { director, manager, worker } = await buildCompany();
-    const activity = await write(worker, "2026-08-17", "Kalıphane işi");
+    const activity = await write(worker, "2026-08-17", "Tooling work");
 
-    // Müdür okumuş olsun; direktörün akışında hâlâ okunmamış görünmeli
-    // (§10.3: yönetici ekibinin okumasını göremez).
+    // Manager read it; should still appear unread in director's feed (§10.3).
     await testDb.readReceipt.create({
       data: { activityId: activity.id, userId: manager.id },
     });
@@ -331,26 +326,26 @@ describe("okundu rozeti", () => {
   });
 });
 
-describe("okunmamış dikkat filtresi", () => {
-  it("liste ve sayaç aynı açık ve okunmamış kayıt kümesini kullanır", async () => {
+describe("unread attention filter", () => {
+  it("list and counter use same set of open and unread records", async () => {
     const { manager, worker, peerManager } = await buildCompany();
-    const oldest = await write(worker, "2026-08-10", "Eski okunmamış");
-    const newest = await write(worker, "2026-08-17", "Yeni okunmamış");
-    const read = await write(worker, "2026-08-17", "Okunmuş kayıt");
+    const oldest = await write(worker, "2026-08-10", "Old unread");
+    const newest = await write(worker, "2026-08-17", "New unread");
+    const read = await write(worker, "2026-08-17", "Read record");
     const rejectedReason = await createApprovalReason("REJECTED");
     const rejected = await createActivity(worker, {
-      title: "Reddedilen kayıt",
+      title: "Rejected record",
       approvalStatus: "REJECTED",
       approverId: manager.id,
       approvalReasonId: rejectedReason.id,
       approvalReasonKind: "REJECTED",
     });
     const cancelled = await createActivity(worker, {
-      title: "İptal edilen kayıt",
+      title: "Cancelled record",
       approvalStatus: "CANCELLED",
     });
-    const own = await write(manager, "2026-08-17", "Yöneticinin kendi kaydı");
-    const peer = await write(peerManager, "2026-08-17", "Akran kaydı");
+    const own = await write(manager, "2026-08-17", "Manager's own record");
+    const peer = await write(peerManager, "2026-08-17", "Peer record");
 
     await testDb.readReceipt.create({
       data: { activityId: read.id, userId: manager.id },
@@ -381,8 +376,7 @@ describe("okunmamış dikkat filtresi", () => {
     expect(ids).not.toContain(cancelled.id);
     expect(ids).not.toContain(peer.id);
 
-    // Yönetim seçimi olmasa bile yöneticinin kendi kaydı okunmamış iş
-    // kuyruğuna girmez; bunun sebebi yalnızca yazar seçimi değildir.
+    // Even without managed selection, manager's own activity does not enter unread work queue.
     const allVisible = await listScopeActivities(
       testDb,
       viewer,
@@ -393,9 +387,9 @@ describe("okunmamış dikkat filtresi", () => {
     expect(allVisible.items.map((item) => item.id)).not.toContain(own.id);
   });
 
-  it("aynı faaliyet bir kullanıcıda okunmuşken diğerinde okunmamış kalır", async () => {
+  it("same activity read by one user remains unread for another", async () => {
     const { director, manager, worker } = await buildCompany();
-    const activity = await write(worker, "2026-08-17", "Kişiye özel okunmamış");
+    const activity = await write(worker, "2026-08-17", "Person specific unread");
 
     await testDb.readReceipt.create({
       data: { activityId: activity.id, userId: manager.id },
@@ -425,8 +419,8 @@ describe("okunmamış dikkat filtresi", () => {
   });
 });
 
-describe("filtre seçenekleri", () => {
-  it("kişi listesi yalnızca kapsamdakileri içerir", async () => {
+describe("filter options", () => {
+  it("person list only contains users within scope", async () => {
     const { manager, worker, peerManager } = await buildCompany();
 
     const people = await listScopePeople(testDb, {
@@ -441,46 +435,42 @@ describe("filtre seçenekleri", () => {
   });
 });
 
-// Denetim (18.08.2026, FAZ 4 bulgu 11): dönem sınırı UTC takvim
-// gününden üretiliyordu. Şirket saati Europe/Istanbul (UTC+3) olduğu için
-// gece yarısından sonraki ilk üç saatte "Bugün" akışı önceki günü gösteriyor,
-// aynı sayfadaki günlük sayaçla çelişiyordu.
-describe("dönem sınırı şirket saatinden hesaplanır", () => {
-  it("İstanbul'da gece yarısı geçince 'bugün' yeni gündür", () => {
-    // 17 Ağustos 21:30 UTC = 18 Ağustos 00:30 İstanbul.
+describe("period boundary computed from company timezone", () => {
+  it("advances 'today' to new day once midnight passes in Istanbul", () => {
+    // August 17 21:30 UTC = August 18 00:30 Istanbul.
     const start = periodStart("today", new Date("2026-08-17T21:30:00.000Z"));
 
     expect(start?.toISOString().slice(0, 10)).toBe("2026-08-18");
   });
 
-  it("gündüz saatlerinde 'bugün' aynı gündür", () => {
+  it("keeps 'today' as same day during daytime hours", () => {
     const start = periodStart("today", new Date("2026-08-18T09:00:00.000Z"));
 
     expect(start?.toISOString().slice(0, 10)).toBe("2026-08-18");
   });
 
-  it("'bu hafta' kayan yedi gün değil, Pazartesi başlar", () => {
-    // 19 Ağustos 2026 Çarşamba; haftanın başı 17 Ağustos Pazartesi.
+  it("'this week' starts on Monday, not sliding 7 days", () => {
+    // August 19, 2026 Wednesday; start of week is August 17 Monday.
     const start = periodStart("week", new Date("2026-08-19T09:00:00.000Z"));
 
     expect(start?.toISOString().slice(0, 10)).toBe("2026-08-17");
   });
 
-  it("Pazar günü hâlâ aynı haftadadır", () => {
-    // 23 Ağustos 2026 Pazar.
+  it("Sunday is still in the same week", () => {
+    // August 23, 2026 Sunday.
     const start = periodStart("week", new Date("2026-08-23T09:00:00.000Z"));
 
     expect(start?.toISOString().slice(0, 10)).toBe("2026-08-17");
   });
 
-  it("Pazartesi gece yarısı yeni hafta başlar", () => {
-    // 16 Ağustos 21:30 UTC = 17 Ağustos 00:30 İstanbul, Pazartesi.
+  it("Monday midnight starts new week", () => {
+    // August 16 21:30 UTC = August 17 00:30 Istanbul, Monday.
     const start = periodStart("week", new Date("2026-08-16T21:30:00.000Z"));
 
     expect(start?.toISOString().slice(0, 10)).toBe("2026-08-17");
   });
 
-  it("'tümü' dönem sınırı koymaz", () => {
+  it("'all' sets no period boundary", () => {
     expect(periodStart("all", new Date("2026-08-18T09:00:00.000Z"))).toBeNull();
   });
 });

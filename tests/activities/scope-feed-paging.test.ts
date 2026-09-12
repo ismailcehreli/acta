@@ -9,10 +9,10 @@ import { decodeCursor, encodeCursor } from "@/server/activities/feed-cursor";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Denetim (18.08.2026, FAZ 4 bulgu 11): "Tümü" akışı `take: 100` ile
-// sessizce kesiliyordu; 101. kayıttan sonrası hiçbir yoldan erişilemiyordu.
-// Adı "Tümü" olan bir görünümün kayıtların çoğunu saklaması, eksik olduğunu
-// söylememesinden daha kötü.
+// Audit (2026-08-18, PHASE 4 finding 11): "All" feed was silently truncated
+// with `take: 100`; records beyond 101 were unreachable by any path.
+// For a view named "All" to hide most records without indicating truncation
+// was worse than having no feed.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
@@ -25,19 +25,19 @@ afterAll(async () => {
 });
 
 async function companyWith(activityCount: number) {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-  const unit = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
+  const root = await createOrgUnit({ name: "Headquarters", type: "Root" });
+  const unit = await createOrgUnit({ name: "Tooling Workshop", parentId: root.id });
   const director = await createUser(root.id, {
-    fullName: "Direktör",
+    fullName: "Director",
     isUnitManager: true,
   });
   const author = await createUser(unit.id, {
-    fullName: "Müdür",
+    fullName: "Manager",
     isUnitManager: true,
   });
 
-  // Aynı güne düşen kayıtlar bilerek üretilir: sıralamanın ikinci ve üçüncü
-  // alanı (createdAt, id) olmasaydı imleç sayfa sınırında satır atlardı.
+  // Activities falling on the same day are intentionally generated: without
+  // secondary and tertiary sort fields (createdAt, id), cursor would skip rows at page boundaries.
   await testDb.activity.createMany({
     data: Array.from({ length: activityCount }, (_, i) => ({
       authorId: author.id,
@@ -45,8 +45,8 @@ async function companyWith(activityCount: number) {
       activityDate: new Date(
         Date.UTC(2026, 7, 17 - Math.floor(i / 10)),
       ),
-      title: `Faaliyet ${i + 1}`,
-      description: "Açıklama",
+      title: `Activity ${i + 1}`,
+      description: "Description",
       approvalStatus: "APPROVED" as const,
       createdAt: new Date(NOW.getTime() - i * 1_000),
       updatedAt: NOW,
@@ -56,10 +56,10 @@ async function companyWith(activityCount: number) {
   return { director, author };
 }
 
-async function tumSayfalar(viewerId: string, limit: number) {
+async function allPages(viewerId: string, limit: number) {
   const ids: string[] = [];
   let cursor: FeedCursor | null = null;
-  let sayfa = 0;
+  let pageCount = 0;
 
   do {
     const page = await listScopeActivities(
@@ -71,35 +71,35 @@ async function tumSayfalar(viewerId: string, limit: number) {
     );
     ids.push(...page.items.map((item) => item.id));
     cursor = page.nextCursor;
-    sayfa += 1;
-    if (sayfa > 100) throw new Error("sayfalama bitmiyor");
+    pageCount += 1;
+    if (pageCount > 100) throw new Error("pagination does not terminate");
   } while (cursor);
 
-  return { ids, sayfa };
+  return { ids, pageCount };
 }
 
-describe("kapsam akışı sayfalaması", () => {
-  it("101 kayıtta hiçbiri erişilemez kalmaz", async () => {
+describe("scope feed pagination", () => {
+  it("leaves no record inaccessible across 101 activities", async () => {
     const { director } = await companyWith(101);
 
-    const { ids } = await tumSayfalar(director.id, 25);
+    const { ids } = await allPages(director.id, 25);
 
     expect(ids).toHaveLength(101);
-    // Tekrar eden kayıt yok: imleç aynı satırı iki kez vermiyor.
+    // No duplicate records: cursor does not return same row twice.
     expect(new Set(ids).size).toBe(101);
   });
 
-  it("sayfa boyutu ne olursa olsun aynı sırayı verir", async () => {
+  it("produces identical order regardless of page size", async () => {
     const { director } = await companyWith(60);
 
-    const tekSayfa = await tumSayfalar(director.id, 200);
-    const kucukSayfa = await tumSayfalar(director.id, 7);
+    const singlePage = await allPages(director.id, 200);
+    const smallPage = await allPages(director.id, 7);
 
-    expect(tekSayfa.sayfa).toBe(1);
-    expect(kucukSayfa.ids).toEqual(tekSayfa.ids);
+    expect(singlePage.pageCount).toBe(1);
+    expect(smallPage.ids).toEqual(singlePage.ids);
   });
 
-  it("liste bitince imleç boş döner", async () => {
+  it("returns null cursor when list is exhausted", async () => {
     const { director } = await companyWith(5);
 
     const page = await listScopeActivities(
@@ -114,11 +114,11 @@ describe("kapsam akışı sayfalaması", () => {
     expect(page.nextCursor).toBeNull();
   });
 
-  it("bozuk imleç listenin başına döner, hata vermez", async () => {
+  it("falls back to head of list on corrupt cursor without throwing error", async () => {
     const { director } = await companyWith(3);
 
-    for (const bozuk of ["", "abc", Buffer.from("{}").toString("base64url")]) {
-      expect(decodeCursor(bozuk)).toBeNull();
+    for (const corrupted of ["", "abc", Buffer.from("{}").toString("base64url")]) {
+      expect(decodeCursor(corrupted)).toBeNull();
     }
 
     const page = await listScopeActivities(
@@ -131,30 +131,30 @@ describe("kapsam akışı sayfalaması", () => {
     expect(page.items).toHaveLength(3);
   });
 
-  it("imleç adres satırına yazılıp geri okunabilir", async () => {
+  it("cursor can be serialized into query string and restored", async () => {
     const { director } = await companyWith(30);
 
-    const ilk = await listScopeActivities(
+    const firstPage = await listScopeActivities(
       testDb,
       { id: director.id, isSystemAdmin: false },
       { period: "all" },
       NOW,
       { limit: 10 },
     );
-    expect(ilk.nextCursor).not.toBeNull();
+    expect(firstPage.nextCursor).not.toBeNull();
 
-    const cozulmus = decodeCursor(encodeCursor(ilk.nextCursor!));
-    expect(cozulmus).toEqual(ilk.nextCursor);
+    const decoded = decodeCursor(encodeCursor(firstPage.nextCursor!));
+    expect(decoded).toEqual(firstPage.nextCursor);
 
-    const ikinci = await listScopeActivities(
+    const secondPage = await listScopeActivities(
       testDb,
       { id: director.id, isSystemAdmin: false },
       { period: "all" },
       NOW,
-      { limit: 10, cursor: cozulmus },
+      { limit: 10, cursor: decoded },
     );
 
-    const ilkIdler = ilk.items.map((i) => i.id);
-    expect(ikinci.items.some((item) => ilkIdler.includes(item.id))).toBe(false);
+    const firstIds = firstPage.items.map((i) => i.id);
+    expect(secondPage.items.some((item) => firstIds.includes(item.id))).toBe(false);
   });
 });

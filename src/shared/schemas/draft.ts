@@ -4,32 +4,29 @@ import { isCalendarDay } from "./iso-date";
 
 import { MAX_TARGET_DEPARTMENTS } from "./activity";
 
-// Faaliyet taslağı girdileri (21.08.2026).
+// Activity-draft input.
 //
-// **Taslak doğrulaması gevşektir ve öyle olmalı.** Faaliyet kaydı zorunlu
-// alan ister; taslak yarım kalmış bir formdur — başlığı boş, açıklaması tek
-// kelime, departmanı seçilmemiş olabilir. Sıkı doğrulama, otomatik kaydetmeyi
-// tam da işe yarayacağı anda (metin henüz yarımken) reddederdi.
+// Draft validation is intentionally loose. A draft is an unfinished form:
+// its title or description may be empty and no department may be selected.
 //
-// Gevşeklik **sınırsızlık değil**: uzunluk sınırları faaliyetle aynı, çünkü
-// aynı sütunlara yazılacak. Taslak gönderilirken faaliyetin kendi şeması
-// yeniden ve tam olarak uygulanır.
+// The same length ceilings as activities still apply because drafts use the
+// same columns. The activity schema is applied fully when a draft is sent.
 
 export const saveDraftSchema = z.object({
-  /** Var olan taslak güncelleniyorsa kimliği; yoksa yenisi açılır. */
+  /** Existing draft ID when updating; omitted when creating a new draft. */
   id: z.string().uuid().optional(),
   activityDate: z
     .string()
-    .refine(isCalendarDay, "Tarih biçimi geçersiz"),
-  title: z.string().max(150, "Başlık en fazla 150 karakter olabilir"),
+    .refine(isCalendarDay, "Invalid date format"),
+  title: z.string().max(150, "Title must be 150 characters or fewer"),
   description: z
     .string()
-    .max(10_000, "Açıklama en fazla 10.000 karakter olabilir"),
+    .max(10_000, "Description must be 10,000 characters or fewer"),
   targetDepartmentIds: z
     .array(z.string().uuid())
     .max(MAX_TARGET_DEPARTMENTS),
   openFollowUp: z.boolean().default(false),
-  /** Kullanıcı bilerek mi kaydetti? Otomatik kaydetmede `false`. */
+  /** Whether the user explicitly saved it; `false` for autosaves. */
   savedManually: z.boolean().default(false),
 });
 

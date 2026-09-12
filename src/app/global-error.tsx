@@ -1,13 +1,34 @@
 "use client";
 
-// Kök yerleşimin kendisi çöktüğünde çalışan son çare (Görev 10.1).
-//
-// `error.tsx` kök yerleşimin içinde çizilir; yerleşim çökerse o da çizilemez.
-// Bu dosya **kendi `<html>` ve `<body>` etiketlerini** üretmek zorunda ve
-// hiçbir şeye bağımlı olamaz — tasarım belirteçleri de yüklenmemiş olabilir,
-// bu yüzden renkler burada elle yazıldı — ama **sistemin renkleri** olarak:
-// sıcak mineral zemin ve pas rengi eylem, oklch değerleriyle doğrudan.
-// Kullanıcının bomboş bir beyaz ekran görmemesi için var.
+import { useMemo, useSyncExternalStore } from "react";
+
+import {
+  createTranslator,
+  DEFAULT_LOCALE,
+  isSupportedLocale,
+  LOCALE_COOKIE_NAME,
+  LOCALE_LANGUAGE_TAGS,
+  type Locale,
+} from "@/shared/i18n";
+
+function readLocaleCookie(): Locale {
+  if (typeof document === "undefined") return DEFAULT_LOCALE;
+
+  const cookieValue = document.cookie
+    .split("; ")
+    .find((cookie) => cookie.startsWith(`${LOCALE_COOKIE_NAME}=`))
+    ?.split("=")[1];
+
+  return isSupportedLocale(cookieValue) ? cookieValue : DEFAULT_LOCALE;
+}
+
+function subscribeToLocaleCookie(): () => void {
+  return () => undefined;
+}
+
+function readServerLocale(): Locale {
+  return DEFAULT_LOCALE;
+}
 
 export default function GlobalError({
   error,
@@ -16,8 +37,15 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const locale = useSyncExternalStore(
+    subscribeToLocaleCookie,
+    readLocaleCookie,
+    readServerLocale,
+  );
+  const t = useMemo(() => createTranslator(locale), [locale]);
+
   return (
-    <html lang="tr">
+    <html lang={LOCALE_LANGUAGE_TAGS[locale]}>
       <body
         style={{
           margin: 0,
@@ -41,14 +69,13 @@ export default function GlobalError({
               margin: "0 0 0.5rem",
             }}
           >
-            Hata
+            {t("screens.errors.marker")}
           </p>
           <h1 style={{ fontSize: "1.4rem", fontWeight: 600, margin: "0 0 0.5rem" }}>
-            Uygulama açılamadı
+            {t("screens.errors.unexpectedTitle")}
           </h1>
           <p style={{ fontSize: "0.875rem", color: "oklch(0.455 0.016 60)", margin: "0 0 1.5rem", lineHeight: 1.6 }}>
-            Beklenmeyen bir hata oluştu. Sorun sürerse sistem yöneticinize
-            aşağıdaki hata kodunu iletin.
+            {t("screens.errors.globalDescription")}
           </p>
 
           <button
@@ -66,12 +93,12 @@ export default function GlobalError({
               cursor: "pointer",
             }}
           >
-            Tekrar dene
+            {t("screens.errors.retry")}
           </button>
 
           {error.digest ? (
             <p style={{ fontSize: "0.75rem", color: "oklch(0.565 0.014 62)", marginTop: "1.5rem", fontFamily: "ui-monospace, monospace" }}>
-              Hata kodu: {error.digest}
+              {t("screens.errors.errorCode", { code: error.digest })}
             </p>
           ) : null}
         </main>

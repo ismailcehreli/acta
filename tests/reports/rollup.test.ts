@@ -7,7 +7,7 @@ interface Counters {
 }
 
 describe("rollupByOrgUnit", () => {
-  it("kök, alt birim ve boş sayaçları bağımsız olarak toplar", () => {
+  it("aggregates root, subunit, and empty counters independently", () => {
     const units = [
       { id: "root", parentId: null },
       { id: "child", parentId: "root" },

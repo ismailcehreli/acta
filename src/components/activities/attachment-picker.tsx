@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react";
 
-import { ALLOWED_TYPES_LABEL } from "@/shared/attachments";
+import { useLocale, useTranslations } from "@/components/i18n/provider";
+import { formatFileSize } from "@/shared/format/locale";
 
 export const ATTACHMENT_ACCEPT =
   "image/jpeg,image/png,image/gif,image/webp,application/pdf,.doc,.docx,.xls,.xlsx,video/mp4,video/webm,video/quicktime";
@@ -13,17 +14,6 @@ export interface AttachmentPickerItem {
   sizeBytes: number;
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-}
-
-/**
- * Dosya seçici (§5.7). Tarayıcı aynı input'ta ikinci seçimde önceki seçimi
- * değiştirdiği için seçilen dosyalar burada tutulur ve input'un FileList'i
- * her seçimden sonra yeniden kurulur.
- */
 export function AttachmentPicker({
   existingAttachments = [],
   maxCount,
@@ -33,6 +23,8 @@ export function AttachmentPicker({
   maxCount: number;
   maxSizeBytes: number;
 }) {
+  const locale = useLocale();
+  const t = useTranslations();
   const inputRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +41,7 @@ export function AttachmentPicker({
   const selectFiles = (picked: FileList | null) => {
     if (!picked) return;
 
-    const kalan = Math.max(
+    const remaining = Math.max(
       0,
       maxCount - existingAttachments.length - selected.length,
     );
@@ -57,21 +49,20 @@ export function AttachmentPicker({
     const oversized = files.find((file) => file.size > maxSizeBytes);
     if (oversized) {
       setError(
-        '"' +
-          oversized.name +
-          '" dosyası ' +
-          formatSize(maxSizeBytes) +
-          " sınırını aşıyor.",
+        t("activities.attachmentTooLarge", {
+          name: oversized.name,
+          size: formatFileSize(maxSizeBytes, locale),
+        }),
       );
-    } else if (files.length > kalan) {
-      setError("En fazla " + maxCount + " dosya eklenebilir.");
+    } else if (files.length > remaining) {
+      setError(t("activities.attachmentCountExceeded", { count: maxCount }));
     } else {
       setError(null);
     }
 
     const accepted = files
       .filter((file) => file.size <= maxSizeBytes)
-      .slice(0, kalan);
+      .slice(0, remaining);
     const next = [...selected, ...accepted];
     setSelected(next);
     syncInput(next);
@@ -88,7 +79,7 @@ export function AttachmentPicker({
   const full = total >= maxCount;
 
   return (
-    <div className="flex flex-col gap-2.5" data-test="ek-secici">
+    <div className="flex flex-col gap-2.5" data-test="attachment-picker">
       <input
         ref={inputRef}
         id="files"
@@ -101,15 +92,17 @@ export function AttachmentPicker({
         className="block w-full text-[length:var(--text-sm)] text-muted file:mr-3 file:rounded-(--radius-sm) file:border file:border-line-strong file:bg-surface file:px-3 file:py-1.5 file:text-[length:var(--text-sm)] file:font-medium file:text-ink hover:file:bg-inset disabled:opacity-45"
       />
 
-      <p data-test="ek-sayac" className="text-[length:var(--text-xs)] text-muted">
-        {ALLOWED_TYPES_LABEL}. Seçim sayısı: {total}/{maxCount}. Dosya başına{" "}
-        {formatSize(maxSizeBytes)}.
+      <p data-test="attachment-count" className="text-[length:var(--text-xs)] text-muted">
+        {t("activities.attachmentTypes")}. {t("activities.selectedFiles", {
+          selected: total,
+          max: maxCount,
+        })} {t("activities.maximumPerFile", { size: formatFileSize(maxSizeBytes, locale) })}
       </p>
 
       {existingAttachments.length > 0 || selected.length > 0 ? (
         <ul
           className="flex flex-col gap-1 text-[length:var(--text-sm)]"
-          data-test="ek-listesi"
+          data-test="attachment-list"
         >
           {existingAttachments.map((file) => (
             <li
@@ -118,7 +111,7 @@ export function AttachmentPicker({
             >
               <span className="min-w-0 truncate">{file.originalName}</span>
               <span className="mono shrink-0 text-[length:var(--text-xs)] text-faint">
-                {formatSize(file.sizeBytes)}
+                {formatFileSize(file.sizeBytes, locale)}
               </span>
             </li>
           ))}
@@ -130,15 +123,15 @@ export function AttachmentPicker({
               <span className="min-w-0 truncate">{file.name}</span>
               <span className="flex shrink-0 items-center gap-2">
                 <span className="mono text-[length:var(--text-xs)] text-faint">
-                  {formatSize(file.size)}
+                  {formatFileSize(file.size, locale)}
                 </span>
                 <button
                   type="button"
                   onClick={() => removeSelected(index)}
-                  aria-label={file.name + " ekini kaldır"}
+                  aria-label={t("activities.removeAttachment") + ": " + file.name}
                   className="text-[length:var(--text-xs)] text-muted underline-offset-4 hover:text-danger hover:underline"
                 >
-                  kaldır
+                  {t("common.remove")}
                 </button>
               </span>
             </li>
@@ -148,7 +141,7 @@ export function AttachmentPicker({
 
       {full ? (
         <p className="text-[length:var(--text-xs)] text-muted">
-          Dosya sınırına ulaşıldı. Yeni ek için seçili bir dosyayı kaldırın.
+          {t("activities.attachmentLimitReached")}
         </p>
       ) : null}
       {error ? (

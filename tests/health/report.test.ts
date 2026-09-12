@@ -12,7 +12,7 @@ function fixedClock(startMs: number, stepMs = 0) {
 }
 
 describe("buildHealthReport", () => {
-  it("veritabanı yanıt verirse ok döner ve gecikmeyi ölçer", async () => {
+  it("returns ok and measures latency when database responds", async () => {
     const report = await buildHealthReport({
       pingDatabase: async () => [{ "?column?": 1 }],
       now: fixedClock(Date.UTC(2026, 7, 17, 12, 0, 0), 7),
@@ -25,10 +25,10 @@ describe("buildHealthReport", () => {
     expect(report.checkedAt).toBe("2026-08-17T12:00:00.014Z");
   });
 
-  it("veritabanı hata verirse down döner ve hatayı taşır", async () => {
+  it("returns down and propagates error when database fails", async () => {
     const report = await buildHealthReport({
       pingDatabase: async () => {
-        throw new Error("bağlantı reddedildi");
+        throw new Error("connection refused");
       },
       now: fixedClock(Date.UTC(2026, 7, 17, 12, 0, 0)),
     });
@@ -36,13 +36,11 @@ describe("buildHealthReport", () => {
     expect(report.status).toBe("down");
     expect(report.database.status).toBe("down");
     expect(report.database.latencyMs).toBeNull();
-    expect(report.database.error).toBe("bağlantı reddedildi");
+    expect(report.database.error).toBe("connection refused");
   });
 
-  // Ölçüm sağlayıcısı verilmezse alanlar `placeholder` kalır: izleme tarafı
-  // ölçülmemiş bir değeri ölçülmüş sanmasın. Gerçek ölçümler Görev 5.6'da
-  // bağlandı ve `tests/jobs/status.test.ts` içinde sınanıyor.
-  it("ölçüm sağlayıcısı yoksa alanlar placeholder kalır", async () => {
+  // If no metric provider is given, fields remain placeholder so monitoring does not mistake unmeasured for measured.
+  it("fields remain placeholder when no metric provider is supplied", async () => {
     const report = await buildHealthReport({
       pingDatabase: async () => 1,
       now: fixedClock(Date.UTC(2026, 7, 17, 12, 0, 0)),
@@ -61,12 +59,12 @@ describe("buildHealthReport", () => {
   });
 });
 
-describe("dışarıya verilen rapor", () => {
-  it("veritabanı hata metnini dışarı sızdırmaz", async () => {
+describe("public health report", () => {
+  it("does not leak database error message externally", async () => {
     const report = await buildHealthReport({
       pingDatabase: async () => {
         throw new Error(
-          "Can't reach database server at `postgres:5432` (kullanıcı: faaliyet)",
+          "Can't reach database server at `postgres:5432` (user: activity)",
         );
       },
       now: fixedClock(Date.UTC(2026, 7, 17, 12, 0, 0)),
@@ -77,7 +75,7 @@ describe("dışarıya verilen rapor", () => {
     expect(report.database.error).toContain("postgres:5432");
     expect(JSON.stringify(publicReport)).not.toContain("postgres:5432");
     expect(publicReport.database).not.toHaveProperty("error");
-    // Durum bilgisi yine dışarı verilir; izleme sistemi arızayı görebilmeli.
+    // Status is still exposed publicly so monitoring systems detect downtime.
     expect(publicReport.status).toBe("down");
   });
 });

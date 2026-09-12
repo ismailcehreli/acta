@@ -1,27 +1,31 @@
-import Link from "next/link";
+"use client";
 
-// Dağılım — yatay oran çubukları.
+import Link from "next/link";
+import { useLocale } from "@/components/i18n/provider";
+import { formatNumber, formatPercentage } from "@/shared/format/locale";
+
+
 //
-// Pasta grafiği bilerek yok: beş dilimli bir pastada iki dilimi gözle
-// karşılaştırmak neredeyse imkânsızdır. Yatay çubuklar ortak bir tabana
-// hizalanır ve okuma tek bakışta olur.
+
+
+
 //
-// Her satır sayıyı da yazar: çubuk bir sezgi, sayı bir bilgidir. Renk tek
-// taşıyıcı değil — etiket ve sayı zaten metin.
+
+
 
 export interface DistributionRow {
   key: string;
   label: string;
   count: number;
-  /** Etiketin altında duran kısa bağlam ("3 kişi · bugün 2 yazdı" gibi). */
+
   hint?: string;
-  /** Satır tıklanabilirse gidilecek adres. */
+
   href?: string;
-  /** Vurgu tonu; verilmezse nötr. */
+
   tone?: "primary" | "success" | "waiting" | "correction" | "danger" | "cancelled";
 }
 
-const TON: Record<string, string> = {
+const TONE_CLASSES: Record<string, string> = {
   primary: "bg-primary",
   success: "bg-success",
   waiting: "bg-waiting",
@@ -32,26 +36,27 @@ const TON: Record<string, string> = {
 
 export function DistributionBars({
   rows,
-  emptyText = "Bu aralıkta kayıt yok.",
+  emptyText,
 }: {
   rows: DistributionRow[];
-  emptyText?: string;
+  emptyText: string;
 }) {
-  const toplam = rows.reduce((acc, row) => acc + row.count, 0);
+  const locale = useLocale();
+  const total = rows.reduce((acc, row) => acc + row.count, 0);
 
-  if (toplam === 0) {
+  if (total === 0) {
     return (
       <p className="py-6 text-[length:var(--text-sm)] text-muted">{emptyText}</p>
     );
   }
 
-  const enBuyuk = Math.max(...rows.map((row) => row.count));
+  const maxCount = Math.max(...rows.map((row) => row.count));
 
   return (
     <ul className="flex flex-col gap-2.5">
       {rows.map((row) => {
-        const oran = Math.round((row.count / toplam) * 100);
-        const govde = (
+        const percentage = Math.round((row.count / total) * 100);
+        const content = (
           <>
             <span className="flex items-baseline justify-between gap-3">
               <span className="min-w-0 truncate text-[length:var(--text-sm)] text-ink">
@@ -63,8 +68,8 @@ export function DistributionBars({
                 ) : null}
               </span>
               <span className="shrink-0 text-[length:var(--text-sm)] text-muted">
-                <span className="tabular font-semibold text-ink">{row.count}</span>
-                <span className="ms-1.5 tabular text-faint">%{oran}</span>
+                <span className="tabular font-semibold text-ink">{formatNumber(row.count, locale)}</span>
+                <span className="ms-1.5 tabular text-faint">{formatPercentage(percentage, locale)}</span>
               </span>
             </span>
             <span
@@ -72,8 +77,8 @@ export function DistributionBars({
               className="mt-1 block h-1.5 bg-inset"
             >
               <span
-                className={`block h-full ${TON[row.tone ?? ""] ?? "bg-line-strong"}`}
-                style={{ width: `${Math.max(2, (row.count / enBuyuk) * 100)}%` }}
+                className={`block h-full ${TONE_CLASSES[row.tone ?? ""] ?? "bg-line-strong"}`}
+                style={{ width: `${Math.max(2, (row.count / maxCount) * 100)}%` }}
               />
             </span>
           </>
@@ -86,10 +91,10 @@ export function DistributionBars({
                 href={row.href}
                 className="block rounded-(--radius-xs) py-0.5 transition-colors duration-(--duration-fast) hover:bg-surface-hover"
               >
-                {govde}
+                {content}
               </Link>
             ) : (
-              <div className="py-0.5">{govde}</div>
+              <div className="py-0.5">{content}</div>
             )}
           </li>
         );

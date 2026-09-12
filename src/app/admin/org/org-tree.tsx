@@ -1,31 +1,22 @@
 import { Badge } from "@/components/ui/badge";
 import type { OrgUnitNode } from "@/server/org/tree";
+import { getTranslations } from "@/server/i18n/server";
+import type { TranslateFunction } from "@/shared/i18n";
 
 import { OrgUnitReactivate } from "./org-unit-actions";
 import { OrgUnitEdit } from "./org-unit-edit";
 import type { UnitOption } from "./org-form";
-
-// Ağacın okunur gösterimi. Kademe adları veriden gelir, koda gömülmez (İlke 1).
-//
-// Satır iki bloktan oluşur: solda kimlik (ad, kademe, rozetler), sağda
-// işlemler. Girinti çizgisi hangi birimin hangisinin altında olduğunu gösterir;
-// eskiden yalnız boşlukla veriliyordu ve derin ağaçta kayboluyordu.
-//
-// Düzenleme formu satırın altında, tam genişlikte açılır; bu yüzden satır kabı
-// dikey bir yığın ve işlem kümesi ile form aynı istemci bileşeninden gelir.
-
 function OrgUnitRow({
   node,
   options,
+  t,
 }: {
   node: OrgUnitNode;
   options: UnitOption[];
+  t: TranslateFunction;
 }) {
   return (
-    // Satırın adı öznitelikte taşınır. Metinle satır seçmek yanıltıcı:
-    // "Taşı…" açılır listesi **diğer** birimlerin adlarını da içeriyor, bu
-    // yüzden metne göre süzen bir seçici yanlış satırı bulabiliyor.
-    <li data-birim={node.name}>
+    <li data-unit={node.name}>
       <div className="rounded-(--radius-sm) px-2 py-2 hover:bg-surface-hover">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -34,22 +25,34 @@ function OrgUnitRow({
               {node.type}
             </span>
 
-            {node.isActive ? null : <Badge>pasif</Badge>}
+            {node.isActive ? null : (
+              <Badge>{t("screens.organization.inactive")}</Badge>
+            )}
 
             {node.activeUserCount > 0 ? (
               <span className="text-[length:var(--text-xs)] text-muted tabular">
-                {node.activeUserCount} kullanıcı
+                {t("screens.organization.userCount", {
+                  count: node.activeUserCount,
+                })}
               </span>
             ) : null}
 
             {node.requiresApproval ? (
-              <Badge tone="waiting">onaya tabi</Badge>
+              <Badge data-test="approval-required" tone="waiting">
+                {t("screens.organization.approvalRequired")}
+              </Badge>
             ) : null}
 
-            {node.autoFlowsUp ? null : <Badge>yukarı akmaz</Badge>}
+            {node.autoFlowsUp ? null : (
+              <Badge>{t("screens.organization.doesNotFlowUp")}</Badge>
+            )}
 
             {node.attentionGroupId ? (
-              <Badge tone="primary">dikkat grubu: {node.attentionGroupId}</Badge>
+              <Badge tone="primary">
+                {t("screens.organization.attentionGroupBadge", {
+                  group: node.attentionGroupId,
+                })}
+              </Badge>
             ) : null}
           </div>
 
@@ -74,7 +77,7 @@ function OrgUnitRow({
       {node.children.length > 0 ? (
         <ul className="ml-3 border-l border-line pl-4">
           {node.children.map((child) => (
-            <OrgUnitRow key={child.id} node={child} options={options} />
+            <OrgUnitRow key={child.id} node={child} options={options} t={t} />
           ))}
         </ul>
       ) : null}
@@ -82,17 +85,18 @@ function OrgUnitRow({
   );
 }
 
-export function OrgTree({
+export async function OrgTree({
   roots,
   options,
 }: {
   roots: OrgUnitNode[];
   options: UnitOption[];
 }) {
+  const t = await getTranslations();
   if (roots.length === 0) {
     return (
       <p className="text-[length:var(--text-sm)] text-muted">
-        Henüz birim yok. Aşağıdaki formla kök birimi oluşturun.
+        {t("screens.organization.noUnits")} {t("screens.organization.noUnitsDescription")}
       </p>
     );
   }
@@ -100,7 +104,7 @@ export function OrgTree({
   return (
     <ul className="flex flex-col gap-0.5">
       {roots.map((root) => (
-        <OrgUnitRow key={root.id} node={root} options={options} />
+        <OrgUnitRow key={root.id} node={root} options={options} t={t} />
       ))}
     </ul>
   );

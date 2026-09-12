@@ -7,10 +7,9 @@ import { markActivityAsRead } from "@/server/reads/service";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Okunmamış sayacı (ister belgesi §2.3.4).
-//
-// En kritik iddia: sayı **görünürlük modülünden geçer**. Göremediği bir kaydı
-// sayan rozet, kaydın varlığını ele verirdi — sayı da bir bilgidir (§18.4).
+// Unread activity counter.
+// Crucial guarantee: counts strictly pass through the visibility authorization layer.
+// Invisible records never leak into unread count totals.
 
 const NOW = new Date("2026-08-19T09:00:00.000Z");
 
@@ -22,114 +21,112 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sirket() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
-  const planlama = await createOrgUnit({ name: "Planlama", parentId: root.id });
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "ROOT" });
+  const tooling = await createOrgUnit({ name: "Tooling Department", parentId: root.id });
+  const planning = await createOrgUnit({ name: "Planning Department", parentId: root.id });
 
-  const genelMudur = await createUser(root.id, {
-    fullName: "Genel Müdür",
+  const generalManager = await createUser(root.id, {
+    fullName: "General Manager",
     isUnitManager: true,
   });
-  const mudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const manager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const calisan = await createUser(kaliphane.id, { fullName: "Kalıpçı" });
-  const akran = await createUser(planlama.id, {
-    fullName: "Planlama Müdürü",
+  const employee = await createUser(tooling.id, { fullName: "Tooling Specialist" });
+  const peerManager = await createUser(planning.id, {
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
 
-  return { genelMudur, mudur, calisan, akran };
+  return { generalManager, manager, employee, peerManager };
 }
 
-async function faaliyet(
-  kisi: { id: string; orgUnitId: string },
-  baslik: string,
-  durum: "APPROVED" | "CANCELLED" = "APPROVED",
+async function createActivityRecord(
+  user: { id: string; orgUnitId: string },
+  title: string,
+  status: "APPROVED" | "CANCELLED" = "APPROVED",
 ) {
   return testDb.activity.create({
     data: {
-      authorId: kisi.id,
-      authorOrgUnitId: kisi.orgUnitId,
+      authorId: user.id,
+      authorOrgUnitId: user.orgUnitId,
       activityDate: new Date("2026-08-19T00:00:00.000Z"),
-      title: baslik,
-      description: "içerik",
-      approvalStatus: durum,
+      title,
+      description: "Content",
+      approvalStatus: status,
     },
   });
 }
 
-async function say(kisi: { id: string }) {
-  const subordinates = await subordinateUserIds(testDb, kisi.id);
+async function countUnread(user: { id: string }) {
+  const subordinates = await subordinateUserIds(testDb, user.id);
   return countUnreadInScope(
     testDb,
-    { id: kisi.id, isSystemAdmin: false },
+    { id: user.id, isSystemAdmin: false },
     subordinates,
   );
 }
 
-describe("okunmamış sayacı", () => {
-  it("kapsamdaki okunmamış kayıtları sayar", async () => {
-    const { mudur, calisan } = await sirket();
-    await faaliyet(calisan, "Bir");
-    await faaliyet(calisan, "İki");
+describe("unread activities counter", () => {
+  it("counts unread activities within user scope", async () => {
+    const { manager, employee } = await setupCompany();
+    await createActivityRecord(employee, "One");
+    await createActivityRecord(employee, "Two");
 
-    expect(await say(mudur)).toBe(2);
+    expect(await countUnread(manager)).toBe(2);
   });
 
-  it("okundukça azalır", async () => {
-    const { mudur, calisan } = await sirket();
-    const kayit = await faaliyet(calisan, "Bir");
-    await faaliyet(calisan, "İki");
+  it("decrements count when activities are marked as read", async () => {
+    const { manager, employee } = await setupCompany();
+    const record = await createActivityRecord(employee, "One");
+    await createActivityRecord(employee, "Two");
 
     await markActivityAsRead(
       testDb,
-      { id: mudur.id, isSystemAdmin: false },
-      kayit.id,
+      { id: manager.id, isSystemAdmin: false },
+      record.id,
       3_000,
       NOW,
     );
 
-    expect(await say(mudur)).toBe(1);
+    expect(await countUnread(manager)).toBe(1);
   });
 
-  it("kendi yazdığı sayılmaz", async () => {
-    const { mudur } = await sirket();
-    await faaliyet(mudur, "Kendi kaydım");
+  it("excludes activities authored by the viewer", async () => {
+    const { manager } = await setupCompany();
+    await createActivityRecord(manager, "Own record");
 
-    // İnsan kendi yazdığını "okumamış" olmaz.
-    expect(await say(mudur)).toBe(0);
+    expect(await countUnread(manager)).toBe(0);
   });
 
-  it("iptal edilmiş kayıt sayılmaz", async () => {
-    const { mudur, calisan } = await sirket();
-    await faaliyet(calisan, "İptal", "CANCELLED");
+  it("excludes cancelled activities from unread count", async () => {
+    const { manager, employee } = await setupCompany();
+    await createActivityRecord(employee, "Cancelled", "CANCELLED");
 
-    expect(await say(mudur)).toBe(0);
+    expect(await countUnread(manager)).toBe(0);
   });
 
-  it("göremediği kayıt sayıya girmez", async () => {
-    const { mudur, akran } = await sirket();
-    await faaliyet(akran, "Akranın kaydı");
+  it("excludes activities outside viewer scope from count", async () => {
+    const { manager, peerManager } = await setupCompany();
+    await createActivityRecord(peerManager, "Peer record");
 
-    // Akranın kaydı müdürün kapsamında değil; sayısı da sızmamalı.
-    expect(await say(mudur)).toBe(0);
+    expect(await countUnread(manager)).toBe(0);
   });
 
-  it("astı olmayan kişide sıfırdır", async () => {
-    const { calisan, akran } = await sirket();
-    await faaliyet(akran, "Başkasının kaydı");
+  it("returns zero for users without subordinates", async () => {
+    const { employee, peerManager } = await setupCompany();
+    await createActivityRecord(peerManager, "Another record");
 
-    expect(await say(calisan)).toBe(0);
+    expect(await countUnread(employee)).toBe(0);
   });
 
-  it("üst kademe alt kademenin kayıtlarını da sayar", async () => {
-    const { genelMudur, calisan, mudur } = await sirket();
-    await faaliyet(calisan, "Çalışanın kaydı");
-    await faaliyet(mudur, "Müdürün kaydı");
+  it("counts activities across all subordinate hierarchy levels for higher management", async () => {
+    const { generalManager, employee, manager } = await setupCompany();
+    await createActivityRecord(employee, "Employee record");
+    await createActivityRecord(manager, "Manager record");
 
-    expect(await say(genelMudur)).toBe(2);
+    expect(await countUnread(generalManager)).toBe(2);
   });
 });

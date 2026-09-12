@@ -8,15 +8,15 @@ import { revokeAllUserSessions } from "@/server/auth/session";
 import { isEmailDomainAllowed } from "@/server/settings/email-domains";
 import { readAllowedEmailDomains } from "@/server/settings/system-settings";
 
-// Kullanıcı bilgisi düzenleme ve yönetici eliyle parola belirleme (§4.6, §15.1).
+
 //
-// Bir kural veritabanında zaten var ve burada tekrarlanmaz: pasif birime aktif
-// kullanıcı bağlanamaz. "Bir birimde en fazla bir yönetici" kısıtı
-// 20.08.2026'da kaldırıldı — bir departmanda birden fazla müdür olabiliyor.
+
+
+
 //
-// Burada olan iki koruma ise **geri dönüşü olmayan** durumları engeller:
-// son sistem yöneticisinin yetkisi kaldırılamaz ve kişi kendini
-// pasifleştiremez. İkisi de sistemi yönetilemez hâle getirirdi.
+
+
+
 
 export type UpdateUserDb = Pick<
   PrismaClient,
@@ -43,19 +43,25 @@ export type UpdateUserErrorCode =
 
 export type UpdateUserResult =
   | { ok: true; user: User }
-  | { ok: false; error: UpdateUserErrorCode; message: string };
+  | {
+      ok: false;
+      error: UpdateUserErrorCode;
+      message: string;
+      messageKey?: string;
+      messageValues?: Record<string, string | number>;
+    };
 
 const MESSAGES: Record<UpdateUserErrorCode, string> = {
-  user_not_found: "Kullanıcı bulunamadı.",
-  duplicate_email: "Bu e-posta adresi başka bir kullanıcıda kayıtlı.",
-  email_domain_not_allowed: "Bu e-posta alan adı kabul edilmiyor.",
-  unit_not_found: "Seçilen birim bulunamadı.",
-  inactive_unit: "Pasif bir birime aktif kullanıcı bağlanamaz.",
+  user_not_found: "User not found.",
+  duplicate_email: "This email address is already used by another user.",
+  email_domain_not_allowed: "This email domain is not allowed.",
+  unit_not_found: "The selected unit was not found.",
+  inactive_unit: "An active user cannot be assigned to an inactive unit.",
   last_system_admin:
-    "Sistemdeki son sistem yöneticisinin yetkisi kaldırılamaz; önce başka bir sistem yöneticisi tanımlayın.",
+    "The last system administrator cannot be removed; assign another administrator first.",
   root_protected:
-    "Ana sistem yöneticisi hesabı korunuyor; bu işlem başka bir kullanıcı için yapılabilir.",
-  unknown: "Kullanıcı güncellenemedi.",
+    "The root administrator account is protected; perform this action on another user.",
+  unknown: "The user could not be updated.",
 };
 
 function fail(error: UpdateUserErrorCode): UpdateUserResult {
@@ -63,10 +69,11 @@ function fail(error: UpdateUserErrorCode): UpdateUserResult {
 }
 
 function translateDatabaseError(error: unknown): UpdateUserResult {
-  // Tekillik önce ve **hata kodundan** (bkz. `src/server/db-errors.ts`).
+  // Uniqueness is translated from the **error code** (see
+  // `src/server/db-errors.ts`).
   if (isUniqueViolation(error)) {
-    // Geriye tek tekillik kısıtı kaldı: e-posta. "Birim başına tek yönetici"
-    // kısıtı 20.08.2026'da kaldırıldı.
+
+
     return fail("duplicate_email");
   }
 
@@ -74,8 +81,8 @@ function translateDatabaseError(error: unknown): UpdateUserResult {
     return fail("inactive_unit");
   }
 
-  // Yarışı kaybeden ikinci işlem buraya düşer: ön eleme sırasında başka bir
-  // aktif yönetici vardı, tetikleyici kilidi aldığında artık yoktu.
+
+
   if (hasDatabaseSentinel(error, "LAST_SYSTEM_ADMIN")) {
     return fail("last_system_admin");
   }
@@ -90,27 +97,24 @@ function translateDatabaseError(error: unknown): UpdateUserResult {
 export interface UpdateUserInput {
   id: string;
   fullName: string;
-  /** Unvan; boş bırakılabilir. Yetki değildir. */
+
   title?: string | null;
   email: string;
   orgUnitId: string;
   isUnitManager: boolean;
   isSystemAdmin: boolean;
   writesActivities: boolean;
-  /** Skoru hesaplanır mı (Görev 11.10); verilmezse değişmez. */
+
   isScored?: boolean;
-  /** Faaliyetlere takdir verebilir mi (Görev 11.11); verilmezse değişmez. */
+
   canAppreciate?: boolean;
-  /** Yönetim raporlarını görebilir mi; verilmezse değişmez. */
+
   canViewReports?: boolean;
-  /** Skor ve takdir raporlarını görebilir mi; verilmezse değişmez. */
+
   canViewScoreReports?: boolean;
 }
 
-/**
- * Bölüm müdürünün verebileceği alanlar. Tasarım ona **ad ve unvan**
- * düzenlemesi veriyor; listenin kısalığı bilinçli.
- */
+
 export interface ManagerUpdateUserInput {
   id: string;
   fullName: string;
@@ -127,37 +131,19 @@ export interface RootSelfUpdateInput {
   canViewScoreReports?: boolean;
 }
 
-/**
- * Son aktif sistem yöneticisi mi? Yetkisi kaldırılırsa ya da pasifleştirilirse
- * yönetim ekranlarına girebilecek kimse kalmaz ve geri dönüş yolu yoktur —
- * kullanıcı açmak için giriş, giriş için kullanıcı gerekir.
- */
+
 async function isLastSystemAdmin(
   db: Pick<PrismaClient, "user">,
   userId: string,
 ): Promise<boolean> {
-  const digerleri = await db.user.count({
+  const otherAdmins = await db.user.count({
     where: { isSystemAdmin: true, isActive: true, id: { not: userId } },
   });
 
-  return digerleri === 0;
+  return otherAdmins === 0;
 }
 
-/**
- * Bölüm müdürünün kullanıcı düzenlemesi (Paket 1).
- *
- * Müdür yalnız **ad ve unvan** değiştirir; başka hiçbir kolona dokunulmaz.
- * Yetki kontrolü çağırandan gelmez: aktörün kimliği verilir, kapsam
- * **yazma ifadesinin içinde** ve o anki ağaca göre hesaplanır.
- * Fazla alanı temizlemek yerine hiç almamak seçildi: temizleyen kod, şemaya
- * yeni bir alan eklendiğinde güncellenmeyi bekler ve unutulur — açık sessizce
- * geri gelir.
- *
- * Denetimde yakalanan yol (23.08.2026): müdür astının e-postasını kendi
- * adresine çevirip şifre sıfırlama tetikleyebiliyordu ve bağlantı ona
- * gidiyordu. Aynı istek alt müdürü görevden düşürüyor, skor ve takdir
- * bayraklarını siliyordu.
- */
+
 export async function updateUserByManager(
   db: UpdateUserDb,
   input: ManagerUpdateUserInput,
@@ -166,76 +152,77 @@ export async function updateUserByManager(
 ): Promise<UpdateUserResult> {
   try {
     return await db.$transaction(async (tx) => {
-      // `before` değerleri **kilitli** okunuyor: kilitsiz okunduğunda, araya
-      // giren bir düzenlemeden sonra denetim kaydı gerçek B → C değişimi
-      // yerine eski A → C yazıyordu (23.08.2026, üçüncü denetim turu).
-      const kilitli = await tx.$queryRaw<
+
+
+
+      const lockedUser = await tx.$queryRaw<
         { fullName: string; title: string | null }[]
       >`SELECT "fullName", "title" FROM "User" WHERE "id" = ${input.id} FOR UPDATE`;
 
-      const mevcut = kilitli[0];
-      if (!mevcut) return fail("user_not_found");
+      const existingUser = lockedUser[0];
+      if (!existingUser) return fail("user_not_found");
 
-      // **Yetkinin tamamı yazma ifadesinin içinde.** Önce kapsam listesi
-      // hesaplanıp servise "yetki belgesi" gibi veriliyordu; liste dışarıda
-      // üretildiği için, arada hedefin birimi müdürün dalından çıkarılsa bile
-      // eski liste hâlâ o birimi içeriyor ve yazma geçiyordu (23.08.2026,
-      // üçüncü denetim turu). Kontrol ile yazma arasında pencere kalmasın diye
-      // ikisi tek ifadeye alındı.
+      // **All authorization is inside the write statement.** Previously a
+      // scope list was calculated first and passed to the service as an
+      // authorization token. If the target's unit left the manager's branch
+      // between the two steps, the stale list still allowed the write
+      // (23.08.2026, third audit round). Combining the check and write removes
+      // that race window.
       //
-      // İfade beş şeyi aynı anda doğruluyor: aktör aktif, aktör hâlâ birim
-      // yöneticisi, hedef aktörün kendisi değil, hedef sistem yöneticisi
-      // değil ve hedefin birimi aktörün **o andaki** alt ağacında.
-      const yazilan = await tx.$executeRaw`
-        UPDATE "User" AS hedef
+      // The statement verifies five conditions at once: the actor is active,
+      // remains a unit manager, the target is not the actor, the target is not
+      // a system administrator, and the target's unit is in the actor's
+      // **current** subtree.
+      const updatedRows = await tx.$executeRaw`
+        UPDATE "User" AS target
         SET "fullName" = ${input.fullName},
             "title" = ${input.title ?? null},
             "updatedAt" = ${now}
-        WHERE hedef."id" = ${input.id}
-          -- Kendi hesabı bu yoldan yönetilmez (müdür yetkisinin 3. sınırı).
-          -- Aktörün kendi kaydı kendi alt ağacında olduğu için kapsam koşulu
-          -- bunu **engellemiyordu**; sunucu eylemindeki ön eleme maskeliyordu
-          -- ama servis doğrudan yetki sınırı olarak sınanıyor.
-          AND hedef."id" <> ${actorId}
-          AND hedef."isSystemAdmin" = FALSE
+        WHERE target."id" = ${input.id}
+          -- A manager cannot manage their own account through this path.
+          -- The actor's record is in their own subtree, so the scope check
+          -- alone would not prevent it; this is a direct service boundary.
+          AND target."id" <> ${actorId}
+          AND target."isSystemAdmin" = FALSE
           AND EXISTS (
             WITH RECURSIVE subtree(id) AS (
-              SELECT aktor."orgUnitId"
-              FROM "User" aktor
-              WHERE aktor."id" = ${actorId}
-                AND aktor."isActive"
-                AND aktor."isUnitManager"
+              SELECT actor."orgUnitId"
+              FROM "User" actor
+              WHERE actor."id" = ${actorId}
+                AND actor."isActive"
+                AND actor."isUnitManager"
               UNION ALL
-              SELECT birim."id"
-              FROM "OrgUnit" birim
-              JOIN subtree ON birim."parentId" = subtree.id
+              SELECT unit."id"
+              FROM "OrgUnit" unit
+              JOIN subtree ON unit."parentId" = subtree.id
             )
-            SELECT 1 FROM subtree WHERE subtree.id = hedef."orgUnitId"
+            SELECT 1 FROM subtree WHERE subtree.id = target."orgUnitId"
           )
       `;
 
-      // "Var ama yetkin yok" ile "yok" aynı cevabı alır (§15.1).
-      if (yazilan === 0) return fail("user_not_found");
+      // "Exists but unauthorized" and "not found" receive the same response
+      // (§15.1).
+      if (updatedRows === 0) return fail("user_not_found");
 
-      const guncel = await tx.user.findUniqueOrThrow({ where: { id: input.id } });
+      const current = await tx.user.findUniqueOrThrow({ where: { id: input.id } });
 
-      // Denetim kaydı **değişen alanları** taşır. Önceki hâlinde yalnız
-      // e-posta, birim ve bayrakların önce/sonrası yazılıyordu; müdür yolunda
-      // bunlar hiç değişmediği için kayıt "kim kimi düzenledi" diyor ama
-      // "neyi değiştirdi" demiyordu.
+      // The audit record carries the **changed fields**. The previous version
+      // recorded before/after email, unit, and flags only; the manager path
+      // never changed those fields, so its record identified who edited whom
+      // but not what changed.
       await recordAudit(tx, {
         userId: actorId,
         objectType: AUDIT_OBJECTS.user,
-        objectId: guncel.id,
+        objectId: current.id,
         action: AUDIT_ACTIONS.userUpdated,
         detail: {
-          before: { fullName: mevcut.fullName, title: mevcut.title },
-          after: { fullName: guncel.fullName, title: guncel.title },
+          before: { fullName: existingUser.fullName, title: existingUser.title },
+          after: { fullName: current.fullName, title: current.title },
         },
         now,
       });
 
-      return { ok: true as const, user: guncel };
+      return { ok: true as const, user: current };
     });
   } catch (error) {
     return translateDatabaseError(error);
@@ -248,38 +235,40 @@ export async function updateUser(
   actorId: string | null = null,
   now: Date = new Date(),
 ): Promise<UpdateUserResult> {
-  const mevcut = await db.user.findUnique({ where: { id: input.id } });
-  if (!mevcut) return fail("user_not_found");
-  if (mevcut.isRoot) return fail("root_protected");
+  const existingUser = await db.user.findUnique({ where: { id: input.id } });
+  if (!existingUser) return fail("user_not_found");
+  if (existingUser.isRoot) return fail("root_protected");
 
   const unit = await db.orgUnit.findUnique({
     where: { id: input.orgUnitId },
     select: { isActive: true },
   });
   if (!unit) return fail("unit_not_found");
-  if (!unit.isActive && mevcut.isActive) return fail("inactive_unit");
+  if (!unit.isActive && existingUser.isActive) return fail("inactive_unit");
 
-  // Kısıt yalnız **değişen** adrese uygulanır. Kısıt sonradan konulduğunda
-  // eski adresli kullanıcıların adı ya da birimi düzenlenemez hâle gelmemeli.
-  if (input.email !== mevcut.email) {
-    const izinliler = await readAllowedEmailDomains(db);
-    if (!isEmailDomainAllowed(input.email, izinliler)) {
+  // Apply the restriction only to a **changed** address. Adding the
+  // restriction later must not make existing users impossible to edit.
+  if (input.email !== existingUser.email) {
+    const allowedDomains = await readAllowedEmailDomains(db);
+    if (!isEmailDomainAllowed(input.email, allowedDomains)) {
       return {
         ok: false,
         error: "email_domain_not_allowed",
-        message: `Adres yalnız şu alan adlarıyla olabilir: ${izinliler.join(", ")}`,
+        message: `The address may only use these domains: ${allowedDomains.join(", ")}`,
+        messageKey: "errors.user.emailDomainUpdateNotAllowedWithList",
+        messageValues: { domains: allowedDomains.join(", ") || "an allowed domain" },
       };
     }
   }
 
-  // Ön eleme: kullanıcıya erken ve anlaşılır bir cevap vermek için. Kararın
-  // dayandığı kontrol veritabanında (`User_keep_system_admin` tetikleyicisi);
-  // buradaki sayım kilitsiz olduğu için iki eşzamanlı işlem birbirini
-  // göremiyordu ve ikisi de geçiyordu (denetim 21.08.2026, bulgu 6).
+  // Early validation gives the user a prompt, understandable response. The
+  // database trigger (`User_keep_system_admin`) remains authoritative because
+  // this unlocked count cannot see a concurrent update (audit 21.08.2026,
+  // finding 6).
   if (
-    mevcut.isSystemAdmin &&
+    existingUser.isSystemAdmin &&
     !input.isSystemAdmin &&
-    mevcut.isActive &&
+    existingUser.isActive &&
     (await isLastSystemAdmin(db, input.id))
   ) {
     return fail("last_system_admin");
@@ -287,18 +276,20 @@ export async function updateUser(
 
   try {
     const user = await db.$transaction(async (tx) => {
-      const guncel = await tx.user.update({
+      const current = await tx.user.update({
         where: { id: input.id },
         data: {
           fullName: input.fullName,
           title: input.title ?? null,
-          // E-posta yalnızca bir özelliktir; iç kimlik ondan bağımsızdır (§15.3).
+          // Email is an attribute; the internal identity is independent of it
+          // (§15.3).
           email: input.email.trim().toLowerCase(),
           orgUnitId: input.orgUnitId,
           isUnitManager: input.isUnitManager,
           isSystemAdmin: input.isSystemAdmin,
           writesActivities: input.writesActivities,
-          // Verilmezse değişmez: bölüm müdürünün formunda bu alanlar yok.
+          // Omitted fields remain unchanged: the unit manager form does not
+          // include them.
           ...(input.isScored === undefined ? {} : { isScored: input.isScored }),
           ...(input.canAppreciate === undefined
             ? {}
@@ -312,37 +303,37 @@ export async function updateUser(
         },
       });
 
-      // Yetki değişikliği ayrıca görünür olsun diye eski ve yeni hâl birlikte
-      // yazılır (§15.2).
+      // Record before and after values so permission changes are visible
+      // separately (§15.2).
       await recordAudit(tx, {
         userId: actorId,
         objectType: AUDIT_OBJECTS.user,
-        objectId: guncel.id,
+        objectId: current.id,
         action: AUDIT_ACTIONS.userUpdated,
         detail: {
           before: {
-            email: mevcut.email,
-            orgUnitId: mevcut.orgUnitId,
-            isUnitManager: mevcut.isUnitManager,
-            isSystemAdmin: mevcut.isSystemAdmin,
-            writesActivities: mevcut.writesActivities,
-            canViewReports: mevcut.canViewReports,
-            canViewScoreReports: mevcut.canViewScoreReports,
+            email: existingUser.email,
+            orgUnitId: existingUser.orgUnitId,
+            isUnitManager: existingUser.isUnitManager,
+            isSystemAdmin: existingUser.isSystemAdmin,
+            writesActivities: existingUser.writesActivities,
+            canViewReports: existingUser.canViewReports,
+            canViewScoreReports: existingUser.canViewScoreReports,
           },
           after: {
-            email: guncel.email,
-            orgUnitId: guncel.orgUnitId,
-            isUnitManager: guncel.isUnitManager,
-            isSystemAdmin: guncel.isSystemAdmin,
-            writesActivities: guncel.writesActivities,
-            canViewReports: guncel.canViewReports,
-            canViewScoreReports: guncel.canViewScoreReports,
+            email: current.email,
+            orgUnitId: current.orgUnitId,
+            isUnitManager: current.isUnitManager,
+            isSystemAdmin: current.isSystemAdmin,
+            writesActivities: current.writesActivities,
+            canViewReports: current.canViewReports,
+            canViewScoreReports: current.canViewScoreReports,
           },
         },
         now,
       });
 
-      return guncel;
+      return current;
     });
 
     return { ok: true, user };
@@ -351,7 +342,7 @@ export async function updateUser(
   }
 }
 
-/** Root'un kendisi için açıkça izin verilen operasyonel alanlar. */
+/** Operational fields explicitly allowed for the root account itself. */
 export async function updateRootSelf(
   db: UpdateUserDb,
   input: RootSelfUpdateInput,
@@ -369,7 +360,7 @@ export async function updateRootSelf(
 
   try {
     const user = await db.$transaction(async (tx) => {
-      const mevcut = await tx.user.findUnique({
+      const existingUser = await tx.user.findUnique({
         where: { id: input.id },
         select: {
           id: true,
@@ -385,7 +376,7 @@ export async function updateRootSelf(
         },
       });
 
-      if (!mevcut?.isRoot || !mevcut.isSystemAdmin || !mevcut.isActive) {
+      if (!existingUser?.isRoot || !existingUser.isSystemAdmin || !existingUser.isActive) {
         return null;
       }
 
@@ -396,9 +387,9 @@ export async function updateRootSelf(
           writesActivities: input.writesActivities,
           isScored: input.isScored,
           canAppreciate: input.canAppreciate,
-          canViewReports: input.canViewReports ?? mevcut.canViewReports,
+          canViewReports: input.canViewReports ?? existingUser.canViewReports,
           canViewScoreReports:
-            input.canViewScoreReports ?? mevcut.canViewScoreReports,
+            input.canViewScoreReports ?? existingUser.canViewScoreReports,
         },
       });
 
@@ -410,12 +401,12 @@ export async function updateRootSelf(
         detail: {
           rootSelfUpdate: true,
           before: {
-            orgUnitId: mevcut.orgUnitId,
-            writesActivities: mevcut.writesActivities,
-            isScored: mevcut.isScored,
-            canAppreciate: mevcut.canAppreciate,
-            canViewReports: mevcut.canViewReports,
-            canViewScoreReports: mevcut.canViewScoreReports,
+            orgUnitId: existingUser.orgUnitId,
+            writesActivities: existingUser.writesActivities,
+            isScored: existingUser.isScored,
+            canAppreciate: existingUser.canAppreciate,
+            canViewReports: existingUser.canViewReports,
+            canViewScoreReports: existingUser.canViewScoreReports,
           },
           after: {
             orgUnitId: updated.orgUnitId,
@@ -443,12 +434,13 @@ export type SetPasswordResult =
   | { ok: false; error: "user_not_found" | "root_protected"; message: string };
 
 /**
- * Sistem yöneticisi bir kullanıcının parolasını belirler (§15.1, §15.3).
- * Mevcut parola sorulmaz — kullanıcı zaten unuttuğu için buraya gelinir.
+ * A system administrator sets a user's password (§15.1, §15.3).
+ * The current password is not requested because this path is for forgotten
+ * passwords.
  *
- * Değişim kullanıcının **tüm oturumlarını kapatır** ve kimlik kuşağını
- * ilerletir: bu andan önce doğan her oturum, iptalden kaçmış olsa bile
- * geçersizleşir. Bekleyen parola sıfırlama bağlantıları da böylece ölür.
+ * The change **revokes all sessions** and increments the credential version:
+ * every session issued before this moment becomes invalid, even if it escaped
+ * explicit revocation. Pending password-reset links also become invalid.
  */
 export async function setUserPassword(
   db: UpdateUserDb,
@@ -479,8 +471,8 @@ export async function setUserPassword(
         passwordChangedAt: now,
         mustChangePassword: false,
         version: { increment: 1 },
-        // Yönetici parola verdiyse kilit de açılır; aksi hâlde kullanıcı yeni
-        // parolasıyla da giremezdi.
+        // Setting a password also unlocks the account; otherwise the user could
+        // not sign in with the new password.
         failedLoginCount: 0,
         lockedUntil: null,
       },
@@ -494,7 +486,8 @@ export async function setUserPassword(
       objectType: AUDIT_OBJECTS.user,
       objectId: userId,
       action: AUDIT_ACTIONS.userPasswordSet,
-      // Parolanın kendisi kayda geçmez; yalnız işlemin olduğu ve etkisi.
+      // The password itself is never recorded; only the operation and its
+      // effect are audited.
       detail: { revokedSessionCount },
       now,
     });
@@ -503,17 +496,25 @@ export async function setUserPassword(
   });
 }
 
-/** Pasifleştirme öncesi ek koruma: kişi kendini pasifleştiremez. */
+/** Additional deactivation guard: a person cannot deactivate themselves. */
 export async function canDeactivate(
   db: Pick<PrismaClient, "user">,
   actorId: string,
   targetId: string,
-): Promise<{ allowed: true } | { allowed: false; message: string }> {
+): Promise<
+  | { allowed: true }
+  | {
+      allowed: false;
+      error: "cannot_deactivate_self" | "root_protected" | "last_system_admin";
+      message: string;
+    }
+> {
   if (actorId === targetId) {
     return {
       allowed: false,
+      error: "cannot_deactivate_self",
       message:
-        "Kendi hesabınızı pasifleştiremezsiniz; başka bir sistem yöneticisi yapmalı.",
+        "You cannot deactivate your own account; another system administrator must do it.",
     };
   }
 
@@ -523,11 +524,19 @@ export async function canDeactivate(
   });
 
   if (target?.isRoot) {
-    return { allowed: false, message: MESSAGES.root_protected };
+    return {
+      allowed: false,
+      error: "root_protected",
+      message: MESSAGES.root_protected,
+    };
   }
 
   if (target?.isSystemAdmin && target.isActive && (await isLastSystemAdmin(db, targetId))) {
-    return { allowed: false, message: MESSAGES.last_system_admin };
+    return {
+      allowed: false,
+      error: "last_system_admin",
+      message: MESSAGES.last_system_admin,
+    };
   }
 
   return { allowed: true };

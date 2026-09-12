@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Web panelinden bırakılan başlangıca dönüş isteğini host üzerinde çalıştırır.
+# Runs an application-reset request left by the web panel on the host.
 #
-# Sıra: isteği al → şifreli yedek al → app ve worker'ı durdur → veriyi tek
-# transaction içinde temizle → depoları temizle → servisleri başlat.
-# Uygulama konteynerine Docker soketi verilmez.
+# Order: claim the request → create an encrypted backup → stop app and worker
+# → clear data in one transaction → clear stores → start services. The
+# application container is not given access to the Docker socket.
 
 set -euo pipefail
 umask 077
 
-KOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$KOK"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 if [[ -f .env ]]; then
   set -a
@@ -18,23 +18,23 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-KILIT_DOSYASI="${BACKUP_LOCK_FILE:-${BACKUP_RUNNER_LOCK_FILE:-$KOK/.faaliyet-backup.lock}}"
+LOCK_FILE="${BACKUP_LOCK_FILE:-${BACKUP_RUNNER_LOCK_FILE:-$PROJECT_ROOT/.acta-backup.lock}}"
 
 [[ -n "${POSTGRES_USER:-}" && -n "${POSTGRES_DB:-}" ]] || {
-  echo "[başlangıca dönüş koşucu] POSTGRES_USER / POSTGRES_DB tanımlı değil." >&2
+  echo "[reset runner] POSTGRES_USER / POSTGRES_DB are not set." >&2
   exit 1
 }
 
 command -v docker >/dev/null || {
-  echo "[başlangıca dönüş koşucu] docker bulunamadı." >&2
+  echo "[reset runner] docker was not found." >&2
   exit 1
 }
 command -v flock >/dev/null || {
-  echo "[başlangıca dönüş koşucu] flock bulunamadı." >&2
+  echo "[reset runner] flock was not found." >&2
   exit 1
 }
 
-exec 9>"$KILIT_DOSYASI"
+exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   exit 0
 fi
@@ -46,12 +46,12 @@ psql() {
 }
 
 log() {
-  echo "[başlangıca dönüş koşucu] $*"
+  echo "[reset runner] $*"
 }
 
-bekleyen_istegi_al() {
+take_pending_request() {
   psql --command "
-    WITH secilen AS (
+    WITH selected_request AS (
       SELECT \"id\"
       FROM \"SystemResetRequest\"
       WHERE \"status\" = 'PENDING'
@@ -59,37 +59,37 @@ bekleyen_istegi_al() {
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     )
-    UPDATE \"SystemResetRequest\" AS istek
+    UPDATE \"SystemResetRequest\" AS request
     SET \"status\" = 'RUNNING', \"startedAt\" = now(), \"message\" = NULL
-    FROM secilen
-    WHERE istek.\"id\" = secilen.\"id\"
-    RETURNING istek.\"id\";
+    FROM selected_request
+    WHERE request.\"id\" = selected_request.\"id\"
+    RETURNING request.\"id\";
   " | sed -n '1p'
 }
 
-request_id="$(bekleyen_istegi_al)"
+request_id="$(take_pending_request)"
 if [[ -z "$request_id" ]]; then
   exit 0
 fi
 
-gecici_log=""
-servisler_durduruldu=0
-sifirlama_tamamlandi=0
+TEMP_LOG=""
+SERVICES_STOPPED=0
+RESET_COMPLETED=0
 
-kosucu_cikisi() {
-  local kod=$?
-  local servis_hatasi=0
+runner_exit() {
+  local exit_code=$?
+  local service_error=0
   trap - EXIT
   set +e
 
-  if [[ "$servisler_durduruldu" == "1" ]]; then
-    docker compose up -d app worker >/dev/null 2>&1 || servis_hatasi=1
+  if [[ "$SERVICES_STOPPED" == "1" ]]; then
+    docker compose up -d app worker >/dev/null 2>&1 || service_error=1
   fi
 
-  if [[ "$kod" != "0" && "$sifirlama_tamamlandi" == "0" && -n "$request_id" ]]; then
+  if [[ "$exit_code" != "0" && "$RESET_COMPLETED" == "0" && -n "$request_id" ]]; then
     psql \
       --set="id=$request_id" \
-      --set="message=Başlangıca dönüş koşucusu işlemi tamamlayamadı." \
+      --set="message=The reset runner could not complete the operation." \
       --command "UPDATE \"SystemResetRequest\"
                  SET \"status\" = 'FAILED', \"finishedAt\" = now(),
                      \"message\" = left(:'message', 1000)
@@ -97,74 +97,74 @@ kosucu_cikisi() {
       >/dev/null
   fi
 
-  if [[ -n "$gecici_log" && -f "$gecici_log" ]]; then
-    rm -f -- "$gecici_log"
+  if [[ -n "$TEMP_LOG" && -f "$TEMP_LOG" ]]; then
+    rm -f -- "$TEMP_LOG"
   fi
 
-  if [[ "$kod" == "0" && "$servis_hatasi" != "0" ]]; then
-    kod=1
+  if [[ "$exit_code" == "0" && "$service_error" != "0" ]]; then
+    exit_code=1
   fi
-  exit "$kod"
+  exit "$exit_code"
 }
-trap kosucu_cikisi EXIT
+trap runner_exit EXIT
 
-gecici_log="$(mktemp)"
-mkdir -p "${BACKUP_DIR:-$KOK/yedek}"
+TEMP_LOG="$(mktemp)"
+mkdir -p "${BACKUP_DIR:-$PROJECT_ROOT/backups}"
 
-# Reset öncesi yedek başarısızsa veri değişmez. Yedek betiği normalde kendi
-# sonunda app ve worker'ı yeniden açar; burada bunu bilinçli olarak engelliyoruz.
-# Aksi hâlde yedek ile sıfırlama arasına yeni bir kullanıcı işlemi girebilir.
-servisler_durduruldu=1
+# If the pre-reset backup fails, data remains unchanged. The backup script would
+# normally restart app and worker at the end; we deliberately prevent that here.
+# Otherwise a new user operation could enter between the backup and reset.
+SERVICES_STOPPED=1
 set +e
 BACKUP_KEEP_SERVICES_STOPPED=1 BACKUP_LOCK_HELD=1 \
-  "$KOK/scripts/backup.sh" "${BACKUP_DIR:-$KOK/yedek}" >"$gecici_log" 2>&1
-backup_kodu=$?
+  "$PROJECT_ROOT/scripts/backup.sh" "${BACKUP_DIR:-$PROJECT_ROOT/backups}" >"$TEMP_LOG" 2>&1
+backup_exit_code=$?
 set -e
 
-if [[ "$backup_kodu" != "0" ]]; then
-  hata_mesaji="$(tail -c 1000 "$gecici_log" | tr '\n' ' ')"
+if [[ "$backup_exit_code" != "0" ]]; then
+  error_message="$(tail -c 1000 "$TEMP_LOG" | tr '\n' ' ')"
   psql \
     --set="id=$request_id" \
-    --set="message=$hata_mesaji" \
+    --set="message=$error_message" \
     --command "UPDATE \"SystemResetRequest\"
                SET \"status\" = 'FAILED', \"finishedAt\" = now(),
                    \"message\" = left(:'message', 1000)
                WHERE \"id\" = :'id' AND \"status\" = 'RUNNING';" \
     >/dev/null
   request_id=""
-  exit "$backup_kodu"
+  exit "$backup_exit_code"
 fi
 
-log "yedek tamamlandı; uygulama ve worker zaten durduruldu"
+log "backup completed; app and worker are already stopped"
 
 docker compose run --rm --no-deps migrate \
   node --import tsx scripts/reset-application.ts "$request_id"
 
-# Veritabanı başarıyla sıfırlandı. Uygulama depoları da aynı başlangıç
-# durumuna çekilir; bağlama noktalarının kendisi silinmez.
+# The database was reset successfully. Clear the application stores as well;
+# the mount points themselves are not removed.
 docker compose run --rm --no-deps --entrypoint sh app -c \
   'mkdir -p /veri/ekler /veri/avatarlar &&
    find /veri/ekler -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + &&
    find /veri/avatarlar -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
 
-# Logo, veritabanı ayarı gibi named volume'larda değil app konteynerinin
-# yazılabilir katmanında tutulabilir. Eski konteyneri kaldırmak, sıfırlama
-# sonrasında görünmeye devam edebilecek eski logoyu da temizler; image ve
-# kalıcı ek/avatar volume'ları korunur.
+# The logo and similar settings may live in the app container's writable layer
+# rather than a named volume. Removing the old container clears a stale logo
+# that could otherwise survive the reset; the image and persistent file volumes
+# are preserved.
 docker compose rm -sf app >/dev/null
 
 docker compose up -d app worker >/dev/null
 [[ -n "$(docker compose ps --status running -q app)" ]] || {
-  echo "[başlangıca dönüş koşucu] app yeniden başlatılamadı." >&2
+  echo "[reset runner] could not restart app." >&2
   exit 1
 }
 [[ -n "$(docker compose ps --status running -q worker)" ]] || {
-  echo "[başlangıca dönüş koşucu] worker yeniden başlatılamadı." >&2
+  echo "[reset runner] could not restart worker." >&2
   exit 1
 }
-servisler_durduruldu=0
-sifirlama_tamamlandi=1
+SERVICES_STOPPED=0
+RESET_COMPLETED=1
 request_id=""
-rm -f -- "$gecici_log"
-gecici_log=""
-log "başlangıca dönüş tamamlandı"
+rm -f -- "$TEMP_LOG"
+TEMP_LOG=""
+log "application reset completed"

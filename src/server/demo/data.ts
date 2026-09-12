@@ -32,7 +32,7 @@ export { DEMO_EMAIL_DOMAIN } from "./origin";
 export const DEMO_DEFAULT_PASSWORD = "demo-password-1234";
 
 /** Number of business days to generate historical demo activities for. */
-const GUN_SAYISI = 12;
+const BUSINESS_DAY_COUNT = 12;
 
 export interface InstallOptions {
   /** Password for sample accounts. */
@@ -45,619 +45,690 @@ export type InstallResult =
   | { ok: true; log: string[] }
   | { ok: false; error: "no_root"; log: string[] };
 
-interface KisiTanimi {
-  ad: string;
-  eposta: string;
-  birim: string;
-  unvan?: string;
-  yonetici?: boolean;
-  yazar?: boolean;
-  sistemYoneticisi?: boolean;
+interface EmployeeDefinition {
+  name: string;
+  email: string;
+  unit: string;
+  title?: string;
+  isManager?: boolean;
+  isAuthor?: boolean;
+  isSystemAdmin?: boolean;
   isScored?: boolean;
   canAppreciate?: boolean;
 }
 
-const BIRIMLER = [
-  { ad: "Board of Directors", ust: "root", tur: "Board", onay: false },
-  { ad: "Executive Management", ust: "Board of Directors", tur: "Executive", onay: false },
+const DEMO_UNITS = [
+  { name: "Board of Directors", parent: "root", type: "Board", requiresApproval: false },
+  { name: "Executive Management", parent: "Board of Directors", type: "Executive", requiresApproval: false },
   {
-    ad: "Procurement & Operations",
-    ust: "Executive Management",
-    tur: "Division",
-    onay: false,
+    name: "Procurement & Operations",
+    parent: "Executive Management",
+    type: "Division",
+    requiresApproval: false,
   },
-  { ad: "Procurement", ust: "Procurement & Operations", tur: "Department", onay: true },
-  { ad: "Legal", ust: "Procurement & Operations", tur: "Department", onay: true },
-  { ad: "Administration", ust: "Procurement & Operations", tur: "Department", onay: true },
-  { ad: "Finance & Accounting", ust: "Executive Management", tur: "Division", onay: false },
-  { ad: "Global Finance", ust: "Finance & Accounting", tur: "Department", onay: true },
-  { ad: "Accounting", ust: "Finance & Accounting", tur: "Department", onay: true },
-  { ad: "Treasury", ust: "Finance & Accounting", tur: "Department", onay: true },
-  { ad: "Internal Audit", ust: "Finance & Accounting", tur: "Department", onay: true },
-  { ad: "Accounts Receivable", ust: "Finance & Accounting", tur: "Department", onay: true },
-  { ad: "Supply Chain & Logistics", ust: "Executive Management", tur: "Division", onay: false },
-  { ad: "Information Technology", ust: "Supply Chain & Logistics", tur: "Department", onay: true },
-  { ad: "International Trade", ust: "Supply Chain & Logistics", tur: "Department", onay: true },
-  { ad: "Warehouse & Shipping", ust: "Supply Chain & Logistics", tur: "Department", onay: true },
-  { ad: "Sales & Marketing", ust: "Executive Management", tur: "Department", onay: true },
-  { ad: "Human Resources", ust: "Executive Management", tur: "Department", onay: true },
-  { ad: "Quality Assurance", ust: "Executive Management", tur: "Department", onay: true },
-  { ad: "Sustainability & Safety", ust: "Executive Management", tur: "Department", onay: true },
-  { ad: "Engineering", ust: "Executive Management", tur: "Department", onay: true },
-  { ad: "Tooling & Prototyping", ust: "Engineering", tur: "Unit", onay: true },
-  { ad: "CNC Machining", ust: "Engineering", tur: "Unit", onay: true },
-  { ad: "Product Design", ust: "Engineering", tur: "Unit", onay: true },
-  { ad: "Hardware Fabrication", ust: "Engineering", tur: "Unit", onay: true },
-  { ad: "Production", ust: "Executive Management", tur: "Department", onay: true },
-  { ad: "Production Planning", ust: "Executive Management", tur: "Department", onay: true },
-  { ad: "Assembly & Quality Control", ust: "Executive Management", tur: "Department", onay: true },
+  { name: "Procurement", parent: "Procurement & Operations", type: "Department", requiresApproval: true },
+  { name: "Legal", parent: "Procurement & Operations", type: "Department", requiresApproval: true },
+  { name: "Administration", parent: "Procurement & Operations", type: "Department", requiresApproval: true },
+  { name: "Finance & Accounting", parent: "Executive Management", type: "Division", requiresApproval: false },
+  { name: "Global Finance", parent: "Finance & Accounting", type: "Department", requiresApproval: true },
+  { name: "Accounting", parent: "Finance & Accounting", type: "Department", requiresApproval: true },
+  { name: "Treasury", parent: "Finance & Accounting", type: "Department", requiresApproval: true },
+  { name: "Internal Audit", parent: "Finance & Accounting", type: "Department", requiresApproval: true },
+  { name: "Accounts Receivable", parent: "Finance & Accounting", type: "Department", requiresApproval: true },
+  { name: "Supply Chain & Logistics", parent: "Executive Management", type: "Division", requiresApproval: false },
+  { name: "Information Technology", parent: "Supply Chain & Logistics", type: "Department", requiresApproval: true },
+  { name: "International Trade", parent: "Supply Chain & Logistics", type: "Department", requiresApproval: true },
+  { name: "Warehouse & Shipping", parent: "Supply Chain & Logistics", type: "Department", requiresApproval: true },
+  { name: "Sales & Marketing", parent: "Executive Management", type: "Department", requiresApproval: true },
+  { name: "Human Resources", parent: "Executive Management", type: "Department", requiresApproval: true },
+  { name: "Quality Assurance", parent: "Executive Management", type: "Department", requiresApproval: true },
+  { name: "Sustainability & Safety", parent: "Executive Management", type: "Department", requiresApproval: true },
+  { name: "Engineering", parent: "Executive Management", type: "Department", requiresApproval: true },
+  { name: "Tooling & Prototyping", parent: "Engineering", type: "Unit", requiresApproval: true },
+  { name: "CNC Machining", parent: "Engineering", type: "Unit", requiresApproval: true },
+  { name: "Product Design", parent: "Engineering", type: "Unit", requiresApproval: true },
+  { name: "Hardware Fabrication", parent: "Engineering", type: "Unit", requiresApproval: true },
+  { name: "Production", parent: "Executive Management", type: "Department", requiresApproval: true },
+  { name: "Production Planning", parent: "Executive Management", type: "Department", requiresApproval: true },
+  { name: "Assembly & Quality Control", parent: "Executive Management", type: "Department", requiresApproval: true },
 ];
 
-const KISILER: KisiTanimi[] = [
+const DEMO_USERS: EmployeeDefinition[] = [
   {
-    ad: "Board Member",
-    eposta: `board@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Board Member",
-    birim: "Board of Directors",
-    yonetici: true,
-    yazar: false,
+    name: "Board Member",
+    email: `board@${DEMO_EMAIL_DOMAIN}`,
+    title: "Board Member",
+    unit: "Board of Directors",
+    isManager: true,
+    isAuthor: false,
     isScored: false,
     canAppreciate: true,
   },
   {
-    ad: "Alex Morgan",
-    eposta: `alex.morgan@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Chief Executive Officer",
-    birim: "Executive Management",
-    yonetici: true,
-    yazar: false,
+    name: "Alex Morgan",
+    email: `alex.morgan@${DEMO_EMAIL_DOMAIN}`,
+    title: "Chief Executive Officer",
+    unit: "Executive Management",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
+    canAppreciate: true,
+  },
+  {
+    name: "Marcus Vance",
+    email: `marcus.operations@${DEMO_EMAIL_DOMAIN}`,
+    title: "Head of Operations & Procurement",
+    unit: "Procurement & Operations",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
+    canAppreciate: true,
+  },
+  {
+    name: "Emily Watson",
+    email: `emily.procurement@${DEMO_EMAIL_DOMAIN}`,
+    title: "Procurement Manager",
+    unit: "Procurement",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
+    canAppreciate: false,
+  },
+  {
+    name: "Rachel Hayes",
+    email: `rachel.procurement@${DEMO_EMAIL_DOMAIN}`,
+    title: "Procurement Specialist",
+    unit: "Procurement",
+    isAuthor: true,
+    isScored: true,
+  },
+  {
+    name: "Nathan Drake",
+    email: `nathan.legal@${DEMO_EMAIL_DOMAIN}`,
+    title: "Senior Legal Counsel",
+    unit: "Legal",
+    isManager: true,
+    isAuthor: true,
     isScored: false,
   },
   {
-    ad: "Sarah Jenkins",
-    eposta: `sarah.jenkins@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Chief Operating Officer",
-    birim: "Executive Management",
-    yazar: false,
+    name: "Laura Croft",
+    email: `laura.admin@${DEMO_EMAIL_DOMAIN}`,
+    title: "Administrative Affairs Manager",
+    unit: "Administration",
+    isManager: true,
+    isAuthor: true,
     isScored: false,
   },
   {
-    ad: "David Kim",
-    eposta: `david.kim@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "VP of Procurement & Operations",
-    birim: "Procurement & Operations",
-    yonetici: true,
+    name: "Arthur Pendelton",
+    email: `arthur.cfo@${DEMO_EMAIL_DOMAIN}`,
+    title: "Chief Financial Officer",
+    unit: "Finance & Accounting",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
+    canAppreciate: true,
   },
   {
-    ad: "Emily Watson",
-    eposta: `emily.procurement@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Procurement Manager",
-    birim: "Procurement",
-    yonetici: true,
+    name: "Sophia Martinez",
+    email: `sophia.finance@${DEMO_EMAIL_DOMAIN}`,
+    title: "Global Finance Manager",
+    unit: "Global Finance",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Michael Chen",
-    eposta: `michael.legal@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Legal Counsel",
-    birim: "Legal",
-    yonetici: true,
+    name: "David Sterling",
+    email: `david.accounting@${DEMO_EMAIL_DOMAIN}`,
+    title: "Accounting Manager",
+    unit: "Accounting",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Claire Dupont",
-    eposta: `claire.admin@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Administration Manager",
-    birim: "Administration",
-    yonetici: true,
+    name: "Daniel Craig",
+    email: `daniel.accounting@${DEMO_EMAIL_DOMAIN}`,
+    title: "Financial Accountant",
+    unit: "Accounting",
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Robert Taylor",
-    eposta: `robert.finance@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "VP of Finance",
-    birim: "Finance & Accounting",
-    yonetici: true,
+    name: "Chloe Sullivan",
+    email: `chloe.treasury@${DEMO_EMAIL_DOMAIN}`,
+    title: "Treasury Manager",
+    unit: "Treasury",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Alan Howard",
-    eposta: `alan.howard@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Global Finance Director",
-    birim: "Global Finance",
-    yonetici: true,
+    name: "Victor Stone",
+    email: `victor.audit@${DEMO_EMAIL_DOMAIN}`,
+    title: "Internal Audit Lead",
+    unit: "Internal Audit",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Jessica Miller",
-    eposta: `jessica.accounting@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Accounting Manager",
-    birim: "Accounting",
-    yonetici: true,
+    name: "Grace Hopper",
+    email: `grace.receivables@${DEMO_EMAIL_DOMAIN}`,
+    title: "Accounts Receivable Lead",
+    unit: "Accounts Receivable",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Brian Scott",
-    eposta: `brian.treasury@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Treasury Manager",
-    birim: "Treasury",
-    yonetici: true,
+    name: "Lucas Scott",
+    email: `lucas.logistics@${DEMO_EMAIL_DOMAIN}`,
+    title: "Head of Supply Chain & Logistics",
+    unit: "Supply Chain & Logistics",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
+    canAppreciate: true,
   },
   {
-    ad: "Melanie Ross",
-    eposta: `melanie.audit@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Internal Audit Lead",
-    birim: "Internal Audit",
-    yonetici: true,
+    name: "Dennis Ritchie",
+    email: `dennis.it@${DEMO_EMAIL_DOMAIN}`,
+    title: "IT Director & System Admin",
+    unit: "Information Technology",
+    isManager: true,
+    isSystemAdmin: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Simon Brooks",
-    eposta: `simon.receivable@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Accounts Receivable Manager",
-    birim: "Accounts Receivable",
-    yonetici: true,
+    name: "Maria Santos",
+    email: `maria.trade@${DEMO_EMAIL_DOMAIN}`,
+    title: "International Trade Lead",
+    unit: "International Trade",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Lucas Martin",
-    eposta: `lucas.logistics@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "VP of Supply Chain",
-    birim: "Supply Chain & Logistics",
-    yonetici: true,
+    name: "Carlos Mendoza",
+    email: `carlos.trade@${DEMO_EMAIL_DOMAIN}`,
+    title: "Export Logistics Specialist",
+    unit: "International Trade",
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Marcus Vance",
-    eposta: `marcus.it@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "IT Lead & System Administrator",
-    birim: "Information Technology",
-    yonetici: true,
-    sistemYoneticisi: true,
+    name: "Alan Border",
+    email: `alan.warehouse@${DEMO_EMAIL_DOMAIN}`,
+    title: "Warehouse & Shipping Manager",
+    unit: "Warehouse & Shipping",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Ethan Hunt",
-    eposta: `ethan.trade@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "International Trade Manager",
-    birim: "International Trade",
-    yonetici: true,
+    name: "Brian O'Conner",
+    email: `brian.warehouse@${DEMO_EMAIL_DOMAIN}`,
+    title: "Inventory Logistics Clerk",
+    unit: "Warehouse & Shipping",
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Carlos Ortiz",
-    eposta: `carlos.warehouse@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Warehouse & Shipping Manager",
-    birim: "Warehouse & Shipping",
-    yonetici: true,
+    name: "Sarah Jenkins",
+    email: `sarah.marketing@${DEMO_EMAIL_DOMAIN}`,
+    title: "Sales & Marketing Director",
+    unit: "Sales & Marketing",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Sophia Turner",
-    eposta: `sophia.sales@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Sales & Marketing Director",
-    birim: "Sales & Marketing",
-    yonetici: true,
+    name: "Jessica Pearson",
+    email: `jessica.hr@${DEMO_EMAIL_DOMAIN}`,
+    title: "Human Resources Director",
+    unit: "Human Resources",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Zoe Anderson",
-    eposta: `zoe.hr@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Human Resources Director",
-    birim: "Human Resources",
-    yonetici: true,
+    name: "Peter Parker",
+    email: `peter.qa@${DEMO_EMAIL_DOMAIN}`,
+    title: "Quality Assurance Lead",
+    unit: "Quality Assurance",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Liam Walker",
-    eposta: `liam.quality@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Quality Assurance Manager",
-    birim: "Quality Assurance",
-    yonetici: true,
+    name: "Emma Watson",
+    email: `emma.safety@${DEMO_EMAIL_DOMAIN}`,
+    title: "HSE & Sustainability Officer",
+    unit: "Sustainability & Safety",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Eric Hayes",
-    eposta: `eric.sustainability@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "EHS & Sustainability Manager",
-    birim: "Sustainability & Safety",
-    yonetici: true,
+    name: "Kevin Flynn",
+    email: `kevin.engineering@${DEMO_EMAIL_DOMAIN}`,
+    title: "Chief Technology Officer",
+    unit: "Engineering",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
+    canAppreciate: true,
   },
   {
-    ad: "Kevin Russell",
-    eposta: `kevin.engineering@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "VP of Engineering",
-    birim: "Engineering",
-    yonetici: true,
+    name: "Amanda Clark",
+    email: `amanda.tooling@${DEMO_EMAIL_DOMAIN}`,
+    title: "Tooling & Prototyping Lead",
+    unit: "Tooling & Prototyping",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Amanda Ross",
-    eposta: `amanda.tooling@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Tooling & Prototyping Manager",
-    birim: "Tooling & Prototyping",
-    yonetici: true,
+    name: "Oliver Queen",
+    email: `oliver.tooling@${DEMO_EMAIL_DOMAIN}`,
+    title: "Tooling Technician",
+    unit: "Tooling & Prototyping",
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Victor Gomez",
-    eposta: `victor.cnc@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "CNC Workshop Manager",
-    birim: "CNC Machining",
-    yonetici: true,
+    name: "Barry Allen",
+    email: `barry.machining@${DEMO_EMAIL_DOMAIN}`,
+    title: "CNC Machining Specialist",
+    unit: "CNC Machining",
+    isManager: true,
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Brenda Clark",
-    eposta: `brenda.design@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Product Design Lead",
-    birim: "Product Design",
-    yonetici: true,
+    name: "Diana Prince",
+    email: `diana.design@${DEMO_EMAIL_DOMAIN}`,
+    title: "Principal Product Designer",
+    unit: "Product Design",
+    isManager: true,
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Tyler Ward",
-    eposta: `tyler.fabrication@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Hardware Fabrication Manager",
-    birim: "Hardware Fabrication",
-    yonetici: true,
+    name: "Tony Stark",
+    email: `tony.fabrication@${DEMO_EMAIL_DOMAIN}`,
+    title: "Hardware Fabrication Engineer",
+    unit: "Hardware Fabrication",
+    isManager: true,
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Leo Patel",
-    eposta: `leo.production@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Production Director",
-    birim: "Production",
-    yonetici: true,
+    name: "Walter White",
+    email: `walter.production@${DEMO_EMAIL_DOMAIN}`,
+    title: "Production Director",
+    unit: "Production",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
+    canAppreciate: true,
   },
   {
-    ad: "Benjamin Baker",
-    eposta: `benjamin.planning@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Planning Manager",
-    birim: "Production Planning",
-    yonetici: true,
+    name: "Jesse Pinkman",
+    email: `jesse.production@${DEMO_EMAIL_DOMAIN}`,
+    title: "Shift Production Supervisor",
+    unit: "Production",
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Samantha King",
-    eposta: `samantha.assembly@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Assembly Manager",
-    birim: "Assembly & Quality Control",
-    yonetici: true,
+    name: "Justin Case",
+    email: `justin.planning@${DEMO_EMAIL_DOMAIN}`,
+    title: "Lead Production Planner",
+    unit: "Production Planning",
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Rachel Cooper",
-    eposta: `rachel.procurement@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Procurement Specialist",
-    birim: "Procurement",
+    name: "Samantha Wright",
+    email: `samantha.assembly@${DEMO_EMAIL_DOMAIN}`,
+    title: "Assembly & QC Manager",
+    unit: "Assembly & Quality Control",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Daniel Brooks",
-    eposta: `daniel.accounting@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Senior Accountant",
-    birim: "Accounting",
+    name: "Hannah Abbott",
+    email: `hannah.assembly@${DEMO_EMAIL_DOMAIN}`,
+    title: "Assembly Line Inspector",
+    unit: "Assembly & Quality Control",
+    isAuthor: true,
+    isScored: true,
   },
   {
-    ad: "Melissa Adams",
-    eposta: `melissa.trade@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Trade Compliance Specialist",
-    birim: "International Trade",
+    name: "Ethan Hunt",
+    email: `ethan.secondmgr@${DEMO_EMAIL_DOMAIN}`,
+    title: "Deputy Assembly Manager",
+    unit: "Assembly & Quality Control",
+    isManager: true,
+    isAuthor: true,
+    isScored: false,
   },
   {
-    ad: "Oliver Wright",
-    eposta: `oliver.tooling@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Tooling Technician",
-    birim: "Tooling & Prototyping",
-  },
-  {
-    ad: "Justin Green",
-    eposta: `justin.planning@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Production Planner",
-    birim: "Production Planning",
-  },
-  {
-    ad: "Thomas Reed",
-    eposta: `thomas.production@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Manufacturing Operator",
-    birim: "Production",
-  },
-  {
-    ad: "Hannah Cole",
-    eposta: `hannah.assembly@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Assembly & QC Specialist",
-    birim: "Assembly & Quality Control",
-  },
-  // Inactive user: historical records remain, cannot log in.
-  {
-    ad: "George Nelson",
-    eposta: `george.inactive@${DEMO_EMAIL_DOMAIN}`,
-    unvan: "Former Operator",
-    birim: "Production",
+    name: "George Nelson",
+    email: `george.inactive@${DEMO_EMAIL_DOMAIN}`,
+    title: "Former Operator",
+    unit: "Production",
   },
 ];
 
 /** Unit names created by demo setup; root unit is excluded. */
-export const DEMO_UNIT_NAMES = BIRIMLER.map((birim) => birim.ad);
+export const DEMO_UNIT_NAMES = DEMO_UNITS.map((unit) => unit.name);
 
-const FAALIYETLER: Record<string, { baslik: string; aciklama: string }[]> = {
+const DEMO_ACTIVITIES: Record<string, { title: string; description: string }[]> = {
   Procurement: [
     {
-      baslik: "Supplier quote comparison",
-      aciklama:
+      title: "Supplier quote comparison",
+      description:
         "Compared quotes from three suppliers; delivery lead time and total landed cost were evaluated together.",
     },
     {
-      baslik: "Purchase order expediting",
-      aciklama:
+      title: "Purchase order expediting",
+      description:
         "Monitored delivery schedules of open purchase orders; requested updated ETAs for two delayed items.",
     },
   ],
   "Tooling & Prototyping": [
     {
-      baslik: "Tooling maintenance inspection",
-      aciklama:
+      title: "Tooling maintenance inspection",
+      description:
         "Dismantled die tooling on press #3, inspected surface wear and cleaned components. Replaced two guide pins.",
     },
     {
-      baslik: "Prototype trial run",
-      aciklama:
+      title: "Prototype trial run",
+      description:
         "Ran initial sample trial with customer tooling; edge burr slightly exceeded tolerance, increasing cooling cycle duration.",
     },
     {
-      baslik: "Tooling downtime troubleshooting",
-      aciklama:
+      title: "Tooling downtime troubleshooting",
+      description:
         "Replaced faulty temperature sensor on injection mold line. Machine stopped for 40 minutes.",
     },
   ],
   "Production Planning": [
     {
-      baslik: "Weekly production scheduling",
-      aciklama:
+      title: "Weekly production scheduling",
+      description:
         "Updated weekly schedule based on incoming orders; prioritized two urgent work orders pending raw material confirmation.",
     },
     {
-      baslik: "Supply delay rescheduling",
-      aciklama:
+      title: "Supply delay rescheduling",
+      description:
         "Supplier notified one-week shipment delay for critical spare parts; evaluating secondary source alternatives.",
     },
   ],
   Production: [
     {
-      baslik: "Shift performance report",
-      aciklama:
+      title: "Shift performance report",
+      description:
         "Morning shift achieved 92% of production quota; two short stoppages logged, scrap rate remains within tolerance.",
     },
     {
-      baslik: "Quality deviation inspection",
-      aciklama:
+      title: "Quality deviation inspection",
+      description:
         "Identified out-of-tolerance deviation on three batch units during dimensional inspection; isolated batch and alerted engineering.",
     },
   ],
   "Warehouse & Shipping": [
     {
-      baslik: "Dispatch routing plan",
-      aciklama:
+      title: "Dispatch routing plan",
+      description:
         "Organized daily dispatches by carrier and delivery coordinates; confirmed arrival windows with two key clients.",
     },
     {
-      baslik: "Cycle count inventory audit",
-      aciklama:
+      title: "Cycle count inventory audit",
+      description:
         "Performed cycle count on high-turnover SKUs; reconciled discrepancies between WMS and physical shelf counts.",
     },
   ],
   "International Trade": [
     {
-      baslik: "Customs documentation audit",
-      aciklama:
+      title: "Customs documentation audit",
+      description:
         "Audited export documents including invoices, packing lists, and certificates of origin; obtained missing verification signature.",
     },
     {
-      baslik: "Freight logistics tracking",
-      aciklama:
+      title: "Freight logistics tracking",
+      description:
         "Updated overseas carrier tracking status; shared updated arrival estimates with operations teams.",
     },
   ],
   Accounting: [
     {
-      baslik: "Accounts payable invoice verification",
-      aciklama:
+      title: "Accounts payable invoice verification",
+      description:
         "Cross-referenced weekly vendor invoices with purchase orders and receiving slips; flagged two invoices for review.",
     },
     {
-      baslik: "Balance reconciliation",
-      aciklama:
+      title: "Balance reconciliation",
+      description:
         "Reviewed accounts receivable balances and prepared documentation for month-end reconciliation.",
     },
   ],
   Engineering: [
     {
-      baslik: "Production line readiness",
-      aciklama:
+      title: "Production line readiness",
+      description:
         "Verified dies, tooling kits, and engineering drawings for today's work order; requested missing fixture from tooling.",
     },
     {
-      baslik: "Technical design evaluation",
-      aciklama:
+      title: "Technical design evaluation",
+      description:
         "Investigated dimensional variance on manufactured parts; adjusted machine tooling parameters.",
     },
   ],
   "Executive Management": [
     {
-      baslik: "Monthly executive operations review",
-      aciklama:
+      title: "Monthly executive operations review",
+      description:
         "Reviewed departmental KPI submissions; assigned owners and resolution deadlines for two high-priority operational bottlenecks.",
     },
   ],
 };
 
 /** List of dates working backwards from today, skipping non-business days. */
-function sonIsGunleri(now: Date, adet: number): string[] {
-  const gunler: string[] = [];
-  const imlec = new Date(`${companyDay(now)}T00:00:00.000Z`);
+function recentBusinessDays(now: Date, count: number): string[] {
+  const days: string[] = [];
+  const cursor = new Date(`${companyDay(now)}T00:00:00.000Z`);
 
-  while (gunler.length < adet) {
-    const gun = imlec.toISOString().slice(0, 10);
-    if (isBusinessDay(gun)) gunler.push(gun);
-    imlec.setUTCDate(imlec.getUTCDate() - 1);
+  while (days.length < count) {
+    const day = cursor.toISOString().slice(0, 10);
+    if (isBusinessDay(day)) days.push(day);
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
   }
 
-  return gunler.reverse();
+  return days.reverse();
 }
 
 export async function installDemoData(
   db: PrismaClient,
   options: InstallOptions = {},
 ): Promise<InstallResult> {
-  const PAROLA = options.password ?? DEMO_DEFAULT_PASSWORD;
+  const password = options.password ?? DEMO_DEFAULT_PASSWORD;
   const now = new Date();
-  const satirlar: string[] = [];
+  const logs: string[] = [];
   const log = (message: string) => {
-    satirlar.push(message);
+    logs.push(message);
     options.onLog?.(message);
   };
 
-  const eskiDemoKurulumuVar =
+  const hasExistingDemoData =
     (await db.user.count({
       where: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } },
     })) > 0;
 
   const root = await db.orgUnit.findFirst({ where: { parentId: null } });
   if (!root) {
-    return { ok: false as const, error: "no_root" as const, log: satirlar };
+    return { ok: false as const, error: "no_root" as const, log: logs };
   }
 
   // --- Organizational Units ------------------------------------------------
-  const birimler = new Map<string, string>([
+  const units = new Map<string, string>([
     ["root", root.id],
-    ["kök", root.id],
   ]);
 
-  for (const tanim of BIRIMLER) {
-    const mevcut = await db.orgUnit.findFirst({ where: { name: tanim.ad } });
-    if (mevcut) {
-      birimler.set(tanim.ad, mevcut.id);
-      if (!eskiDemoKurulumuVar) {
-        await rememberDemoOrgUnitOrigin(db, mevcut.id, DEMO_ORIGIN_REUSED);
+  for (const def of DEMO_UNITS) {
+    const existing = await db.orgUnit.findFirst({ where: { name: def.name } });
+    if (existing) {
+      units.set(def.name, existing.id);
+      if (!hasExistingDemoData) {
+        await rememberDemoOrgUnitOrigin(db, existing.id, DEMO_ORIGIN_REUSED);
       }
       continue;
     }
 
-    const ustId = birimler.get(tanim.ust);
-    if (!ustId) throw new Error(`Parent unit not found: ${tanim.ust}`);
+    const parentId = units.get(def.parent);
+    if (!parentId) throw new Error(`Parent unit not found: ${def.parent}`);
 
-    const olusan = await createOrgUnit(db, {
-      name: tanim.ad,
-      type: tanim.tur,
-      parentId: ustId,
+    const created = await createOrgUnit(db, {
+      name: def.name,
+      type: def.type,
+      parentId,
       sortOrder: 0,
-      requiresApproval: tanim.onay,
+      requiresApproval: def.requiresApproval,
       autoFlowsUp: true,
       attentionGroupId: null,
     });
 
-    if (!olusan.ok) throw new Error(`${tanim.ad}: ${olusan.message}`);
-    birimler.set(tanim.ad, olusan.value.id);
+    if (!created.ok) throw new Error(`${def.name}: ${created.message}`);
+    units.set(def.name, created.value.id);
 
-    await rememberDemoOrgUnitOrigin(db, olusan.value.id, DEMO_ORIGIN_CREATED);
-    log(`unit created: ${tanim.ad}`);
+    await rememberDemoOrgUnitOrigin(db, created.value.id, DEMO_ORIGIN_CREATED);
+    log(`unit created: ${def.name}`);
   }
 
   // --- Users ---------------------------------------------------------------
-  const kisiler = new Map<
+  const employees = new Map<
     string,
     {
       id: string;
       orgUnitId: string;
-      yoneticiId: string | null;
-      yoneticiIds: string[];
+      managerId: string | null;
+      managerIds: string[];
     }
   >();
 
-  for (const tanim of KISILER) {
-    const mevcut = await db.user.findUnique({ where: { email: tanim.eposta } });
-    if (mevcut) {
-      kisiler.set(tanim.eposta, {
-        id: mevcut.id,
-        orgUnitId: mevcut.orgUnitId,
-        yoneticiId: null,
-        yoneticiIds: [],
+  for (const def of DEMO_USERS) {
+    const existing = await db.user.findUnique({ where: { email: def.email } });
+    if (existing) {
+      employees.set(def.email, {
+        id: existing.id,
+        orgUnitId: existing.orgUnitId,
+        managerId: null,
+        managerIds: [],
       });
       continue;
     }
 
-    const orgUnitId = birimler.get(tanim.birim);
-    if (!orgUnitId) throw new Error(`Unit not found: ${tanim.birim}`);
+    const orgUnitId = units.get(def.unit);
+    if (!orgUnitId) throw new Error(`Unit not found: ${def.unit}`);
 
-    const sonuc = await createUser(db, {
-      fullName: tanim.ad,
-      email: tanim.eposta,
+    const result = await createUser(db, {
+      fullName: def.name,
+      email: def.email,
       orgUnitId,
-      title: tanim.unvan ?? null,
-      isUnitManager: tanim.yonetici ?? false,
-      isSystemAdmin: tanim.sistemYoneticisi ?? false,
-      writesActivities: tanim.yazar ?? true,
-      isScored: tanim.isScored ?? true,
-      canAppreciate: tanim.canAppreciate ?? false,
-      initialPassword: PAROLA,
+      title: def.title ?? null,
+      isUnitManager: def.isManager ?? false,
+      isSystemAdmin: def.isSystemAdmin ?? false,
+      writesActivities: def.isAuthor ?? true,
+      isScored: def.isScored ?? true,
+      canAppreciate: def.canAppreciate ?? false,
+      initialPassword: password,
     });
 
-    if (!sonuc.ok) throw new Error(`${tanim.eposta}: ${sonuc.message}`);
-    kisiler.set(tanim.eposta, {
-      id: sonuc.user.id,
+    if (!result.ok) throw new Error(`${def.email}: ${result.message}`);
+    employees.set(def.email, {
+      id: result.user.id,
       orgUnitId,
-      yoneticiId: null,
-      yoneticiIds: [],
+      managerId: null,
+      managerIds: [],
     });
-    log(`user created: ${tanim.ad}`);
+    log(`user created: ${def.name}`);
   }
 
-  for (const [index, tanim] of KISILER.entries()) {
-    const kisi = kisiler.get(tanim.eposta)!;
+  for (const [index, def] of DEMO_USERS.entries()) {
+    const employee = employees.get(def.email)!;
     await db.user.updateMany({
-      where: { id: kisi.id, lastLoginAt: null },
+      where: { id: employee.id, lastLoginAt: null },
       data: { lastLoginAt: new Date(now.getTime() - (index + 1) * 86_400_000) },
     });
   }
 
   // --- Approvers -----------------------------------------------------------
-  for (const tanim of KISILER) {
-    const kisi = kisiler.get(tanim.eposta)!;
-    if (tanim.yonetici) continue;
+  for (const def of DEMO_USERS) {
+    const employee = employees.get(def.email)!;
+    if (def.isManager) continue;
 
-    const birim = await db.orgUnit.findUnique({
-      where: { id: kisi.orgUnitId },
+    const unit = await db.orgUnit.findUnique({
+      where: { id: employee.orgUnitId },
       select: { requiresApproval: true },
     });
 
-    if (!birim?.requiresApproval) continue;
+    if (!unit?.requiresApproval) continue;
 
-    const yoneticiler = await resolveManagers(db, kisi.id);
-    kisi.yoneticiIds = yoneticiler.found ? yoneticiler.managerIds : [];
-    kisi.yoneticiId = yoneticiler.found ? (yoneticiler.managerIds[0] ?? null) : null;
+    const managers = await resolveManagers(db, employee.id);
+    employee.managerIds = managers.found ? managers.managerIds : [];
+    employee.managerId = managers.found ? (managers.managerIds[0] ?? null) : null;
   }
 
-  async function onayIliskileriniKur(kayit: {
+  async function setupApprovalRelations(record: {
     id: string;
     approvalStatus: string;
     approverId: string | null;
     approvalSubmittedAt: Date | null;
     approvalDecidedAt: Date | null;
-    onaylayiciIds: string[];
+    approverIds: string[];
   }): Promise<void> {
-    if (kayit.onaylayiciIds.length === 0) return;
+    if (record.approverIds.length === 0) return;
 
-    for (const userId of kayit.onaylayiciIds) {
+    for (const userId of record.approverIds) {
       await db.activityApprover.upsert({
-        where: { activityId_userId: { activityId: kayit.id, userId } },
+        where: { activityId_userId: { activityId: record.id, userId } },
         update: {},
-        create: { activityId: kayit.id, userId },
+        create: { activityId: record.id, userId },
       });
     }
 
-    const gonderim = kayit.approvalSubmittedAt ?? kayit.approvalDecidedAt;
-    if (!gonderim) return;
+    const submittedAt = record.approvalSubmittedAt ?? record.approvalDecidedAt;
+    if (!submittedAt) return;
 
-    const mevcutTur = await db.approvalRound.findFirst({
-      where: { activityId: kayit.id },
+    const existingRound = await db.approvalRound.findFirst({
+      where: { activityId: record.id },
       select: { id: true },
     });
-    if (mevcutTur) return;
+    if (existingRound) return;
 
-    const kararliMi =
-      kayit.approvalStatus !== "PENDING_APPROVAL" && kayit.approvalDecidedAt !== null;
+    const isDecided =
+      record.approvalStatus !== "PENDING_APPROVAL" && record.approvalDecidedAt !== null;
 
     await db.approvalRound.create({
       data: {
-        activityId: kayit.id,
+        activityId: record.id,
         roundNo: 1,
-        submittedAt: gonderim,
-        ...(kararliMi
+        submittedAt,
+        ...(isDecided
           ? {
-              decidedAt: kayit.approvalDecidedAt,
-              decidedById: kayit.approverId,
+              decidedAt: record.approvalDecidedAt,
+              decidedById: record.approverId,
               decision:
-                kayit.approvalStatus === "APPROVED"
+                record.approvalStatus === "APPROVED"
                   ? ("APPROVED" as const)
-                  : kayit.approvalStatus === "REJECTED"
+                  : record.approvalStatus === "REJECTED"
                     ? ("REJECTED" as const)
                     : ("CHANGES_REQUESTED" as const),
             }
@@ -667,23 +738,23 @@ export async function installDemoData(
   }
 
   // --- Activities ----------------------------------------------------------
-  const gunler = sonIsGunleri(now, GUN_SAYISI);
-  let yazilan = 0;
+  const days = recentBusinessDays(now, BUSINESS_DAY_COUNT);
+  let writtenCount = 0;
 
-  for (const tanim of KISILER) {
-    if (tanim.yazar === false) continue;
+  for (const def of DEMO_USERS) {
+    if (def.isAuthor === false) continue;
 
-    const kisi = kisiler.get(tanim.eposta)!;
-    const havuz = FAALIYETLER[tanim.birim] ?? FAALIYETLER["Executive Management"];
+    const employee = employees.get(def.email)!;
+    const pool = DEMO_ACTIVITIES[def.unit] ?? DEMO_ACTIVITIES["Executive Management"];
 
-    for (const [index, gun] of gunler.entries()) {
-      if ((index + tanim.eposta.length) % 4 === 0) continue;
+    for (const [index, day] of days.entries()) {
+      if ((index + def.email.length) % 4 === 0) continue;
 
-      const sablon = havuz[index % havuz.length];
-      const baslik = `${sablon.baslik} — ${gun.slice(5)}`;
+      const template = pool[index % pool.length];
+      const title = `${template.title} — ${day.slice(5)}`;
 
-      const mevcut = await activityMaintenanceReader(db).findFirst({
-        where: { authorId: kisi.id, title: baslik },
+      const existing = await activityMaintenanceReader(db).findFirst({
+        where: { authorId: employee.id, title },
         select: {
           id: true,
           approvalStatus: true,
@@ -692,101 +763,101 @@ export async function installDemoData(
           approvalDecidedAt: true,
         },
       });
-      if (mevcut) {
-        await onayIliskileriniKur({ ...mevcut, onaylayiciIds: kisi.yoneticiIds });
+      if (existing) {
+        await setupApprovalRelations({ ...existing, approverIds: employee.managerIds });
         continue;
       }
 
-      const olusturuldu = new Date(`${gun}T14:00:00.000Z`);
-      const kayit = await db.activity.create({
+      const createdAt = new Date(`${day}T14:00:00.000Z`);
+      const created = await db.activity.create({
         data: {
-          authorId: kisi.id,
-          authorOrgUnitId: kisi.orgUnitId,
-          activityDate: toDateValue(gun),
-          title: baslik,
-          description: sablon.aciklama,
+          authorId: employee.id,
+          authorOrgUnitId: employee.orgUnitId,
+          activityDate: toDateValue(day),
+          title,
+          description: template.description,
           approvalStatus: "APPROVED",
-          approverId: kisi.yoneticiId,
-          approvalSubmittedAt: kisi.yoneticiId ? olusturuldu : null,
-          approvalDecidedAt: kisi.yoneticiId ? olusturuldu : null,
-          createdAt: olusturuldu,
-          updatedAt: olusturuldu,
+          approverId: employee.managerId,
+          approvalSubmittedAt: employee.managerId ? createdAt : null,
+          approvalDecidedAt: employee.managerId ? createdAt : null,
+          createdAt,
+          updatedAt: createdAt,
         },
       });
-      await onayIliskileriniKur({
-        id: kayit.id,
-        approvalStatus: kayit.approvalStatus,
-        approverId: kayit.approverId,
-        approvalSubmittedAt: kayit.approvalSubmittedAt,
-        approvalDecidedAt: kayit.approvalDecidedAt,
-        onaylayiciIds: kisi.yoneticiIds,
+      await setupApprovalRelations({
+        id: created.id,
+        approvalStatus: created.approvalStatus,
+        approverId: created.approverId,
+        approvalSubmittedAt: created.approvalSubmittedAt,
+        approvalDecidedAt: created.approvalDecidedAt,
+        approverIds: employee.managerIds,
       });
 
       await db.activityRevision.create({
         data: {
-          activityId: kayit.id,
+          activityId: created.id,
           revisionNo: 1,
-          title: baslik,
-          description: sablon.aciklama,
+          title,
+          description: template.description,
           targetOrgUnitIds: [],
-          changedById: kisi.id,
-          createdAt: olusturuldu,
+          changedById: employee.id,
+          createdAt,
         },
       });
-      yazilan += 1;
+      writtenCount += 1;
     }
   }
 
-  if (yazilan > 0) log(`${yazilan} activities written`);
+  if (writtenCount > 0) log(`${writtenCount} activities written`);
 
   // --- Referenced Departments ----------------------------------------------
-  const kalipMudur = kisiler.get(`amanda.tooling@${DEMO_EMAIL_DOMAIN}`)!;
-  const uretimId = birimler.get("Production")!;
-  const kalipKayitlari = await activityMaintenanceReader(db).findMany({
-    where: { authorId: kalipMudur.id },
+  const toolingManager = employees.get(`amanda.tooling@${DEMO_EMAIL_DOMAIN}`)!;
+  const productionId = units.get("Production")!;
+  const toolingActivities = await activityMaintenanceReader(db).findMany({
+    where: { authorId: toolingManager.id },
     select: { id: true },
     take: 3,
   });
 
-  for (const kayit of kalipKayitlari) {
+  for (const activity of toolingActivities) {
     await db.activityTargetDept.createMany({
-      data: [{ activityId: kayit.id, orgUnitId: uretimId }],
+      data: [{ activityId: activity.id, orgUnitId: productionId }],
       skipDuplicates: true,
     });
   }
 
   // --- Conversations -------------------------------------------------------
-  const genelMudur = kisiler.get(`alex.morgan@${DEMO_EMAIL_DOMAIN}`)!;
-  const mevcutKonusma = await db.conversation.count();
+  const ceo = employees.get(`alex.morgan@${DEMO_EMAIL_DOMAIN}`)!;
+  const existingConversations = await db.conversation.count();
 
-  if (mevcutKonusma === 0 && kalipKayitlari.length >= 2) {
-    const acik = await askQuestion(
+  if (existingConversations === 0 && toolingActivities.length >= 2) {
+    const openQuestion = await askQuestion(
       db,
-      { id: genelMudur.id, isSystemAdmin: false },
+      { id: ceo.id, isSystemAdmin: false },
       {
-        activityId: kalipKayitlari[0].id,
+        activityId: toolingActivities[0].id,
         text: "The wear on this tooling seems recurring; what permanent engineering solution do you propose?",
       },
       now,
     );
-    if (acik.ok) log("open conversation added (pending reply)");
+    if (openQuestion.ok) log("open conversation added (pending reply)");
 
-    const cevaplanan = await askQuestion(
+    const repliedQuestion = await askQuestion(
       db,
-      { id: genelMudur.id, isSystemAdmin: false },
+      { id: ceo.id, isSystemAdmin: false },
       {
-        activityId: kalipKayitlari[1].id,
+        activityId: toolingActivities[1].id,
         text: "Which process parameter did you adjust to resolve the edge burr issue?",
       },
       now,
     );
 
-    if (cevaplanan.ok) {
+    if (repliedQuestion.ok) {
       await replyToConversation(
         db,
-        { id: kalipMudur.id, isSystemAdmin: false },
+        { id: toolingManager.id, isSystemAdmin: false },
         {
-          conversationId: cevaplanan.value.id,
+          conversationId: repliedQuestion.value.id,
           text: "We extended the cooling cycle duration by two seconds; will verify dimensions on the next trial batch.",
         },
         new Date(now.getTime() + 3_600_000),
@@ -796,27 +867,27 @@ export async function installDemoData(
   }
 
   // --- Cancelled Activity --------------------------------------------------
-  const planlamaci = kisiler.get(`justin.planning@${DEMO_EMAIL_DOMAIN}`)!;
-  const iptalEdilecek = await activityMaintenanceReader(db).findFirst({
-    where: { authorId: planlamaci.id, approvalStatus: "APPROVED" },
+  const planner = employees.get(`justin.planning@${DEMO_EMAIL_DOMAIN}`)!;
+  const activityToCancel = await activityMaintenanceReader(db).findFirst({
+    where: { authorId: planner.id, approvalStatus: "APPROVED" },
     select: { id: true },
   });
 
-  if (iptalEdilecek) {
-    const zatenIptal = await db.cancellationRecord.count({
-      where: { activityId: iptalEdilecek.id },
+  if (activityToCancel) {
+    const alreadyCancelled = await db.cancellationRecord.count({
+      where: { activityId: activityToCancel.id },
     });
 
-    if (zatenIptal === 0) {
+    if (alreadyCancelled === 0) {
       await db.$transaction(async (tx) => {
         await tx.activity.update({
-          where: { id: iptalEdilecek.id },
+          where: { id: activityToCancel.id },
           data: { approvalStatus: "CANCELLED" },
         });
         await tx.cancellationRecord.create({
           data: {
-            activityId: iptalEdilecek.id,
-            cancelledById: planlamaci.id,
+            activityId: activityToCancel.id,
+            cancelledById: planner.id,
             reason: "Entered for incorrect date; replacement entry submitted separately.",
             createdAt: now,
           },
@@ -827,7 +898,7 @@ export async function installDemoData(
   }
 
   // --- Approval Reasons ----------------------------------------------------
-  const GEREKCELER = [
+  const APPROVAL_REASONS = [
     { kind: "CHANGES_REQUESTED" as const, label: "Insufficient description", sortOrder: 1 },
     { kind: "CHANGES_REQUESTED" as const, label: "Incorrect activity date", sortOrder: 2 },
     { kind: "CHANGES_REQUESTED" as const, label: "Missing referenced department", sortOrder: 3 },
@@ -835,42 +906,42 @@ export async function installDemoData(
     { kind: "REJECTED" as const, label: "Duplicate entry", sortOrder: 2 },
   ];
 
-  for (const gerekce of GEREKCELER) {
+  for (const reason of APPROVAL_REASONS) {
     await db.approvalReason.upsert({
-      where: { kind_label: { kind: gerekce.kind, label: gerekce.label } },
+      where: { kind_label: { kind: reason.kind, label: reason.label } },
       update: {},
-      create: gerekce,
+      create: reason,
     });
   }
 
-  const duzeltmeGerekce = await db.approvalReason.findFirst({
+  const changesRequestedReason = await db.approvalReason.findFirst({
     where: { kind: "CHANGES_REQUESTED", label: "Insufficient description" },
   });
-  const retGerekce = await db.approvalReason.findFirst({
+  const rejectedReason = await db.approvalReason.findFirst({
     where: { kind: "REJECTED", label: "Duplicate entry" },
   });
 
   // --- Records in Various Approval States -----------------------------------
-  const kalipci = kisiler.get(`oliver.tooling@${DEMO_EMAIL_DOMAIN}`)!;
-  const planci = kisiler.get(`justin.planning@${DEMO_EMAIL_DOMAIN}`)!;
-  const bugun = companyDay(now);
+  const toolingEmployee = employees.get(`oliver.tooling@${DEMO_EMAIL_DOMAIN}`)!;
+  const planningEmployee = employees.get(`justin.planning@${DEMO_EMAIL_DOMAIN}`)!;
+  const todayStr = companyDay(now);
 
-  async function kararliKayit(
-    yazar: {
+  async function createDecidedActivity(
+    author: {
       id: string;
       orgUnitId: string;
-      yoneticiId: string | null;
-      yoneticiIds: string[];
+      managerId: string | null;
+      managerIds: string[];
     },
-    baslik: string,
-    aciklama: string,
-    durum: "PENDING_APPROVAL" | "CHANGES_REQUESTED" | "REJECTED",
-    gerekceId: string | null,
-    gerekceKind: "CHANGES_REQUESTED" | "REJECTED" | null,
-    not: string | null,
+    title: string,
+    description: string,
+    status: "PENDING_APPROVAL" | "CHANGES_REQUESTED" | "REJECTED",
+    reasonId: string | null,
+    reasonKind: "CHANGES_REQUESTED" | "REJECTED" | null,
+    note: string | null,
   ): Promise<string | null> {
-    const mevcut = await activityMaintenanceReader(db).findFirst({
-      where: { authorId: yazar.id, title: baslik },
+    const existing = await activityMaintenanceReader(db).findFirst({
+      where: { authorId: author.id, title },
       select: {
         id: true,
         approvalStatus: true,
@@ -879,54 +950,54 @@ export async function installDemoData(
         approvalDecidedAt: true,
       },
     });
-    if (mevcut) {
-      await onayIliskileriniKur({ ...mevcut, onaylayiciIds: yazar.yoneticiIds });
-      return mevcut.id;
+    if (existing) {
+      await setupApprovalRelations({ ...existing, approverIds: author.managerIds });
+      return existing.id;
     }
-    if (!yazar.yoneticiId) return null;
+    if (!author.managerId) return null;
 
-    const kayit = await db.activity.create({
+    const activity = await db.activity.create({
       data: {
-        authorId: yazar.id,
-        authorOrgUnitId: yazar.orgUnitId,
-        activityDate: toDateValue(bugun),
-        title: baslik,
-        description: aciklama,
-        approvalStatus: durum,
-        approverId: yazar.yoneticiId,
+        authorId: author.id,
+        authorOrgUnitId: author.orgUnitId,
+        activityDate: toDateValue(todayStr),
+        title,
+        description,
+        approvalStatus: status,
+        approverId: author.managerId,
         approvalSubmittedAt: now,
-        approvalDecidedAt: durum === "PENDING_APPROVAL" ? null : now,
-        approvalReasonId: gerekceId,
-        approvalReasonKind: gerekceKind,
-        approvalReasonNote: not,
+        approvalDecidedAt: status === "PENDING_APPROVAL" ? null : now,
+        approvalReasonId: reasonId,
+        approvalReasonKind: reasonKind,
+        approvalReasonNote: note,
       },
     });
 
     await db.activityRevision.create({
       data: {
-        activityId: kayit.id,
+        activityId: activity.id,
         revisionNo: 1,
-        title: baslik,
-        description: aciklama,
+        title,
+        description,
         targetOrgUnitIds: [],
-        changedById: yazar.id,
+        changedById: author.id,
       },
     });
 
-    await onayIliskileriniKur({
-      id: kayit.id,
-      approvalStatus: durum,
-      approverId: yazar.yoneticiId,
+    await setupApprovalRelations({
+      id: activity.id,
+      approvalStatus: status,
+      approverId: author.managerId,
       approvalSubmittedAt: now,
-      approvalDecidedAt: durum === "PENDING_APPROVAL" ? null : now,
-      onaylayiciIds: yazar.yoneticiIds,
+      approvalDecidedAt: status === "PENDING_APPROVAL" ? null : now,
+      approverIds: author.managerIds,
     });
 
-    return kayit.id;
+    return activity.id;
   }
 
-  await kararliKayit(
-    kalipci,
+  await createDecidedActivity(
+    toolingEmployee,
     "Daily press line inspection",
     "Completed daily oil and pressure checks across three presses; two within range, one recorded low pressure.",
     "PENDING_APPROVAL",
@@ -934,93 +1005,93 @@ export async function installDemoData(
     null,
     null,
   );
-  await kararliKayit(
-    planci,
+  await createDecidedActivity(
+    planningEmployee,
     "Order prioritization update",
     "Added three urgent customer orders to the line schedule.",
     "CHANGES_REQUESTED",
-    duzeltmeGerekce?.id ?? null,
-    duzeltmeGerekce ? "CHANGES_REQUESTED" : null,
+    changesRequestedReason?.id ?? null,
+    changesRequestedReason ? "CHANGES_REQUESTED" : null,
     "Please specify which orders were prioritized and which work orders were rescheduled.",
   );
-  await kararliKayit(
-    planci,
+  await createDecidedActivity(
+    planningEmployee,
     "Order prioritization update (duplicate)",
     "Duplicate entry for work order schedule.",
     "REJECTED",
-    retGerekce?.id ?? null,
-    retGerekce ? "REJECTED" : null,
+    rejectedReason?.id ?? null,
+    rejectedReason ? "REJECTED" : null,
     "Identical entry has already been recorded for this date.",
   );
   log("records added for all four approval states");
 
   // --- Follow-Up Items -----------------------------------------------------
-  const genelMudurViewer = { id: genelMudur.id, isSystemAdmin: false };
-  const takipVar = await db.followUpItem.count();
+  const ceoViewer = { id: ceo.id, isSystemAdmin: false };
+  const existingFollowUps = await db.followUpItem.count();
 
-  if (takipVar === 0) {
-    const adaylar = await activityMaintenanceReader(db).findMany({
+  if (existingFollowUps === 0) {
+    const candidates = await activityMaintenanceReader(db).findMany({
       where: { approvalStatus: "APPROVED" },
       orderBy: { createdAt: "desc" },
       take: 6,
       select: { id: true },
     });
 
-    if (adaylar.length >= 3) {
-      const taze = await openFollowUp(
+    if (candidates.length >= 3) {
+      const fresh = await openFollowUp(
         db,
-        genelMudurViewer,
+        ceoViewer,
         {
-          activityId: adaylar[0].id,
+          activityId: candidates[0].id,
           nextStep: "Obtain written delivery confirmation from supplier.",
         },
         now,
       );
-      if (taze.ok) log("open follow-up item added");
+      if (fresh.ok) log("open follow-up item added");
 
-      const kalipKaydi = await activityMaintenanceReader(db).findFirst({
-        where: { authorId: kalipci.id, approvalStatus: "APPROVED" },
+      const toolingActivity = await activityMaintenanceReader(db).findFirst({
+        where: { authorId: toolingEmployee.id, approvalStatus: "APPROVED" },
         orderBy: { createdAt: "desc" },
         select: { id: true },
       });
 
-      const eski = kalipKaydi
+      const stale = toolingActivity
         ? await openFollowUp(
             db,
-            genelMudurViewer,
+            ceoViewer,
             {
-              activityId: kalipKaydi.id,
+              activityId: toolingActivity.id,
               nextStep: "Perform engineering evaluation for permanent solution.",
-              ownerId: kalipMudur.id,
+              ownerId: toolingManager.id,
             },
             now,
           )
         : ({ ok: false } as const);
 
-      if (eski.ok) {
-        const geriye = new Date(now.getTime() - 20 * 24 * 3_600_000);
+      if (stale.ok) {
+        const pastDate = new Date(now.getTime() - 20 * 24 * 3_600_000);
         await db.followUpItem.update({
-          where: { id: eski.item.id },
-          data: { openedAt: geriye, lastMovedAt: geriye, createdAt: geriye },
+          where: { id: stale.item.id },
+          data: { openedAt: pastDate, lastMovedAt: pastDate, createdAt: pastDate },
         });
         log("stale follow-up item added");
       }
 
-      const kapanacak = await openFollowUp(
+      const toClose = await openFollowUp(
         db,
-        genelMudurViewer,
+        ceoViewer,
         {
-          activityId: adaylar[2].id,
+          activityId: candidates[2].id,
           nextStep: "Place order for replacement spare parts.",
         },
         now,
       );
 
-      if (kapanacak.ok) {
+      if (toClose.ok) {
         await closeFollowUp(
           db,
-          genelMudurViewer,
-          kapanacak.item.id,
+          ceoViewer,
+          toClose.item.id,
           "Replacement part received and installed; issue resolved.",
           now,
         );
@@ -1030,50 +1101,50 @@ export async function installDemoData(
   }
 
   // --- Read Receipts -------------------------------------------------------
-  const okunanlar = await activityMaintenanceReader(db).findMany({
-    where: { authorId: { not: genelMudur.id }, approvalStatus: "APPROVED" },
+  const readActivities = await activityMaintenanceReader(db).findMany({
+    where: { authorId: { not: ceo.id }, approvalStatus: "APPROVED" },
     orderBy: { createdAt: "desc" },
     skip: 4,
     take: 10,
     select: { id: true },
   });
 
-  for (const kayit of okunanlar) {
+  for (const activity of readActivities) {
     await db.readReceipt.upsert({
-      where: { activityId_userId: { activityId: kayit.id, userId: genelMudur.id } },
+      where: { activityId_userId: { activityId: activity.id, userId: ceo.id } },
       update: {},
       create: {
-        activityId: kayit.id,
-        userId: genelMudur.id,
+        activityId: activity.id,
+        userId: ceo.id,
         firstReadAt: now,
         lastReadAt: now,
       },
     });
   }
-  log(`${okunanlar.length} activities marked as read for CEO`);
+  log(`${readActivities.length} activities marked as read for CEO`);
 
   // --- Calendar: Holidays --------------------------------------------------
-  const yil = Number(bugun.slice(0, 4));
-  const TATILLER = [
-    { tarih: `${yil}-01-01`, ad: "New Year's Day" },
-    { tarih: `${yil}-04-20`, ad: "Spring Holiday" },
-    { tarih: `${yil}-05-01`, ad: "Labor Day" },
-    { tarih: `${yil}-07-04`, ad: "Mid-Year Break" },
-    { tarih: `${yil}-10-12`, ad: "Autumn Holiday" },
-    { tarih: `${yil}-12-25`, ad: "Winter Holiday" },
+  const currentYear = Number(todayStr.slice(0, 4));
+  const DEMO_HOLIDAYS = [
+    { date: `${currentYear}-01-01`, name: "New Year's Day" },
+    { date: `${currentYear}-04-20`, name: "Spring Holiday" },
+    { date: `${currentYear}-05-01`, name: "Labor Day" },
+    { date: `${currentYear}-07-04`, name: "Mid-Year Break" },
+    { date: `${currentYear}-10-12`, name: "Autumn Holiday" },
+    { date: `${currentYear}-12-25`, name: "Winter Holiday" },
   ];
 
-  for (const tatil of TATILLER) {
+  for (const holiday of DEMO_HOLIDAYS) {
     await db.holiday.upsert({
-      where: { date: toDateValue(tatil.tarih) },
+      where: { date: toDateValue(holiday.date) },
       update: {},
-      create: { date: toDateValue(tatil.tarih), description: tatil.ad },
+      create: { date: toDateValue(holiday.date), description: holiday.name },
     });
   }
-  log(`${TATILLER.length} holidays added to calendar`);
+  log(`${DEMO_HOLIDAYS.length} holidays added to calendar`);
 
   // --- Help Articles -------------------------------------------------------
-  const YARDIM_YAZILARI = [
+  const DEMO_HELP_ARTICLES = [
     {
       category: "Getting Started",
       title: "What should I do after my first login?",
@@ -1106,103 +1177,103 @@ export async function installDemoData(
     },
   ] as const;
 
-  let eklenenYardim = 0;
-  for (const [index, yazi] of YARDIM_YAZILARI.entries()) {
-    const mevcut = await db.helpArticle.findFirst({
+  let addedHelpCount = 0;
+  for (const [index, article] of DEMO_HELP_ARTICLES.entries()) {
+    const existing = await db.helpArticle.findFirst({
       where: {
-        category: yazi.category,
-        title: yazi.title,
+        category: article.category,
+        title: article.title,
         archivedAt: null,
       },
       select: { id: true },
     });
-    if (mevcut) continue;
+    if (existing) continue;
 
-    const sonuc = await createHelpArticle(
+    const result = await createHelpArticle(
       db,
-      genelMudur.id,
+      ceo.id,
       {
-        ...yazi,
+        ...article,
         sortOrder: index,
         isPublished: true,
       },
       now,
     );
-    if (!sonuc.ok) throw new Error(`${yazi.title}: ${sonuc.message}`);
-    eklenenYardim += 1;
+    if (!result.ok) throw new Error(`${article.title}: ${result.message}`);
+    addedHelpCount += 1;
   }
-  if (eklenenYardim > 0) log(`${eklenenYardim} help articles added`);
+  if (addedHelpCount > 0) log(`${addedHelpCount} help articles added`);
 
   // --- Absence Records -----------------------------------------------------
-  const izinVar = await db.noActivityPeriod.count();
-  if (izinVar === 0) {
-    const izinli = kisiler.get(`hannah.assembly@${DEMO_EMAIL_DOMAIN}`);
-    const montajMudur = kisiler.get(`samantha.assembly@${DEMO_EMAIL_DOMAIN}`);
+  const existingAbsences = await db.noActivityPeriod.count();
+  if (existingAbsences === 0) {
+    const employeeOnLeave = employees.get(`hannah.assembly@${DEMO_EMAIL_DOMAIN}`);
+    const assemblyManager = employees.get(`samantha.assembly@${DEMO_EMAIL_DOMAIN}`);
 
-    if (izinli && montajMudur) {
-      const baslangic = new Date(now.getTime() - 2 * 24 * 3_600_000);
-      const bitis = new Date(now.getTime() + 3 * 24 * 3_600_000);
+    if (employeeOnLeave && assemblyManager) {
+      const startDate = new Date(now.getTime() - 2 * 24 * 3_600_000);
+      const endDate = new Date(now.getTime() + 3 * 24 * 3_600_000);
 
       await db.noActivityPeriod.create({
         data: {
-          userId: izinli.id,
-          startDate: toDateValue(companyDay(baslangic)),
-          endDate: toDateValue(companyDay(bitis)),
+          userId: employeeOnLeave.id,
+          startDate: toDateValue(companyDay(startDate)),
+          endDate: toDateValue(companyDay(endDate)),
           note: "Annual leave",
-          markedById: montajMudur.id,
+          markedById: assemblyManager.id,
           status: "APPROVED",
           decidedAt: now,
-          decidedById: montajMudur.id,
+          decidedById: assemblyManager.id,
         },
       });
       log("absence record added");
     }
   }
 
-  const nazli = kisiler.get(`board@${DEMO_EMAIL_DOMAIN}`);
-  const kalipciCalisan = kisiler.get(`oliver.tooling@${DEMO_EMAIL_DOMAIN}`);
+  const boardMember = employees.get(`board@${DEMO_EMAIL_DOMAIN}`);
+  const toolingWorker = employees.get(`oliver.tooling@${DEMO_EMAIL_DOMAIN}`);
 
-  if (nazli) {
-    const not = "Example: approved by executive";
-    const mevcut = await db.noActivityPeriod.findFirst({
-      where: { userId: nazli.id, note: not },
+  if (boardMember) {
+    const note = "Example: approved by executive";
+    const existing = await db.noActivityPeriod.findFirst({
+      where: { userId: boardMember.id, note },
       select: { id: true },
     });
-    if (!mevcut) {
-      const baslangic = companyDay(new Date(now.getTime() + 6 * 86_400_000));
-      const bitis = companyDay(new Date(now.getTime() + 8 * 86_400_000));
-      const sonuc = await markOwnNoActivityPeriod(
+    if (!existing) {
+      const startDate = companyDay(new Date(now.getTime() + 6 * 86_400_000));
+      const endDate = companyDay(new Date(now.getTime() + 8 * 86_400_000));
+      const result = await markOwnNoActivityPeriod(
         db,
-        nazli.id,
+        boardMember.id,
         {
-          startDate: baslangic,
-          endDate: bitis,
-          note: not,
+          startDate,
+          endDate,
+          note,
         },
         now,
       );
-      if (!sonuc.ok) throw new Error(`Board demo absence: ${sonuc.message}`);
+      if (!result.ok) throw new Error(`Board demo absence: ${result.message}`);
       log("approved absence example added for Board member");
     }
   }
 
   // Sample appreciation by Board member
-  if (nazli && kalipKayitlari.length > 0) {
-    const takdir = await db.activityAppreciation.findUnique({
+  if (boardMember && toolingActivities.length > 0) {
+    const appreciation = await db.activityAppreciation.findUnique({
       where: {
         activityId_userId: {
-          activityId: kalipKayitlari[0].id,
-          userId: nazli.id,
+          activityId: toolingActivities[0].id,
+          userId: boardMember.id,
         },
       },
       select: { activityId: true },
     });
 
-    if (!takdir) {
+    if (!appreciation) {
       await db.activityAppreciation.create({
         data: {
-          activityId: kalipKayitlari[0].id,
-          userId: nazli.id,
+          activityId: toolingActivities[0].id,
+          userId: boardMember.id,
           createdAt: now,
         },
       });
@@ -1210,78 +1281,78 @@ export async function installDemoData(
     }
   }
 
-  if (kalipciCalisan && kalipMudur) {
-    const bekleyenNot = "Example: pending manager approval";
-    const bekleyen = await db.noActivityPeriod.findFirst({
-      where: { userId: kalipciCalisan.id, note: bekleyenNot },
+  if (toolingWorker && toolingManager) {
+    const pendingNote = "Example: pending manager approval";
+    const pending = await db.noActivityPeriod.findFirst({
+      where: { userId: toolingWorker.id, note: pendingNote },
       select: { id: true },
     });
-    if (!bekleyen) {
-      const baslangic = companyDay(new Date(now.getTime() + 10 * 86_400_000));
-      const bitis = companyDay(new Date(now.getTime() + 11 * 86_400_000));
-      const sonuc = await markOwnNoActivityPeriod(
+    if (!pending) {
+      const startDate = companyDay(new Date(now.getTime() + 10 * 86_400_000));
+      const endDate = companyDay(new Date(now.getTime() + 11 * 86_400_000));
+      const result = await markOwnNoActivityPeriod(
         db,
-        kalipciCalisan.id,
-        { startDate: baslangic, endDate: bitis, note: bekleyenNot },
+        toolingWorker.id,
+        { startDate, endDate, note: pendingNote },
         now,
       );
-      if (!sonuc.ok) throw new Error(`Pending absence example: ${sonuc.message}`);
+      if (!result.ok) throw new Error(`Pending absence example: ${result.message}`);
       log("pending absence request added");
     }
 
-    const reddedilenNot = "Example: rejected absence request";
-    let reddedilen = await db.noActivityPeriod.findFirst({
-      where: { userId: kalipciCalisan.id, note: reddedilenNot },
+    const rejectedNote = "Example: rejected absence request";
+    let rejected = await db.noActivityPeriod.findFirst({
+      where: { userId: toolingWorker.id, note: rejectedNote },
       select: { id: true, status: true },
     });
-    if (!reddedilen) {
-      const baslangic = companyDay(new Date(now.getTime() + 14 * 86_400_000));
-      const bitis = companyDay(new Date(now.getTime() + 15 * 86_400_000));
-      const sonuc = await markOwnNoActivityPeriod(
+    if (!rejected) {
+      const startDate = companyDay(new Date(now.getTime() + 14 * 86_400_000));
+      const endDate = companyDay(new Date(now.getTime() + 15 * 86_400_000));
+      const result = await markOwnNoActivityPeriod(
         db,
-        kalipciCalisan.id,
-        { startDate: baslangic, endDate: bitis, note: reddedilenNot },
+        toolingWorker.id,
+        { startDate, endDate, note: rejectedNote },
         now,
       );
-      if (!sonuc.ok) throw new Error(`Rejected absence example: ${sonuc.message}`);
-      reddedilen = { id: sonuc.id, status: sonuc.status };
+      if (!result.ok) throw new Error(`Rejected absence example: ${result.message}`);
+      rejected = { id: result.id, status: result.status };
     }
-    if (reddedilen.status === "PENDING") {
-      const sonuc = await decideNoActivityPeriod(
+    if (rejected.status === "PENDING") {
+      const result = await decideNoActivityPeriod(
         db,
-        kalipMudur.id,
-        reddedilen.id,
+        toolingManager.id,
+        rejected.id,
         "REJECTED",
         "Review dates and resubmit with updated coverage plan.",
         now,
       );
-      if (!sonuc.ok) throw new Error(`Rejected absence example: ${sonuc.message}`);
+      if (!result.ok) throw new Error(`Rejected absence example: ${result.message}`);
       log("rejected absence request added");
     }
   }
 
   // --- Deputy Example ------------------------------------------------------
-  const vekaletVar = await db.noActivityPeriod.count({
+  const hasDeputy = await db.noActivityPeriod.count({
     where: { deputyId: { not: null } },
   });
 
-  if (vekaletVar === 0) {
-    const teknikMudurVekaleti = kisiler.get(`kevin.engineering@${DEMO_EMAIL_DOMAIN}`);
-    const vekil = kisiler.get(`amanda.tooling@${DEMO_EMAIL_DOMAIN}`);
-    const genelMudurVekalet = kisiler.get(`alex.morgan@${DEMO_EMAIL_DOMAIN}`);
+  if (hasDeputy === 0) {
+    const cto = employees.get(`kevin.engineering@${DEMO_EMAIL_DOMAIN}`);
+    const deputy = employees.get(`amanda.tooling@${DEMO_EMAIL_DOMAIN}`);
+    const ceoUser = employees.get(`alex.morgan@${DEMO_EMAIL_DOMAIN}`);
 
-    if (teknikMudurVekaleti && vekil && genelMudurVekalet) {
-      const vBas = new Date(now.getTime() - 1 * 24 * 3_600_000);
-      const vBit = new Date(now.getTime() + 4 * 24 * 3_600_000);
+    if (cto && deputy && ceoUser) {
+      const startDate = new Date(now.getTime() - 1 * 24 * 3_600_000);
+      const endDate = new Date(now.getTime() + 4 * 24 * 3_600_000);
 
       await db.noActivityPeriod.create({
         data: {
-          userId: teknikMudurVekaleti.id,
-          startDate: toDateValue(companyDay(vBas)),
-          endDate: toDateValue(companyDay(vBit)),
+          userId: cto.id,
+          startDate: toDateValue(companyDay(startDate)),
+          endDate: toDateValue(companyDay(endDate)),
           note: "Annual leave — Tooling Manager acting as deputy",
-          deputyId: vekil.id,
-          markedById: genelMudurVekalet.id,
+          deputyId: deputy.id,
+          markedById: ceoUser.id,
         },
       });
       log("deputy example added (Engineering → Tooling Manager)");
@@ -1289,98 +1360,98 @@ export async function installDemoData(
   }
 
   // --- Inactive User -------------------------------------------------------
-  const ayrilan = kisiler.get(`george.inactive@${DEMO_EMAIL_DOMAIN}`);
-  if (ayrilan) {
+  const inactiveUser = employees.get(`george.inactive@${DEMO_EMAIL_DOMAIN}`);
+  if (inactiveUser) {
     await db.user.update({
-      where: { id: ayrilan.id },
+      where: { id: inactiveUser.id },
       data: { isActive: false },
     });
   }
 
   // --- Notifications -------------------------------------------------------
-  const bildirimVar = await db.notificationQueue.count({
+  const hasNotifications = await db.notificationQueue.count({
     where: { idempotencyKey: { startsWith: "demo-data:" } },
   });
 
-  if (bildirimVar === 0) {
-    const ornekKayitlar = await activityMaintenanceReader(db).findMany({
+  if (hasNotifications === 0) {
+    const sampleActivities = await activityMaintenanceReader(db).findMany({
       orderBy: { createdAt: "desc" },
       take: 4,
       select: { id: true, title: true, authorId: true },
     });
 
-    const bildirimler: {
+    const notifications: {
       userId: string;
       eventType: string;
       activity: { id: string; title: string };
-      gorulmus: boolean;
-      dakikaOnce: number;
+      isSeen: boolean;
+      minutesAgo: number;
     }[] = [];
 
-    if (ornekKayitlar.length >= 3) {
-      bildirimler.push(
+    if (sampleActivities.length >= 3) {
+      notifications.push(
         {
-          userId: kalipMudur.id,
+          userId: toolingManager.id,
           eventType: NOTIFICATION_EVENTS.approvalPending,
-          activity: ornekKayitlar[0],
-          gorulmus: false,
-          dakikaOnce: 12,
+          activity: sampleActivities[0],
+          isSeen: false,
+          minutesAgo: 12,
         },
         {
-          userId: kalipMudur.id,
+          userId: toolingManager.id,
           eventType: NOTIFICATION_EVENTS.questionAsked,
-          activity: ornekKayitlar[1],
-          gorulmus: false,
-          dakikaOnce: 95,
+          activity: sampleActivities[1],
+          isSeen: false,
+          minutesAgo: 95,
         },
         {
-          userId: genelMudur.id,
+          userId: ceo.id,
           eventType: NOTIFICATION_EVENTS.answerReceived,
-          activity: ornekKayitlar[1],
-          gorulmus: true,
-          dakikaOnce: 260,
+          activity: sampleActivities[1],
+          isSeen: true,
+          minutesAgo: 260,
         },
         {
-          userId: planci.id,
+          userId: planningEmployee.id,
           eventType: NOTIFICATION_EVENTS.changesRequested,
-          activity: ornekKayitlar[2],
-          gorulmus: false,
-          dakikaOnce: 40,
+          activity: sampleActivities[2],
+          isSeen: false,
+          minutesAgo: 40,
         },
         {
-          userId: kalipci.id,
+          userId: toolingEmployee.id,
           eventType: NOTIFICATION_EVENTS.activityApproved,
-          activity: ornekKayitlar[2],
-          gorulmus: true,
-          dakikaOnce: 1500,
+          activity: sampleActivities[2],
+          isSeen: true,
+          minutesAgo: 1500,
         },
       );
     }
 
-    for (const [sira, bildirim] of bildirimler.entries()) {
-      const olusma = new Date(now.getTime() - bildirim.dakikaOnce * 60_000);
+    for (const [order, notif] of notifications.entries()) {
+      const createdAt = new Date(now.getTime() - notif.minutesAgo * 60_000);
 
       await db.notificationQueue.create({
         data: {
-          userId: bildirim.userId,
-          eventType: bildirim.eventType,
+          userId: notif.userId,
+          eventType: notif.eventType,
           channel: "EMAIL",
           payload: {
-            activityId: bildirim.activity.id,
-            activityTitle: bildirim.activity.title,
+            activityId: notif.activity.id,
+            activityTitle: notif.activity.title,
           },
-          idempotencyKey: `demo-data:${bildirim.eventType}:${sira}`,
+          idempotencyKey: `demo-data:${notif.eventType}:${order}`,
           status: "SENT",
-          sentAt: olusma,
-          seenAt: bildirim.gorulmus ? olusma : null,
-          createdAt: olusma,
+          sentAt: createdAt,
+          seenAt: notif.isSeen ? createdAt : null,
+          createdAt,
         },
       });
     }
 
-    if (bildirimler.length > 0) log(`${bildirimler.length} notifications added`);
+    if (notifications.length > 0) log(`${notifications.length} notifications added`);
   }
 
   log("ready.");
-  return { ok: true as const, log: satirlar };
+  return { ok: true as const, log: logs };
 }

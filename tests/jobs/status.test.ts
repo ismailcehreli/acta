@@ -16,8 +16,8 @@ import { SETTING_KEYS, saveSettings } from "@/server/settings/system-settings";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Zamanlanmış iş izleme (§12.4). Zamanlayıcı durursa sistem çalışıyor görünür
-// ama süreçler sessizce ölür — tespit edilmesi en zor arıza türü budur.
+// Scheduled job monitoring (§12.4). If the scheduler stops, the system appears to be running
+// but processes die silently — this is the most difficult type of failure to detect.
 
 const NOW = new Date("2026-08-18T12:00:00.000Z");
 
@@ -29,100 +29,100 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-describe("gecikme hesabı", () => {
-  const temel = {
-    jobName: "deneme",
+describe("delay calculation", () => {
+  const base = {
+    jobName: "test",
     lastError: null,
     expectedIntervalMinutes: 1,
   };
 
-  it("beklenen aralık içinde çalışan iş gecikmiş sayılmaz", () => {
-    const sonuc = describeJob(
-      { ...temel, lastSuccessAt: new Date(NOW.getTime() - 30_000) },
+  it("a job running within the expected interval is not considered delayed", () => {
+    const result = describeJob(
+      { ...base, lastSuccessAt: new Date(NOW.getTime() - 30_000) },
       NOW,
     );
 
-    expect(sonuc.lagSeconds).toBe(30);
-    expect(sonuc.delayed).toBe(false);
+    expect(result.lagSeconds).toBe(30);
+    expect(result.delayed).toBe(false);
   });
 
-  it("iki katı sınırında henüz gecikmiş sayılmaz", () => {
-    const sinir = 1 * 60 * DELAY_FACTOR * 1000;
-    const sonuc = describeJob(
-      { ...temel, lastSuccessAt: new Date(NOW.getTime() - sinir) },
+  it("is not yet considered delayed at twice the threshold", () => {
+    const limit = 1 * 60 * DELAY_FACTOR * 1000;
+    const result = describeJob(
+      { ...base, lastSuccessAt: new Date(NOW.getTime() - limit) },
       NOW,
     );
 
-    expect(sonuc.delayed).toBe(false);
+    expect(result.delayed).toBe(false);
   });
 
-  it("iki katı aşılınca gecikmiş sayılır", () => {
-    const sinir = 1 * 60 * DELAY_FACTOR * 1000;
-    const sonuc = describeJob(
-      { ...temel, lastSuccessAt: new Date(NOW.getTime() - sinir - 1000) },
+  it("is considered delayed when twice the threshold is exceeded", () => {
+    const limit = 1 * 60 * DELAY_FACTOR * 1000;
+    const result = describeJob(
+      { ...base, lastSuccessAt: new Date(NOW.getTime() - limit - 1000) },
       NOW,
     );
 
-    expect(sonuc.delayed).toBe(true);
+    expect(result.delayed).toBe(true);
   });
 
-  it("hiç çalışmamış iş gecikmiş sayılır", () => {
-    const sonuc = describeJob({ ...temel, lastSuccessAt: null }, NOW);
+  it("a job that has never run is considered delayed", () => {
+    const result = describeJob({ ...base, lastSuccessAt: null }, NOW);
 
-    // "Hiç çalışmadı" bir sağlık durumu değil, arızadır.
-    expect(sonuc.lagSeconds).toBeNull();
-    expect(sonuc.delayed).toBe(true);
+    // "Never ran" is not a healthy state, it is a failure.
+    expect(result.lagSeconds).toBeNull();
+    expect(result.delayed).toBe(true);
   });
 
-  it("beklenen aralık uzunsa eşik de uzar", () => {
-    const sonuc = describeJob(
+  it("threshold extends if the expected interval is longer", () => {
+    const result = describeJob(
       {
-        ...temel,
+        ...base,
         expectedIntervalMinutes: 60,
         lastSuccessAt: new Date(NOW.getTime() - 90 * 60_000),
       },
       NOW,
     );
 
-    // 90 dakika, saatlik bir işin iki katı eşiğinin (120 dk) altında.
-    expect(sonuc.delayed).toBe(false);
+    // 90 minutes is below twice the threshold (120 min) of an hourly job.
+    expect(result.delayed).toBe(false);
   });
 });
 
-describe("nabız kaydı", () => {
-  it("başarı yazılır ve önceki hata temizlenir", async () => {
-    await recordJobFailure(testDb, JOB_NAMES.notificationDispatch, "SMTP yok");
+describe("heartbeat recording", () => {
+  it("success is recorded and previous error is cleared", async () => {
+    await recordJobFailure(testDb, JOB_NAMES.notificationDispatch, "No SMTP");
     await recordJobSuccess(testDb, JOB_NAMES.notificationDispatch, NOW);
 
-    const kayit = await testDb.scheduledJobStatus.findUniqueOrThrow({
+    const record = await testDb.scheduledJobStatus.findUniqueOrThrow({
       where: { jobName: JOB_NAMES.notificationDispatch },
     });
-    expect(kayit.lastSuccessAt).toEqual(NOW);
-    expect(kayit.lastError).toBeNull();
+    expect(record.lastSuccessAt).toEqual(NOW);
+    expect(record.lastError).toBeNull();
   });
 
-  it("hata son başarılı çalışma zamanını silmez", async () => {
+  it("error does not delete last successful run timestamp", async () => {
     await recordJobSuccess(testDb, JOB_NAMES.notificationDispatch, NOW);
-    await recordJobFailure(testDb, JOB_NAMES.notificationDispatch, "bağlantı koptu");
+    await recordJobFailure(testDb, JOB_NAMES.notificationDispatch, "connection dropped");
 
-    const kayit = await testDb.scheduledJobStatus.findUniqueOrThrow({
+    const record = await testDb.scheduledJobStatus.findUniqueOrThrow({
       where: { jobName: JOB_NAMES.notificationDispatch },
     });
-    // Gecikme hesabı buna dayanıyor; hata onu silmemeli.
-    expect(kayit.lastSuccessAt).toEqual(NOW);
-    expect(kayit.lastError).toBe("bağlantı koptu");
+    // Delay calculation depends on this; error must not delete it.
+    expect(record.lastSuccessAt).toEqual(NOW);
+    expect(record.lastError).toBe("connection dropped");
   });
 
-  it("kaydı hiç olmayan iş de listede görünür ve gecikmiş sayılır", async () => {
+  it("a job with no record at all appears in list and is considered delayed", async () => {
     const jobs = await listJobHealth(testDb, NOW);
 
     expect(jobs).toHaveLength(Object.values(JOB_NAMES).length);
     expect(jobs.every((job) => job.delayed)).toBe(true);
-    // Listede görünmeyen iş sağlıklı sanılırdı.
+    // A job not appearing in the list would be assumed healthy.
     expect(jobs.map((j) => j.jobName)).toContain(JOB_NAMES.overdueAnswerReminder);
   });
 
-  it("en kötü gecikme raporlanır", async () => {
+  it("worst lag is reported", async () => {
     for (const jobName of Object.values(JOB_NAMES)) {
       await recordJobSuccess(testDb, jobName, new Date(NOW.getTime() - 10_000));
     }
@@ -137,33 +137,33 @@ describe("nabız kaydı", () => {
   });
 });
 
-describe("gecikme alarmı (§12.4)", () => {
-  async function sistemYoneticisi(email?: string) {
-    // Ağaçta tek kök olabilir; ikinci çağrı mevcut kökü kullanır.
-    const mevcut = await testDb.orgUnit.findFirst({ where: { parentId: null } });
-    const unit = mevcut ?? (await createOrgUnit({ name: "Şirket", type: "Kök" }));
+describe("delay alert (§12.4)", () => {
+  async function systemAdmin(email?: string) {
+    // Tree can only have one root; second call uses the existing root.
+    const existing = await testDb.orgUnit.findFirst({ where: { parentId: null } });
+    const unit = existing ?? (await createOrgUnit({ name: "Company", type: "Root" }));
 
     return createUser(unit.id, {
-      fullName: "Sistem Yöneticisi",
+      fullName: "System Admin",
       isSystemAdmin: true,
       ...(email ? { email } : {}),
     });
   }
 
-  it("gecikme yoksa alarm yazılmaz", async () => {
-    await sistemYoneticisi();
+  it("no alert is queued if there is no delay", async () => {
+    await systemAdmin();
     for (const jobName of Object.values(JOB_NAMES)) {
       await recordJobSuccess(testDb, jobName, new Date(NOW.getTime() - 10_000));
     }
 
-    const sonuc = await alertOnDelayedJobs(testDb, NOW);
+    const result = await alertOnDelayedJobs(testDb, NOW);
 
-    expect(sonuc.delayedJobs).toEqual([]);
-    expect(sonuc.queued).toBe(0);
+    expect(result.delayedJobs).toEqual([]);
+    expect(result.queued).toBe(0);
   });
 
-  it("gecikmiş iş için sistem yöneticisine alarm yazılır", async () => {
-    const admin = await sistemYoneticisi();
+  it("alert is queued for system admin for delayed job", async () => {
+    const admin = await systemAdmin();
     for (const jobName of Object.values(JOB_NAMES)) {
       await recordJobSuccess(testDb, jobName, new Date(NOW.getTime() - 10_000));
     }
@@ -173,107 +173,107 @@ describe("gecikme alarmı (§12.4)", () => {
       new Date(NOW.getTime() - 10 * 60_000),
     );
 
-    const sonuc = await alertOnDelayedJobs(testDb, NOW);
+    const result = await alertOnDelayedJobs(testDb, NOW);
 
-    expect(sonuc.delayedJobs).toEqual([JOB_NAMES.notificationDispatch]);
-    expect(sonuc.queued).toBe(1);
-    const kuyruk = await testDb.notificationQueue.findMany({
+    expect(result.delayedJobs).toEqual([JOB_NAMES.notificationDispatch]);
+    expect(result.queued).toBe(1);
+    const queue = await testDb.notificationQueue.findMany({
       where: { eventType: "job_delayed" },
     });
-    expect(kuyruk).toHaveLength(1);
-    expect(kuyruk[0].userId).toBe(admin.id);
+    expect(queue).toHaveLength(1);
+    expect(queue[0].userId).toBe(admin.id);
   });
 
-  it("aynı gün içinde ikinci alarm yazılmaz, ertesi gün tekrarlanır", async () => {
-    await sistemYoneticisi();
+  it("second alert is not queued on same day, repeats the next day", async () => {
+    await systemAdmin();
     for (const jobName of Object.values(JOB_NAMES)) {
       await recordJobSuccess(testDb, jobName, new Date(NOW.getTime() - 60 * 60_000));
     }
 
-    const ilk = await alertOnDelayedJobs(testDb, NOW);
-    const izlenenIsSayisi = Object.values(JOB_NAMES).length - 1;
-    expect(ilk.queued).toBe(izlenenIsSayisi);
+    const first = await alertOnDelayedJobs(testDb, NOW);
+    const monitoredJobCount = Object.values(JOB_NAMES).length - 1;
+    expect(first.queued).toBe(monitoredJobCount);
 
-    // Aynı gün: 24 saatlik varsayılan tekrar aralığında yağmura dönmez.
-    const ikinci = await alertOnDelayedJobs(
+    // Same day: does not flood within 24h default repeat interval.
+    const second = await alertOnDelayedJobs(
       testDb,
       new Date("2026-08-18T12:30:00.000Z"),
     );
-    expect(ikinci.queued).toBe(0);
+    expect(second.queued).toBe(0);
 
-    // Ertesi gün: arıza sürüyorsa uyarı tekrarlanır.
-    const ertesiGun = await alertOnDelayedJobs(
+    // Next day: warning repeats if failure persists.
+    const nextDay = await alertOnDelayedJobs(
       testDb,
       new Date("2026-08-19T12:00:00.000Z"),
     );
-    expect(ertesiGun.queued).toBe(izlenenIsSayisi);
+    expect(nextDay.queued).toBe(monitoredJobCount);
   });
 
-  it("pasif sistem yöneticisine alarm gitmez", async () => {
-    // Şirkette **hiç** aktif sistem yöneticisi kalmaması artık mümkün değil
-    // (veritabanı değişmezi, bulgu 6): son yöneticinin yetkisi
-    // kaldırılamaz ve pasifleştirilemez. O yüzden sınanan şey "kimseye
-    // gitmiyor" değil, **yalnız aktif olanlara gidiyor**.
-    const aktif = await sistemYoneticisi();
-    const pasif = await sistemYoneticisi("pasif-yonetici@ornek.test");
+  it("alert is not sent to inactive system admin", async () => {
+    // It is no longer possible for a company to have **no** active system admin
+    // (database invariant, finding 6): last admin's permissions cannot be removed
+    // and cannot be deactivated. Therefore, what is tested is not "goes to no one",
+    // but **only goes to active admins**.
+    const active = await systemAdmin();
+    const inactive = await systemAdmin("inactive-admin@example.test");
 
     await testDb.user.update({
-      where: { id: pasif.id },
+      where: { id: inactive.id },
       data: { isActive: false, isUnitManager: false },
     });
 
-    const sonuc = await alertOnDelayedJobs(testDb, NOW);
+    const result = await alertOnDelayedJobs(testDb, NOW);
 
-    expect(sonuc.delayedJobs.length).toBeGreaterThan(0);
-    expect(sonuc.queued).toBe(sonuc.delayedJobs.length);
+    expect(result.delayedJobs.length).toBeGreaterThan(0);
+    expect(result.queued).toBe(result.delayedJobs.length);
 
-    // Pasif yöneticinin kuyruğunda hiçbir şey yok; aktif olanınkinde var.
-    expect(await testDb.notificationQueue.count({ where: { userId: pasif.id } })).toBe(0);
+    // Inactive admin's queue has nothing; active admin's has.
+    expect(await testDb.notificationQueue.count({ where: { userId: inactive.id } })).toBe(0);
     expect(
-      await testDb.notificationQueue.count({ where: { userId: aktif.id } }),
+      await testDb.notificationQueue.count({ where: { userId: active.id } }),
     ).toBeGreaterThan(0);
   });
 
-  it("yedek izlemesi kapalıyken hiç alınmamış yedek alarm üretmez", async () => {
-    const admin = await sistemYoneticisi();
+  it("never-taken backup does not produce alert when backup monitoring is disabled", async () => {
+    const admin = await systemAdmin();
     for (const jobName of Object.values(JOB_NAMES)) {
       if (jobName !== JOB_NAMES.backup) {
         await recordJobSuccess(testDb, jobName, new Date(NOW.getTime() - 10_000));
       }
     }
 
-    const kapali = await alertOnDelayedJobs(testDb, NOW);
-    expect(kapali.delayedJobs).not.toContain(JOB_NAMES.backup);
-    expect(kapali.queued).toBe(0);
+    const disabled = await alertOnDelayedJobs(testDb, NOW);
+    expect(disabled.delayedJobs).not.toContain(JOB_NAMES.backup);
+    expect(disabled.queued).toBe(0);
 
     await saveSettings(testDb, {
       [SETTING_KEYS.backupMonitoringEnabled]: "true",
     });
 
-    const acik = await alertOnDelayedJobs(testDb, NOW);
-    expect(acik.delayedJobs).toEqual([JOB_NAMES.backup]);
-    expect(acik.queued).toBe(1);
+    const enabled = await alertOnDelayedJobs(testDb, NOW);
+    expect(enabled.delayedJobs).toEqual([JOB_NAMES.backup]);
+    expect(enabled.queued).toBe(1);
     expect(
       await testDb.notificationQueue.count({ where: { userId: admin.id } }),
     ).toBe(1);
   });
 
-  it("gecikme alarmı tamamen kapatılabilir", async () => {
-    await sistemYoneticisi();
-    await recordJobFailure(testDb, JOB_NAMES.notificationDispatch, "işleyici durdu");
+  it("delay alert can be disabled completely", async () => {
+    await systemAdmin();
+    await recordJobFailure(testDb, JOB_NAMES.notificationDispatch, "handler stopped");
     await saveSettings(testDb, {
       [SETTING_KEYS.jobDelayAlertEnabled]: "false",
     });
 
-    const sonuc = await alertOnDelayedJobs(testDb, NOW);
+    const result = await alertOnDelayedJobs(testDb, NOW);
 
-    expect(sonuc).toEqual({ delayedJobs: [], queued: 0 });
+    expect(result).toEqual({ delayedJobs: [], queued: 0 });
     expect(await testDb.notificationQueue.count()).toBe(0);
   });
 });
 
-describe("sağlık raporu gerçek veriye bağlı", () => {
-  it("kuyruk derinliği ve gecikme ölçülür", async () => {
+describe("health report relies on real data", () => {
+  it("measures queue depth and lag", async () => {
     for (const jobName of Object.values(JOB_NAMES)) {
       await recordJobSuccess(testDb, jobName, new Date(NOW.getTime() - 10_000));
     }
@@ -298,7 +298,7 @@ describe("sağlık raporu gerçek veriye bağlı", () => {
     });
   });
 
-  it("gecikmiş zamanlayıcı raporu 'down' yapar", async () => {
+  it("delayed scheduler marks report as 'down'", async () => {
     const report = await buildHealthReport({
       pingDatabase: async () => undefined,
       now: () => NOW,
@@ -306,44 +306,43 @@ describe("sağlık raporu gerçek veriye bağlı", () => {
       schedulerLag: async () => ({ lagSeconds: 900, delayed: true }),
     });
 
-    // Zamanlayıcı durduğunda sistem "çalışıyor" demeye devam etmemeli.
+    // When the scheduler stops, the system must not continue claiming to be "running".
     expect(report.scheduler.status).toBe("down");
     expect(report.status).toBe("down");
   });
 
-  it("veritabanı yoksa diğer ölçümler denenmez", async () => {
-    let kuyrukSoruldu = false;
+  it("does not attempt other metrics if database is down", async () => {
+    let queueQueried = false;
 
     const report = await buildHealthReport({
       pingDatabase: async () => {
-        throw new Error("bağlantı yok");
+        throw new Error("no connection");
       },
       now: () => NOW,
       queueDepth: async () => {
-        kuyrukSoruldu = true;
+        queueQueried = true;
         return 0;
       },
       schedulerLag: async () => ({ lagSeconds: 0, delayed: false }),
     });
 
-    expect(kuyrukSoruldu).toBe(false);
+    expect(queueQueried).toBe(false);
     expect(report.status).toBe("down");
     expect(report.notificationQueue.source).toBe("placeholder");
   });
 });
 
-describe("yedek işi (§15.6)", () => {
-  it("günlük aralıkla izlenir, dakikalık eşikle değil", async () => {
+describe("backup job (§15.6)", () => {
+  it("is monitored with daily interval, not minute threshold", async () => {
     const jobs = await listJobHealth(testDb, NOW);
-    const yedek = jobs.find((job) => job.jobName === JOB_NAMES.backup);
+    const backup = jobs.find((job) => job.jobName === JOB_NAMES.backup);
 
-    expect(yedek).toBeDefined();
-    // Günde bir alınan yedeğe bir dakikalık eşikle bakmak her turda alarm
-    // üretirdi.
-    expect(yedek?.expectedIntervalMinutes).toBe(24 * 60);
+    expect(backup).toBeDefined();
+    // Checking a daily backup with a 1-minute threshold would alert on every round.
+    expect(backup?.expectedIntervalMinutes).toBe(24 * 60);
   });
 
-  it("yedek 48 saat gecikince alarm eşiğini aşar", async () => {
+  it("exceeds alert threshold when backup is delayed by 48 hours", async () => {
     await recordJobSuccess(
       testDb,
       JOB_NAMES.backup,
@@ -362,7 +361,7 @@ describe("yedek işi (§15.6)", () => {
     );
 
     jobs = await listJobHealth(testDb, NOW);
-    // Yedek alınmaması sessizce geçmez: mevcut alarm yoluna düşer (§12.4).
+    // Missing backup does not pass silently: falls into existing alert path (§12.4).
     expect(jobs.find((j) => j.jobName === JOB_NAMES.backup)?.delayed).toBe(true);
   });
 });

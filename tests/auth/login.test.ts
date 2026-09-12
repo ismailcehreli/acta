@@ -13,10 +13,10 @@ import { createOrgUnit, createUser, createUserWithPassword } from "../helpers/fi
 import { resetDatabase, testDb } from "../helpers/test-db";
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
-const PASSWORD = "dogru-parola-123";
+const PASSWORD = "correct-password-123";
 
-// Gecikme kuralı ayrıca test edilir (lockout.test.ts); burada beklemeden
-// geçilir ki giriş akışının kendisi hızlı sınanabilsin.
+// Delay rule is tested separately (lockout.test.ts); here we pass through without waiting
+// so that the login flow itself can be tested quickly.
 const noWait = async () => {};
 
 beforeEach(async () => {
@@ -31,19 +31,19 @@ afterAll(async () => {
 async function newUserWithPassword() {
   const unit = await createOrgUnit();
   return createUserWithPassword(unit.id, PASSWORD, {
-    email: "mudur@ornek.test",
+    email: "manager@example.test",
   });
 }
 
 function attempt(password: string, now: Date = NOW, key = "10.0.0.1") {
   return login(
     { db: testDb, now, rateLimitKey: key, sleep: noWait },
-    { email: "mudur@ornek.test", password },
+    { email: "manager@example.test", password },
   );
 }
 
-describe("başarılı giriş", () => {
-  it("doğru parola oturum açar", async () => {
+describe("successful login", () => {
+  it("correct password opens session", async () => {
     const user = await newUserWithPassword();
 
     const result = await attempt(PASSWORD);
@@ -58,10 +58,10 @@ describe("başarılı giriş", () => {
     ).toEqual(NOW);
   });
 
-  it("başarılı girişte hata sayacı sıfırlanır", async () => {
+  it("failed attempt counter resets on successful login", async () => {
     const user = await newUserWithPassword();
 
-    await attempt("yanlis-parola");
+    await attempt("wrong-password");
     await attempt(PASSWORD);
 
     const credential = await testDb.userCredential.findUniqueOrThrow({
@@ -71,11 +71,11 @@ describe("başarılı giriş", () => {
   });
 });
 
-describe("başarısız giriş", () => {
-  it("yanlış parola reddedilir ve sayaç artar", async () => {
+describe("failed login", () => {
+  it("wrong password is rejected and counter increments", async () => {
     const user = await newUserWithPassword();
 
-    const result = await attempt("yanlis-parola");
+    const result = await attempt("wrong-password");
 
     expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
     expect(
@@ -87,18 +87,18 @@ describe("başarısız giriş", () => {
     expect(credential.failedLoginCount).toBe(1);
   });
 
-  it("kayıtsız e-posta, yanlış parolayla aynı cevabı alır", async () => {
+  it("unregistered email receives the same response as wrong password", async () => {
     await newUserWithPassword();
 
     const result = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep: noWait },
-      { email: "yok@ornek.test", password: PASSWORD },
+      { email: "nonexistent@example.test", password: PASSWORD },
     );
 
     expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
   });
 
-  it("pasifleştirilmiş kullanıcı giriş yapamaz", async () => {
+  it("deactivated user cannot log in", async () => {
     const user = await newUserWithPassword();
     await testDb.user.update({
       where: { id: user.id },
@@ -111,26 +111,26 @@ describe("başarısız giriş", () => {
     });
   });
 
-  it("parolası kurulmamış kullanıcı giriş yapamaz", async () => {
+  it("user without password set cannot log in", async () => {
     const unit = await createOrgUnit();
-    await createUser(unit.id, { email: "parolasiz@ornek.test" });
+    await createUser(unit.id, { email: "passwordless@example.test" });
 
     const result = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep: noWait },
-      { email: "parolasiz@ornek.test", password: PASSWORD },
+      { email: "passwordless@example.test", password: PASSWORD },
     );
 
     expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
   });
 
-  it("her hatada gecikme uygulanır ve süre büyür", async () => {
+  it("delay is applied on each failure and duration grows", async () => {
     await newUserWithPassword();
     const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {});
 
     for (let i = 0; i < 3; i += 1) {
       await login(
         { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep },
-        { email: "mudur@ornek.test", password: "yanlis-parola" },
+        { email: "manager@example.test", password: "wrong-password" },
       );
     }
 
@@ -138,13 +138,13 @@ describe("başarısız giriş", () => {
   });
 });
 
-describe("hesap kilitleme", () => {
-  it(`${MAX_FAILED_ATTEMPTS}. hatalı denemede hesap kilitlenir`, async () => {
+describe("account lockout", () => {
+  it(`account locks on attempt ${MAX_FAILED_ATTEMPTS}`, async () => {
     const user = await newUserWithPassword();
 
-    let result = await attempt("yanlis-parola");
+    let result = await attempt("wrong-password");
     for (let i = 1; i < MAX_FAILED_ATTEMPTS; i += 1) {
-      result = await attempt("yanlis-parola");
+      result = await attempt("wrong-password");
     }
 
     expect(result.ok).toBe(false);
@@ -157,11 +157,11 @@ describe("hesap kilitleme", () => {
     expect(credential.lockedUntil).not.toBeNull();
   });
 
-  it("kilitliyken doğru parola da kabul edilmez", async () => {
+  it("correct password is also rejected while locked", async () => {
     await newUserWithPassword();
 
     for (let i = 0; i < MAX_FAILED_ATTEMPTS; i += 1) {
-      await attempt("yanlis-parola");
+      await attempt("wrong-password");
     }
 
     const result = await attempt(PASSWORD);
@@ -170,11 +170,11 @@ describe("hesap kilitleme", () => {
     expect(result.reason).toBe("locked");
   });
 
-  it("kilit süresi dolunca doğru parola çalışır", async () => {
+  it("correct password works after lock expires", async () => {
     await newUserWithPassword();
 
     for (let i = 0; i < MAX_FAILED_ATTEMPTS; i += 1) {
-      await attempt("yanlis-parola");
+      await attempt("wrong-password");
     }
 
     const afterLock = new Date(NOW.getTime() + (LOCKOUT_MINUTES + 1) * 60_000);
@@ -184,19 +184,19 @@ describe("hesap kilitleme", () => {
   });
 });
 
-describe("hız sınırı", () => {
-  // Deneme kayıtsız bir e-postayla yapılır: burada ölçülen hesap kilidi değil,
-  // istemci bazlı hız sınırıdır.
+describe("rate limiting", () => {
+  // Attempt is made with unregistered email: what is measured here is not account lockout,
+  // but client-based rate limiting.
   async function floodFrom(key: string) {
     for (let i = 0; i < RATE_LIMIT_MAX_REQUESTS; i += 1) {
       await login(
         { db: testDb, now: NOW, rateLimitKey: key, sleep: noWait },
-        { email: "yok@ornek.test", password: "yanlis-parola" },
+        { email: "nonexistent@example.test", password: "wrong-password" },
       );
     }
   }
 
-  it("aynı istemciden gelen aşırı deneme reddedilir", async () => {
+  it("excessive attempts from same client are rejected", async () => {
     await newUserWithPassword();
     await floodFrom("10.0.0.9");
 
@@ -207,7 +207,7 @@ describe("hız sınırı", () => {
     expect(result.reason).toBe("rate_limited");
   });
 
-  it("bir istemcinin sınırı diğerinin girişini engellemez", async () => {
+  it("one client's limit does not block another's login", async () => {
     await newUserWithPassword();
     await floodFrom("10.0.0.9");
 
@@ -216,16 +216,16 @@ describe("hız sınırı", () => {
   });
 });
 
-// Denetim (17.08.2026) sonrası eklenen testler.
-describe("denetim düzeltmeleri", () => {
-  it("eşzamanlı hatalı denemeler sayacı kaybetmez ve kilit devreye girer", async () => {
+// Tests added after audit (17.08.2026).
+describe("audit fixes", () => {
+  it("concurrent failed attempts do not lose counter and lockout triggers", async () => {
     const user = await newUserWithPassword();
 
-    // Aynı anda gelen denemeler: sayaç okunup geri yazılsaydı hepsi aynı eski
-    // değeri görür, hesap hiç kilitlenmezdi (bulgu 6).
+    // Concurrent attempts: if counter was read and written back, all would see same old
+    // value and account would never lock (finding 6).
     await Promise.all(
       Array.from({ length: MAX_FAILED_ATTEMPTS }, (_, i) =>
-        attempt("yanlis-parola", NOW, `10.0.1.${i}`),
+        attempt("wrong-password", NOW, `10.0.1.${i}`),
       ),
     );
 
@@ -242,120 +242,118 @@ describe("denetim düzeltmeleri", () => {
     expect(afterwards.reason).toBe("locked");
   });
 
-  it("tek hesabı hedefleyen denemeler istemci değiştirilerek sürdürülemez", async () => {
+  it("attempts targeting single account cannot be sustained by changing client", async () => {
     await newUserWithPassword();
 
-    // Her denemede farklı istemci adresi: istemci sayacı sıfırlanır ama hesap
-    // sayacı işlemeye devam eder (bulgu 7).
+    // Different client IP on each attempt: client counter resets but account
+    // counter continues accumulating (finding 7).
     for (let i = 0; i < RATE_LIMIT_MAX_REQUESTS; i += 1) {
-      await attempt("yanlis-parola", NOW, `10.9.9.${i}`);
+      await attempt("wrong-password", NOW, `10.9.9.${i}`);
     }
 
-    const result = await attempt("yanlis-parola", NOW, "10.9.8.1");
+    const result = await attempt("wrong-password", NOW, "10.9.8.1");
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("rate_limited");
   });
 
-  it("kayıtsız e-postaya da artan gecikme uygulanır", async () => {
+  it("exponential delay is also applied to unregistered email", async () => {
     const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {});
 
     for (let i = 0; i < 3; i += 1) {
       await login(
         { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep },
-        { email: "yok@ornek.test", password: "yanlis-parola" },
+        { email: "nonexistent@example.test", password: "wrong-password" },
       );
     }
 
-    // Gecikmenin hiç uygulanmaması, e-postanın kayıtsız olduğunu ele verirdi
-    // (bulgu 8).
+    // Not applying delay at all would give away that email is unregistered (finding 8).
     expect(sleep.mock.calls.map((call) => call[0])).toEqual([0, 200, 400]);
   });
 });
 
-// "Beni hatırla" (ürün sahibi isteği, 21.08.2026).
+// "Remember me" (product owner requirement, 21.08.2026).
 //
-// Sınanan asıl kural: bu seçenek **yalnız oturum süresini** uzatır. Kilit,
-// hız sınırı ve parola değişiminde oturum iptali aynen işlemeli — yoksa
-// "beni hatırla" sessizce bir güvenlik gevşetmesine dönüşür.
-describe("beni hatırla", () => {
-  async function ayarla(gun: number) {
+// Core rule being tested: this option **only extends session duration**.
+// Lockout, rate limiting, and session revocation on password change must
+// function identically — otherwise "remember me" silently becomes a security relaxation.
+describe("remember me", () => {
+  async function setDays(days: number) {
     await testDb.systemSetting.upsert({
       where: { key: "remember_me_days" },
-      create: { key: "remember_me_days", value: String(gun), description: "test" },
-      update: { value: String(gun) },
+      create: { key: "remember_me_days", value: String(days), description: "test" },
+      update: { value: String(days) },
     });
   }
 
-  it("işaretlenmediğinde oturum normal ömrünü alır", async () => {
+  it("session gets normal lifetime when unchecked", async () => {
     const user = await newUserWithPassword();
-    await ayarla(30);
+    await setDays(30);
 
-    const sonuc = await login(
-      { db: testDb, now: NOW, rateLimitKey: "beni-hatirla-1", sleep: noWait },
+    const result = await login(
+      { db: testDb, now: NOW, rateLimitKey: "remember-me-1", sleep: noWait },
       { email: user.email, password: PASSWORD },
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
-    // Varsayılan 12 saat; bir günü aşmamalı.
-    const saat = (sonuc.session.expiresAt.getTime() - NOW.getTime()) / 3_600_000;
-    expect(saat).toBeLessThanOrEqual(24);
+    // Default 12 hours; must not exceed 24 hours.
+    const hours = (result.session.expiresAt.getTime() - NOW.getTime()) / 3_600_000;
+    expect(hours).toBeLessThanOrEqual(24);
   });
 
-  it("işaretlendiğinde oturum ayardaki gün kadar sürer", async () => {
+  it("session lasts as many days as set when checked", async () => {
     const user = await newUserWithPassword();
-    await ayarla(30);
+    await setDays(30);
 
-    const sonuc = await login(
-      { db: testDb, now: NOW, rateLimitKey: "beni-hatirla-2", sleep: noWait },
+    const result = await login(
+      { db: testDb, now: NOW, rateLimitKey: "remember-me-2", sleep: noWait },
       { email: user.email, password: PASSWORD, remember: true },
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
-    const gun = (sonuc.session.expiresAt.getTime() - NOW.getTime()) / 86_400_000;
-    expect(Math.round(gun)).toBe(30);
+    const days = (result.session.expiresAt.getTime() - NOW.getTime()) / 86_400_000;
+    expect(Math.round(days)).toBe(30);
   });
 
-  it("ayar 0 ise işaret yok sayılır", async () => {
+  it("checked box is ignored if setting is 0", async () => {
     const user = await newUserWithPassword();
-    await ayarla(0);
+    await setDays(0);
 
-    // İstemciden gelen değere güvenilmez: kutu çizilmese de form
-    // elle gönderilebilir.
-    const sonuc = await login(
-      { db: testDb, now: NOW, rateLimitKey: "beni-hatirla-3", sleep: noWait },
+    // Client-sent value is untrusted: form can be submitted manually even without checkbox.
+    const result = await login(
+      { db: testDb, now: NOW, rateLimitKey: "remember-me-3", sleep: noWait },
       { email: user.email, password: PASSWORD, remember: true },
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
-    const saat = (sonuc.session.expiresAt.getTime() - NOW.getTime()) / 3_600_000;
-    expect(saat).toBeLessThanOrEqual(24);
+    const hours = (result.session.expiresAt.getTime() - NOW.getTime()) / 3_600_000;
+    expect(hours).toBeLessThanOrEqual(24);
   });
 
-  it("uzun oturum parola değişiminde yine iptal olur", async () => {
+  it("long session is still revoked on password change", async () => {
     const user = await newUserWithPassword();
-    await ayarla(30);
+    await setDays(30);
 
-    const sonuc = await login(
-      { db: testDb, now: NOW, rateLimitKey: "beni-hatirla-4", sleep: noWait },
+    const result = await login(
+      { db: testDb, now: NOW, rateLimitKey: "remember-me-4", sleep: noWait },
       { email: user.email, password: PASSWORD, remember: true },
     );
-    if (!sonuc.ok) throw new Error("giriş başarısız");
+    if (!result.ok) throw new Error("login failed");
 
-    // Parola değişince kimlik kuşağı ilerler ve eski oturum ölür.
+    // When password changes, credential version advances and old session dies.
     await testDb.userCredential.update({
       where: { userId: user.id },
       data: { version: { increment: 1 } },
     });
 
-    const oturum = await findActiveSession(testDb, sonuc.session.token, NOW);
-    expect(oturum).toBeNull();
+    const session = await findActiveSession(testDb, result.session.token, NOW);
+    expect(session).toBeNull();
   });
 });

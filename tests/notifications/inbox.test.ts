@@ -13,16 +13,16 @@ import { saveSubscription } from "@/server/push/subscriptions";
 import { createActivity, createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Uygulama içi bildirim kutusu (Görev 10.4).
+// In-app notification inbox (Task 10.4).
 //
-// Kutu, bildirim kuyruğunu okuyor. İki şey kritik: kimse **başkasının**
-// bildirimini görmemeli ve bir olay zilde **iki kez** çıkmamalı (push ve
-// e-posta için ayrı kuyruk satırı yazılabiliyor).
+// The inbox reads from the notification queue. Two things are critical:
+// no one should see someone else's notification, and an event should not
+// appear twice in the bell icon (separate queue rows may exist for push and email).
 
 const NOW = new Date("2026-08-19T12:00:00.000Z");
 
 beforeEach(async () => {
-  faaliyetler.clear();
+  activities.clear();
   await resetDatabase();
 });
 
@@ -30,287 +30,266 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-// Bildirim gerçek bir faaliyete bağlanır: kuyruk satırı artık faaliyete
-// yabancı anahtarla bağlı ve kutu, görünürlüğü o bağ üzerinden süzüyor
-// (bulgu 3). Kişi kendi kaydını her zaman görür.
-const faaliyetler = new Map<string, string>();
+// Notifications link to a real activity: queue row is bound via foreign key
+// and inbox filters visibility through that relation (finding 3).
+// A user always sees their own records.
+const activities = new Map<string, string>();
 
-async function ikiKisi() {
-  const unit = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const birinci = await createUser(unit.id, { fullName: "Birinci" });
-  const ikinci = await createUser(unit.id, { fullName: "İkinci" });
+async function setupTwoUsers() {
+  const unit = await createOrgUnit({ name: "Company", type: "Root" });
+  const first = await createUser(unit.id, { fullName: "First" });
+  const second = await createUser(unit.id, { fullName: "Second" });
 
-  for (const kisi of [birinci, ikinci]) {
-    const kayit = await createActivity(kisi, { approvalStatus: "APPROVED" });
-    faaliyetler.set(kisi.id, kayit.id);
+  for (const user of [first, second]) {
+    const activity = await createActivity(user, { approvalStatus: "APPROVED" });
+    activities.set(user.id, activity.id);
   }
 
-  return { birinci, ikinci };
+  return { first, second };
 }
 
-async function haberVer(
+async function enqueueInboxNotification(
   userId: string,
-  anahtar: string,
-  baslik = "Kalıp bakımı",
+  key: string,
+  title = "Maintenance task",
   eventType: string = NOTIFICATION_EVENTS.questionAsked,
 ) {
   await enqueueNotification(testDb, {
     userId,
     eventType: eventType as typeof NOTIFICATION_EVENTS.questionAsked,
-    payload: { activityId: faaliyetler.get(userId), activityTitle: baslik },
-    idempotencyKey: anahtar,
+    payload: { activityId: activities.get(userId), activityTitle: title },
+    idempotencyKey: key,
     now: NOW,
   });
 }
 
-describe("kutu kime ait", () => {
-  it("kişi yalnız kendi bildirimlerini görür", async () => {
-    const { birinci, ikinci } = await ikiKisi();
-    await haberVer(birinci.id, "a:1", "Birincinin işi");
-    await haberVer(ikinci.id, "a:2", "İkincinin işi");
+describe("inbox ownership", () => {
+  it("user sees only their own notifications", async () => {
+    const { first, second } = await setupTwoUsers();
+    await enqueueInboxNotification(first.id, "a:1", "First's task");
+    await enqueueInboxNotification(second.id, "a:2", "Second's task");
 
-    const kutu = await listInbox(testDb, birinci.id);
+    const inbox = await listInbox(testDb, first.id);
 
-    expect(kutu).toHaveLength(1);
-    expect(kutu[0]?.summary).not.toContain("İkincinin işi");
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.summary).not.toContain("Second's task");
   });
 
-  it("görülmemiş sayısı kişiye özeldir", async () => {
-    const { birinci, ikinci } = await ikiKisi();
-    await haberVer(birinci.id, "a:1");
-    await haberVer(ikinci.id, "a:2");
-    await haberVer(ikinci.id, "a:3");
+  it("unseen count is user-specific", async () => {
+    const { first, second } = await setupTwoUsers();
+    await enqueueInboxNotification(first.id, "a:1");
+    await enqueueInboxNotification(second.id, "a:2");
+    await enqueueInboxNotification(second.id, "a:3");
 
-    expect(await countUnseen(testDb, birinci.id)).toBe(1);
-    expect(await countUnseen(testDb, ikinci.id)).toBe(2);
+    expect(await countUnseen(testDb, first.id)).toBe(1);
+    expect(await countUnseen(testDb, second.id)).toBe(2);
   });
 
-  it("görüldü işareti başkasının kutusunu boşaltmaz", async () => {
-    const { birinci, ikinci } = await ikiKisi();
-    await haberVer(birinci.id, "a:1");
-    await haberVer(ikinci.id, "a:2");
+  it("marking seen does not clear another user's inbox", async () => {
+    const { first, second } = await setupTwoUsers();
+    await enqueueInboxNotification(first.id, "a:1");
+    await enqueueInboxNotification(second.id, "a:2");
 
-    await markInboxSeen(testDb, birinci.id, NOW);
+    await markInboxSeen(testDb, first.id, NOW);
 
-    expect(await countUnseen(testDb, birinci.id)).toBe(0);
-    // Başkasının zilini sessizce boşaltan bir uç olmamalı.
-    expect(await countUnseen(testDb, ikinci.id)).toBe(1);
+    expect(await countUnseen(testDb, first.id)).toBe(0);
+    // Should not clear another user's bell indicator
+    expect(await countUnseen(testDb, second.id)).toBe(1);
   });
 });
 
-describe("mükerrer gösterim", () => {
-  it("aynı olay push ile birlikte yazılsa da zilde bir kez çıkar", async () => {
-    const { birinci } = await ikiKisi();
-    // Aboneliği olan kişiye hem e-posta hem push satırı yazılır.
+describe("duplicate suppression", () => {
+  it("same event with push appears only once in bell", async () => {
+    const { first } = await setupTwoUsers();
+    // Subscribed users get both email and push rows
     await saveSubscription(
       testDb,
-      birinci.id,
+      first.id,
       {
-        endpoint: "https://push.ornek.test/abone-1",
+        endpoint: "https://push.example.test/sub-1",
         p256dh: "BExampleKeyMaterial",
         auth: "ExampleAuthSecret",
       },
       NOW,
     );
 
-    await haberVer(birinci.id, "a:1");
+    await enqueueInboxNotification(first.id, "a:1");
 
-    expect(await testDb.notificationQueue.count({ where: { userId: birinci.id } })).toBe(2);
-    // Zil kanonik satırı (e-posta) okuyor.
-    expect(await listInbox(testDb, birinci.id)).toHaveLength(1);
-    expect(await countUnseen(testDb, birinci.id)).toBe(1);
+    expect(await testDb.notificationQueue.count({ where: { userId: first.id } })).toBe(2);
+    // Bell reads canonical row (EMAIL)
+    expect(await listInbox(testDb, first.id)).toHaveLength(1);
+    expect(await countUnseen(testDb, first.id)).toBe(1);
   });
 
-  it("her bildirim tam olarak bir e-posta satırı yazar", async () => {
-    // Zilin doğruluğu bu değişmeze dayanıyor: bir olayın kanonik satırı
-    // e-postadır. İleride bir olay için e-posta yazılmazsa zil onu sessizce
-    // kaçırır; bu test o değişmezi sabitliyor.
-    const { birinci } = await ikiKisi();
+  it("each notification generates exactly one email row", async () => {
+    // Bell correctness relies on this invariant: canonical row is EMAIL.
+    // If an event doesn't write an email row, the bell misses it silently;
+    // this test locks that invariant.
+    const { first } = await setupTwoUsers();
 
-    for (const [i, olay] of Object.values(NOTIFICATION_EVENTS).entries()) {
-      await haberVer(birinci.id, `olay:${i}`, "Kayıt", olay);
+    for (const [i, event] of Object.values(NOTIFICATION_EVENTS).entries()) {
+      await enqueueInboxNotification(first.id, `event:${i}`, "Record", event);
     }
 
-    const eposta = await testDb.notificationQueue.count({
-      where: { userId: birinci.id, channel: "EMAIL" },
+    const emailCount = await testDb.notificationQueue.count({
+      where: { userId: first.id, channel: "EMAIL" },
     });
-    expect(eposta).toBe(Object.values(NOTIFICATION_EVENTS).length);
+    expect(emailCount).toBe(Object.values(NOTIFICATION_EVENTS).length);
   });
 });
 
-describe("sıralama ve içerik", () => {
-  it("yeniden eskiye sıralanır", async () => {
-    const { birinci } = await ikiKisi();
+describe("ordering and content", () => {
+  it("orders from newest to oldest", async () => {
+    const { first } = await setupTwoUsers();
     await testDb.notificationQueue.createMany({
       data: [
         {
-          // Başlığı metne koyan bir olay seçildi; "soru soruldu" şablonu
-          // başlık taşımıyor ve sıralama sınanamazdı.
-          userId: birinci.id,
+          userId: first.id,
           eventType: NOTIFICATION_EVENTS.activityApproved,
           channel: "EMAIL",
-          payload: { activityTitle: "Eski" },
+          payload: { activityTitle: "Older" },
           idempotencyKey: "e:1",
           createdAt: new Date("2026-08-18T09:00:00.000Z"),
         },
         {
-          userId: birinci.id,
+          userId: first.id,
           eventType: NOTIFICATION_EVENTS.activityApproved,
           channel: "EMAIL",
-          payload: { activityTitle: "Yeni" },
+          payload: { activityTitle: "Newer" },
           idempotencyKey: "e:2",
           createdAt: new Date("2026-08-19T09:00:00.000Z"),
         },
       ],
     });
 
-    const kutu = await listInbox(testDb, birinci.id);
+    const inbox = await listInbox(testDb, first.id);
 
-    expect(kutu[0]?.summary).toContain("Yeni");
-    expect(kutu[1]?.summary).toContain("Eski");
+    expect(inbox[0]?.summary).toContain("Newer");
+    expect(inbox[1]?.summary).toContain("Older");
   });
 
-  it("satır metni bildirim şablonundan gelir", async () => {
-    const { birinci } = await ikiKisi();
-    await haberVer(birinci.id, "a:1", "Kalıp bakımı", NOTIFICATION_EVENTS.activityApproved);
+  it("line summary comes from notification template", async () => {
+    const { first } = await setupTwoUsers();
+    await enqueueInboxNotification(first.id, "a:1", "Maintenance task", NOTIFICATION_EVENTS.activityApproved);
 
-    const kutu = await listInbox(testDb, birinci.id);
+    const inbox = await listInbox(testDb, first.id);
 
-    expect(kutu[0]?.summary).toContain("Kalıp bakımı");
-    expect(kutu[0]?.path).toContain("/activities/");
+    expect(inbox[0]?.summary).toContain("Maintenance task");
+    expect(inbox[0]?.path).toContain("/activities/");
   });
 
-  it("liste sınırı aşılmaz", async () => {
-    const { birinci } = await ikiKisi();
-    for (let i = 0; i < 20; i += 1) await haberVer(birinci.id, `a:${i}`);
+  it("respects list limit", async () => {
+    const { first } = await setupTwoUsers();
+    for (let i = 0; i < 20; i += 1) await enqueueInboxNotification(first.id, `a:${i}`);
 
-    expect(await listInbox(testDb, birinci.id, 5)).toHaveLength(5);
+    expect(await listInbox(testDb, first.id, 5)).toHaveLength(5);
   });
 });
 
-describe("göreli zaman", () => {
-  it("bir dakikanın altı 'az önce'", () => {
-    expect(relativeTime(new Date("2026-08-19T11:59:30.000Z"), NOW)).toBe("az önce");
+describe("relative time", () => {
+  it("under a minute is 'just now'", () => {
+    expect(relativeTime(new Date("2026-08-19T11:59:30.000Z"), NOW)).toBe("just now");
   });
 
-  it("saat altı dakika", () => {
-    expect(relativeTime(new Date("2026-08-19T11:20:00.000Z"), NOW)).toBe("40 dk önce");
+  it("under an hour is minutes", () => {
+    expect(relativeTime(new Date("2026-08-19T11:20:00.000Z"), NOW)).toBe("40m ago");
   });
 
-  it("gün altı saat", () => {
-    expect(relativeTime(new Date("2026-08-19T09:00:00.000Z"), NOW)).toBe("3 sa önce");
+  it("under a day is hours", () => {
+    expect(relativeTime(new Date("2026-08-19T09:00:00.000Z"), NOW)).toBe("3h ago");
   });
 
-  // Bir günden eskisi tarihe düşer. Biçim Görev 11.1'de "15.08" yerine
-  // "15 Ağu 12:00" oldu: eski biçim yılsızdı ve geçen yılın bildirimi bu
-  // yılınki gibi görünüyordu; ay adı da iki haneli sayıdan hızlı okunuyor.
-  it("daha eskisi tarih ve saat", () => {
-    // 09:00 UTC = 12:00 İstanbul.
+  it("older displays date and time", () => {
+    // 09:00 UTC = 12:00 Istanbul.
     expect(relativeTime(new Date("2026-08-15T09:00:00.000Z"), NOW)).toBe(
-      "15 Ağu 12:00",
+      "Aug 15 12:00",
     );
   });
 });
 
-// Zil kutusunda faaliyet numarası (21.08.2026).
-//
-// Numarasız kutuda "bir faaliyetiniz hakkında soru soruldu" satırı üst üste
-// üç kez çıkabiliyordu ve kullanıcı hangi kayıt olduğunu anlayamıyordu.
-// Numara **yalnız zil kutusunda** eklenir; e-posta ve tarayıcı bildiriminin
-// metni değişmez.
-describe("faaliyet numarası", () => {
-  it("bildirim gerçek bir kayda işaret ediyorsa numarası gelir", async () => {
-    // Ağaçta tek kök olabilir; `ikiKisi` zaten kökü kurdu.
-    const { birinci } = await ikiKisi();
-    const kayit = await createActivity(birinci, { approvalStatus: "APPROVED" });
+describe("activity number", () => {
+  it("includes activity number when referencing a real record", async () => {
+    const { first } = await setupTwoUsers();
+    const activity = await createActivity(first, { approvalStatus: "APPROVED" });
 
     await enqueueNotification(testDb, {
-      userId: birinci.id,
+      userId: first.id,
       eventType: NOTIFICATION_EVENTS.questionAsked,
-      payload: { activityId: kayit.id, activityTitle: kayit.title },
-      idempotencyKey: "numara:1",
+      payload: { activityId: activity.id, activityTitle: activity.title },
+      idempotencyKey: "number:1",
       now: NOW,
     });
 
-    const kutu = await listInbox(testDb, birinci.id);
-    expect(kutu.map((satir) => satir.activityNo)).toContain(kayit.activityNo);
+    const inbox = await listInbox(testDb, first.id);
+    expect(inbox.map((row) => row.activityNo)).toContain(activity.activityNo);
   });
 
-  it("faaliyete bağlı olmayan bildirim numarasız çizilir", async () => {
-    const { birinci } = await ikiKisi();
+  it("renders null activity number when notification is not tied to activity", async () => {
+    const { first } = await setupTwoUsers();
 
-    // Parola sıfırlama gibi olayların faaliyeti yoktur; görünürlük sorusu da
-    // doğmaz, kutuda koşulsuz görünürler.
+    // Password resets have no activity; visibility does not apply, visible unconditionally.
     await enqueueNotification(testDb, {
-      userId: birinci.id,
+      userId: first.id,
       eventType: NOTIFICATION_EVENTS.passwordReset,
-      payload: { link: "https://ornek.test/reset/abc" },
-      idempotencyKey: "numara:2",
+      payload: { link: "https://example.test/reset/abc" },
+      idempotencyKey: "number:2",
       now: NOW,
     });
 
-    const kutu = await listInbox(testDb, birinci.id);
-    const satir = kutu.find((s) => s.eventType === NOTIFICATION_EVENTS.passwordReset);
-    expect(satir).toBeDefined();
-    expect(satir?.activityNo).toBeNull();
-    expect(satir?.summary).not.toBe("");
+    const inbox = await listInbox(testDb, first.id);
+    const row = inbox.find((s) => s.eventType === NOTIFICATION_EVENTS.passwordReset);
+    expect(row).toBeDefined();
+    expect(row?.activityNo).toBeNull();
+    expect(row?.summary).not.toBe("");
   });
 });
 
-// GÖRÜNÜRLÜK KUTUDA DA GEÇERLİ (denetim 21.08.2026, bulgu 3).
-//
-// Bildirim **olduğu anda** doğru olan bir haberdir; okunduğu anda hâlâ doğru
-// olmayabilir. Kişi başka dala taşınmış, vekâleti bitmiş ya da kararı başkası
-// vermiş olabilir. O andan sonra kaydın başlığını ve numarasını göstermek,
-// görünürlük katmanını atlayan bir okuma yoludur (§8, §18.4).
-describe("göremediği kaydın bildirimi kutuda görünmez", () => {
-  it("akranın kaydına ait bildirim listelenmez ve sayılmaz", async () => {
-    const { birinci, ikinci } = await ikiKisi();
-    const baskasininKaydi = await createActivity(ikinci, {
+describe("inbox visibility enforcement", () => {
+  it("does not list or count notification for inaccessible activity", async () => {
+    const { first, second } = await setupTwoUsers();
+    const otherActivity = await createActivity(second, {
       approvalStatus: "APPROVED",
     });
 
     await enqueueNotification(testDb, {
-      userId: birinci.id,
+      userId: first.id,
       eventType: NOTIFICATION_EVENTS.questionAsked,
       payload: {
-        activityId: baskasininKaydi.id,
-        activityTitle: baskasininKaydi.title,
+        activityId: otherActivity.id,
+        activityTitle: otherActivity.title,
       },
-      idempotencyKey: "sizinti:1",
+      idempotencyKey: "leak:1",
       now: NOW,
     });
 
-    // Satır kuyrukta duruyor ama kutuya çıkmıyor.
+    // Row exists in queue but does not appear in inbox
     expect(
       await testDb.notificationQueue.count({
-        where: { userId: birinci.id, activityId: baskasininKaydi.id },
+        where: { userId: first.id, activityId: otherActivity.id },
       }),
     ).toBe(1);
 
-    const kutu = await listInbox(testDb, birinci.id);
-    expect(kutu.map((satir) => satir.summary).join(" ")).not.toContain(
-      baskasininKaydi.title,
+    const inbox = await listInbox(testDb, first.id);
+    expect(inbox.map((row) => row.summary).join(" ")).not.toContain(
+      otherActivity.title,
     );
 
-    // Sayaç da sızdırmamalı: varlığı sayıdan öğrenmek de sızıntıdır.
-    expect(await countUnseen(testDb, birinci.id)).toBe(0);
+    // Counter must not leak information either
+    expect(await countUnseen(testDb, first.id)).toBe(0);
   });
 
-  it("kendi kaydına ait bildirim görünür", async () => {
-    const { birinci } = await ikiKisi();
-    const kendiKaydi = await createActivity(birinci, { approvalStatus: "APPROVED" });
+  it("shows notification for accessible own activity", async () => {
+    const { first } = await setupTwoUsers();
+    const ownActivity = await createActivity(first, { approvalStatus: "APPROVED" });
 
     await enqueueNotification(testDb, {
-      userId: birinci.id,
+      userId: first.id,
       eventType: NOTIFICATION_EVENTS.questionAsked,
-      payload: { activityId: kendiKaydi.id, activityTitle: kendiKaydi.title },
-      idempotencyKey: "gorunur:1",
+      payload: { activityId: ownActivity.id, activityTitle: ownActivity.title },
+      idempotencyKey: "visible:1",
       now: NOW,
     });
 
-    // Kontrol testi: yukarıdaki boşluğun sebebi görünürlük olmalı,
-    // "kutu hiç çalışmıyor" değil.
-    expect(await countUnseen(testDb, birinci.id)).toBe(1);
+    expect(await countUnseen(testDb, first.id)).toBe(1);
   });
 });

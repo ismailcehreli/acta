@@ -1,31 +1,31 @@
-import type { IkonAdi } from "./nav-icons";
+import type { IconName } from "./nav-icons";
 
-// Gezinme modeli.
+// Navigation model.
 //
-// **Kullanıcının göremeyeceği bölüm hiç render edilmez** (brief §5).
-// Gezinme, yetkisiz bir sayfaya götürüp sonra hata gösterme modeline
-// dayanmaz — görmediği bağlantı kullanıcıyı hiç oraya götürmez.
+
+
+
 
 export interface NavItem {
   href: string;
   label: string;
-  icon: IkonAdi;
-  /** Yanında görünen sayı; sıfırsa çizilmez. "0" bir haber değildir. */
+  icon: IconName;
+
   count?: number;
-  /** Sayının ekran okuyucuda ne anlama geldiği. */
+
   countLabel?: string;
 }
 
 export interface NavModel {
-  /** Kullanıcının kendi iş akışı. */
+
   personal: NavItem[];
-  /** Kullanıcının yönettiği alan. */
+
   management: NavItem[];
-  /** Yardım ve iletişim bağlantıları. */
+
   common: NavItem[];
-  /** Sistem çalışma alanı; yalnız sistem yöneticisinde dolu. */
+
   admin: NavItem[];
-  /** Faaliyet yazan kullanıcıda sürekli erişilebilir birincil eylem. */
+
   primaryAction: { href: string; label: string } | null;
 }
 
@@ -33,24 +33,24 @@ export interface NavUser {
   isSystemAdmin: boolean;
   hasTeam: boolean;
   writesActivities: boolean;
-  /** Vekâlet geçmişi ya da aktif vekâleti var mı; bölüm buna bağlı. */
+
   hasDeputyHistory: boolean;
-  /** Şu an vekâlet ediyor mu; rozet buna bağlı. */
+
   activeDeputyCount: number;
-  /** Gönderilmemiş taslak sayısı; sıfırsa bölüm hiç çizilmez. */
+
   draftCount: number;
   unreadCount: number;
   pendingApprovals: number;
-  /** Skor sistemi açık mı; skor bölümü buna bağlı (Görev 11.11). */
+
   scoringEnabled: boolean;
-  /** Yönetim raporlarını görebilir mi? */
+
   canViewReports: boolean;
-  /** Skor ve takdir raporlarını görebilir mi? */
+
   canViewScoreReports: boolean;
 }
 
 function feedHref(unreadCount: number): string {
-  return unreadCount > 0 ? "/feed?period=all&okunmamis=1" : "/feed";
+  return unreadCount > 0 ? "/feed?period=all&unread=1" : "/feed";
 }
 
 import { createTranslator, DEFAULT_LOCALE, type TranslateFunction } from "@/shared/i18n";
@@ -62,51 +62,51 @@ export function buildNav(user: NavUser, t?: TranslateFunction): NavModel {
     {
       href: "/",
       label: tr("nav.today"),
-      icon: "bugun",
+      icon: "today",
     },
-    { href: "/activities", label: tr("nav.myActivities"), icon: "faaliyet" },
+    { href: "/activities", label: tr("nav.myActivities"), icon: "activity" },
   ];
 
   if (!user.hasTeam) {
     personal.push({
       href: feedHref(user.unreadCount),
       label: tr("nav.feed"),
-      icon: "akis",
+      icon: "feed",
       count: user.unreadCount,
       countLabel: tr("nav.unreadCountLabel"),
     });
   }
 
-  // Taslak bölümü **her zaman** görünür.
+
   personal.push({
     href: "/drafts",
     label: tr("nav.drafts"),
-    icon: "taslak",
+    icon: "draft",
     count: user.draftCount > 0 ? user.draftCount : undefined,
     countLabel: tr("nav.draftCountLabel"),
   });
 
-  // Onay bölümü yalnız onay görevi olan kullanıcıda.
+
   if (user.pendingApprovals > 0) {
     personal.push({
       href: "/approvals",
       label: tr("nav.approvals"),
-      icon: "onay",
+      icon: "approval",
       count: user.pendingApprovals,
       countLabel: tr("nav.approvalCountLabel"),
     });
   }
 
   personal.push(
-    { href: "/follow-ups", label: tr("nav.followUps"), icon: "takip" },
-    { href: "/search", label: tr("common.search"), icon: "arama" },
+    { href: "/follow-ups", label: tr("nav.followUps"), icon: "followUp" },
+    { href: "/search", label: tr("common.search"), icon: "search" },
   );
 
-  personal.push({ href: "/absence", label: tr("nav.absence"), icon: "izin" });
+  personal.push({ href: "/absence", label: tr("nav.absence"), icon: "leave" });
 
   const common: NavItem[] = [
-    { href: "/yardim", label: tr("nav.help"), icon: "yardim" },
-    { href: "/feedback", label: tr("nav.feedback"), icon: "geriBildirim" },
+    { href: "/help", label: tr("nav.help"), icon: "help" },
+    { href: "/feedback", label: tr("nav.feedback"), icon: "feedback" },
   ];
 
   const management: NavItem[] = [];
@@ -116,27 +116,27 @@ export function buildNav(user: NavUser, t?: TranslateFunction): NavModel {
       {
         href: feedHref(user.unreadCount),
         label: tr("nav.managedActivities"),
-        icon: "akis",
+        icon: "feed",
         count: user.unreadCount,
         countLabel: tr("nav.unreadCountLabel"),
       },
-      { href: "/team/absence", label: tr("nav.managedAbsence"), icon: "ekip" },
+      { href: "/team/absence", label: tr("nav.managedAbsence"), icon: "team" },
     );
 
     if (user.scoringEnabled) {
-      management.push({ href: "/scores", label: tr("nav.scores"), icon: "skor" });
+      management.push({ href: "/scores", label: tr("nav.scores"), icon: "score" });
     }
   }
 
   if (user.canViewReports) {
-    management.push({ href: "/reports", label: tr("nav.reports"), icon: "rapor" });
+    management.push({ href: "/reports", label: tr("nav.reports"), icon: "report" });
   }
 
   if (user.hasDeputyHistory) {
     personal.push({
       href: "/deputy",
       label: tr("nav.deputy"),
-      icon: "vekalet",
+      icon: "deputy",
       count: user.activeDeputyCount,
       countLabel: tr("nav.activeDeputyCountLabel"),
     });
@@ -144,13 +144,13 @@ export function buildNav(user: NavUser, t?: TranslateFunction): NavModel {
 
   const admin: NavItem[] = user.isSystemAdmin
     ? [
-        { href: "/admin/org", label: tr("nav.orgTree"), icon: "yonetim" },
-        { href: "/admin/users", label: tr("nav.users"), icon: "ekip" },
-        { href: "/admin/calendar", label: tr("nav.calendar"), icon: "bugun" },
-        { href: "/admin/approval-reasons", label: tr("nav.approvalReasons"), icon: "onay" },
-        { href: "/admin/settings", label: tr("nav.settings"), icon: "yonetim" },
-        { href: "/admin/jobs", label: tr("nav.jobs"), icon: "takip" },
-        { href: "/admin/audit", label: tr("nav.audit"), icon: "faaliyet" },
+        { href: "/admin/org", label: tr("nav.orgTree"), icon: "management" },
+        { href: "/admin/users", label: tr("nav.users"), icon: "team" },
+        { href: "/admin/calendar", label: tr("nav.calendar"), icon: "today" },
+        { href: "/admin/approval-reasons", label: tr("nav.approvalReasons"), icon: "approval" },
+        { href: "/admin/settings", label: tr("nav.settings"), icon: "management" },
+        { href: "/admin/jobs", label: tr("nav.jobs"), icon: "followUp" },
+        { href: "/admin/audit", label: tr("nav.audit"), icon: "activity" },
       ]
     : [];
 
@@ -165,33 +165,29 @@ export function buildNav(user: NavUser, t?: TranslateFunction): NavModel {
   };
 }
 
-/**
- * Mobil alt gezinme: **en fazla beş öğe** (brief §5). Sıra bilinçli —
- * "Yeni" ortada, başparmağın doğal yerinde; ama kullanıcıya düşen kritik
- * işin (Bugün'deki sayaç) önüne görsel olarak geçmez.
- */
+
 export function mobileTabs(model: NavModel): NavItem[] {
   const mobileNav = [...model.personal, ...model.management];
-  const bugun = mobileNav.find((item) => item.href === "/");
-  const akis = mobileNav.find((item) => item.href.split("?")[0] === "/feed");
-  const faaliyet = mobileNav.find((item) => item.href === "/activities");
-  const arama = mobileNav.find((item) => item.href === "/search");
-  const onay = mobileNav.find((item) => item.href === "/approvals");
+  const today = mobileNav.find((item) => item.href === "/");
+  const feed = mobileNav.find((item) => item.href.split("?")[0] === "/feed");
+  const activity = mobileNav.find((item) => item.href === "/activities");
+  const search = mobileNav.find((item) => item.href === "/search");
+  const approval = mobileNav.find((item) => item.href === "/approvals");
 
   const tabs: NavItem[] = [];
-  if (bugun) tabs.push(bugun);
-  // Onay görevi varsa faaliyet listesinin yerini alır: bekleyen iş,
-  // kendi arşivinden önce gelir.
-  if (onay) tabs.push(onay);
-  else if (faaliyet) tabs.push(faaliyet);
-  // Akış okunmamış rozetini taşıyor; telefonda da erişilebilir olmalı.
-  if (akis) tabs.push(akis);
-  if (arama) tabs.push(arama);
+  if (today) tabs.push(today);
+
+
+  if (approval) tabs.push(approval);
+  else if (activity) tabs.push(activity);
+
+  if (feed) tabs.push(feed);
+  if (search) tabs.push(search);
 
   return tabs;
 }
 
-/** Bağlantı bu yolda aktif mi? */
+
 export function isActive(pathname: string, href: string): boolean {
   const route = href.split("?")[0];
   if (route === "/") return pathname === "/";

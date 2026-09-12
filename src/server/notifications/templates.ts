@@ -1,17 +1,23 @@
 import { NOTIFICATION_EVENTS, isKnownEvent } from "./events";
-import { formatJobLag, jobLabel } from "@/server/jobs/labels";
+import { jobLabelKey } from "@/server/jobs/labels";
+import {
+  createTranslator,
+  DEFAULT_LOCALE,
+  type Locale,
+  type TranslateFunction,
+} from "@/shared/i18n";
 
-// E-posta metinleri (§12.3, §17.5: arayüz Türkçe). Şablonlar sunucuda tek
-// yerde durur; kuyruk kaydı yalnız olay adını ve gerekli değişkenleri taşır.
+
+
 //
-// İçerik bilerek **azdır**: e-posta faaliyetin kendisini taşımaz, sisteme
-// çağırır. Görünürlük kararı e-postada verilemez — kuyruk yazıldığı andaki
-// yetki, e-posta okunduğunda değişmiş olabilir.
+
+
+
 
 export interface NotificationLine {
-  /** Tek satırlık özet; toplu e-postada madde olarak dizilir. */
+
   summary: string;
-  /** Sisteme dönüş adresi (uygulama köküne göre). */
+
   path: string;
 }
 
@@ -23,39 +29,77 @@ interface Payload {
   token?: unknown;
   jobName?: unknown;
   lagMinutes?: unknown;
-  /** "Faaliyet beklenmiyor" bildirimi için (Görev 11.8). */
+
   personName?: unknown;
   range?: unknown;
   approverName?: unknown;
   decisionRoute?: unknown;
   feedbackTitle?: unknown;
   feedbackStatus?: unknown;
-  /** Faaliyet silme onay kodu ve silinecek kaydın başlığı (03.09.2026). */
+
   code?: unknown;
   title?: unknown;
 }
 
-function metin(value: unknown, fallback: string): string {
+function text(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() !== "" ? value : fallback;
 }
 
-function faaliyetYolu(payload: Payload): string {
+function formatLocalizedJobLag(
+  minutes: number | null,
+  t: TranslateFunction,
+): string {
+  if (minutes === null) return t("notifications.templates.aLongTime");
+  if (minutes < 60) {
+    return t(
+      minutes === 1
+        ? "notifications.templates.delayMinute"
+        : "notifications.templates.delayMinutes",
+      { count: minutes },
+    );
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return t(
+      hours === 1
+        ? "notifications.templates.delayHour"
+        : "notifications.templates.delayHours",
+      { count: hours },
+    );
+  }
+
+  const days = Math.floor(hours / 24);
+  return t(
+    days === 1
+      ? "notifications.templates.delayDay"
+      : "notifications.templates.delayDays",
+    { count: days },
+  );
+}
+
+function activityPath(payload: Payload): string {
   const id = payload.activityId;
   return typeof id === "string" ? `/activities/${id}` : "/";
 }
 
 /**
- * Olayın tek satırlık karşılığı. Bilinmeyen olay **sessizce atlanmaz**: adı
- * yazılır ve kullanıcı sisteme yönlendirilir; aksi hâlde bildirim gönderilmiş
- * ama içi boş olurdu.
+ * Render one line for an event. Unknown events are **not silently dropped**: the
+ * event name is shown and the user is sent to the application instead of seeing
+ * an empty notification.
  */
-export function renderLine(eventType: string, payload: unknown): NotificationLine {
+export function renderLine(
+  eventType: string,
+  payload: unknown,
+  locale: Locale = DEFAULT_LOCALE,
+): NotificationLine {
+  const t = createTranslator(locale);
   const data = (payload ?? {}) as Payload;
-  const baslik = metin(data.activityTitle, "bir faaliyet");
+  const title = text(data.activityTitle, t("notifications.fallbacks.activity"));
 
   if (!isKnownEvent(eventType)) {
     return {
-      summary: `Sistemde bir gelişme var (${eventType}).`,
+      summary: t("notifications.templates.unknown", { eventType }),
       path: "/",
     };
   }
@@ -63,124 +107,119 @@ export function renderLine(eventType: string, payload: unknown): NotificationLin
   switch (eventType) {
     case NOTIFICATION_EVENTS.questionAsked:
       return {
-        summary: "Bir faaliyetiniz hakkında soru soruldu; cevabınız bekleniyor.",
-        path: faaliyetYolu(data),
+        summary: t("notifications.templates.questionAsked"),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.answerReceived:
       return {
-        summary: "Sorduğunuz soruya cevap geldi.",
-        path: faaliyetYolu(data),
+        summary: t("notifications.templates.answerReceived"),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.activityCancelled:
       return {
-        summary: `"${baslik}" iptal edildi; ilgili konuşma kapandı.`,
-        path: faaliyetYolu(data),
+        summary: t("notifications.templates.activityCancelled", { title }),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.approvalPending:
       return {
-        summary: "Onayınızı bekleyen bir faaliyet var.",
-        path: faaliyetYolu(data),
+        summary: t("notifications.templates.approvalPending"),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.activityApproved:
       return {
-        summary: `"${baslik}" onaylandı.`,
-        path: faaliyetYolu(data),
+        summary: t("notifications.templates.activityApproved", { title }),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.changesRequested:
       return {
-        // Gerekçe metni e-postaya **girmez**: içerik postada taşınmaz (§12.3),
-        // kişi ekranda okur.
-        summary: `"${baslik}" için düzeltme istendi.`,
-        path: faaliyetYolu(data),
+        // The reason never enters email: content is not carried in mail (§12.3);
+        // the person reads it on screen.
+        summary: t("notifications.templates.changesRequested", { title }),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.activityRejected:
       return {
-        // Gerekçe ekranda okunur; postada içerik taşınmaz (§12.3).
-        summary: `"${baslik}" uygun bulunmadı.`,
-        path: faaliyetYolu(data),
+        // The reason is read on screen; email does not carry record content (§12.3).
+        summary: t("notifications.templates.activityRejected", { title }),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.approvalOverdue:
       return {
-        summary: "Onayınızı bekleyen bir kayıt gecikti.",
-        path: faaliyetYolu(data),
+        summary: t("notifications.templates.approvalOverdue"),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.answerOverdue:
       return {
-        summary: "Cevap bekleyen bir soru belirlenen süreyi aştı.",
-        path: faaliyetYolu(data),
+        summary: t("notifications.templates.answerOverdue"),
+        path: activityPath(data),
       };
     case NOTIFICATION_EVENTS.noActivityToday:
       return {
-        summary: "Bugün için faaliyet girmediniz.",
+        summary: t("notifications.templates.noActivityToday"),
         path: "/activities/new",
       };
     case NOTIFICATION_EVENTS.managerNotFound:
       return {
-        summary: `"${baslik}" için yönetici bulunamadı; kayıt beklemede.`,
+        summary: t("notifications.templates.managerNotFound", { title }),
         path: "/",
       };
     case NOTIFICATION_EVENTS.jobDelayed: {
-      const isAdi = typeof data.jobName === "string" ? jobLabel(data.jobName) : "bir iş";
-      const gecikme = formatJobLag(
+      const jobName = typeof data.jobName === "string"
+        ? t(jobLabelKey(data.jobName))
+        : t("notifications.fallbacks.job");
+      const delay = formatLocalizedJobLag(
         typeof data.lagMinutes === "number" ? data.lagMinutes : null,
+        t,
       );
       return {
-        summary:
-          `"${isAdi}" ${gecikme} çalışmadı. Hatırlatmalar ve bildirimler gecikiyor olabilir.`,
+        summary: t("notifications.templates.jobDelayed", { jobName, delay }),
         path: "/admin/jobs",
       };
     }
     case NOTIFICATION_EVENTS.accountCreated: {
       const token = typeof data.token === "string" ? data.token : "";
       return {
-        summary:
-          "Faaliyet Raporlama Sistemi'nde hesabınız açıldı. Giriş adresiniz " +
-          "kurum e-posta adresinizdir. Parolanızı belirlemek için aşağıdaki " +
-          "bağlantıyı kullanın; bağlantı bir saat geçerlidir.",
+        summary: t("notifications.templates.accountCreated"),
         path: `/reset/${encodeURIComponent(token)}`,
       };
     }
     case NOTIFICATION_EVENTS.absenceMarkedBySelf: {
-      const kisi = metin(data.personName, "Bir kişi");
-      const aralik = metin(data.range, "");
+      const person = text(data.personName, t("notifications.fallbacks.person"));
+      const range = text(data.range, "");
       return {
-        summary:
-          `${kisi} ${aralik} için izin kaydı girdi. ` +
-          "O günlerde hatırlatma gitmez ve ekip katılım oranında beklenen " +
-          "kişi sayılmaz. Ayrıntıyı ekip ekranında görebilirsiniz.",
+        summary: t("notifications.templates.absenceMarkedBySelf", { person, range }),
         path: "/team/absence",
       };
     }
     case NOTIFICATION_EVENTS.absenceRequestSubmitted: {
-      const kisi = metin(data.personName, "Bir çalışan");
-      const aralik = metin(data.range, "");
+      const person = text(data.personName, t("notifications.fallbacks.employee"));
+      const range = text(data.range, "");
       return {
-        summary: `${kisi} ${aralik} için izin talebi gönderdi; kararınız bekleniyor.`,
+        summary: t("notifications.templates.absenceRequestSubmitted", { person, range }),
         path: "/team/absence",
       };
     }
     case NOTIFICATION_EVENTS.absenceRequestApproved: {
-      const aralik = metin(data.range, "");
-      const onaylayan = metin(data.approverName, "Yöneticiniz");
+      const range = text(data.range, "");
+      const approver = text(data.approverName, t("notifications.fallbacks.manager"));
       return {
-        summary: `${aralik} için izin talebiniz ${onaylayan} tarafından onaylandı.`,
+        summary: t("notifications.templates.absenceRequestApproved", { approver, range }),
         path: "/absence",
       };
     }
     case NOTIFICATION_EVENTS.absenceRequestRejected: {
-      const aralik = metin(data.range, "");
-      const reddeden = metin(data.approverName, "Yöneticiniz");
+      const range = text(data.range, "");
+      const rejector = text(data.approverName, t("notifications.fallbacks.manager"));
       return {
-        summary:
-          `${aralik} için izin talebiniz ${reddeden} tarafından reddedildi. Ayrıntıyı ve gerekçeyi İzinlerim bölümünde görebilirsiniz.`,
+        summary: t("notifications.templates.absenceRequestRejected", { rejector, range }),
         path: "/absence",
       };
     }
     case NOTIFICATION_EVENTS.feedbackStatusChanged: {
-      const baslik = metin(data.feedbackTitle, "Geri bildiriminiz");
-      const durum = metin(data.feedbackStatus, "güncellendi");
+      const title = text(data.feedbackTitle, t("notifications.fallbacks.feedback"));
+      const status = text(data.feedbackStatus, t("notifications.fallbacks.updated"));
       return {
-        summary: `"${baslik}" başlıklı geri bildiriminizin durumu ${durum}. Ayrıntıyı Geri bildirim bölümünde görebilirsiniz.`,
+        summary: t("notifications.templates.feedbackStatusChanged", { title, status }),
         path: "/feedback",
       };
     }
@@ -188,21 +227,16 @@ export function renderLine(eventType: string, payload: unknown): NotificationLin
       const code = typeof data.code === "string" ? data.code : "";
       const title = typeof data.title === "string" ? data.title : "";
       return {
-        summary:
-          `Faaliyet silme kodunuz: ${code}. On dakika geçerlidir ve bir kez ` +
-          `kullanılır. Silinecek kayıt: "${title}". Bu isteği siz yapmadıysanız ` +
-          "kodu kimseyle paylaşmayın; kod girilmedikçe hiçbir kayıt silinmez.",
-        // Silme ekranına yönlendirme yok: bağlantıya tıklamak kodun yerini
-        // tutmamalı, kod kasıtlı bir engeldir.
-        path: "/admin/faaliyet-silme",
+        summary: t("notifications.templates.activityDeletionCode", { code, title }),
+        // Do not link directly to the deletion screen: clicking a link must not
+        // replace the deliberate code-based safeguard.
+        path: "/admin/activity-deletion",
       };
     }
     case NOTIFICATION_EVENTS.passwordReset: {
       const token = typeof data.token === "string" ? data.token : "";
       return {
-        summary:
-          "Parola sıfırlama isteğiniz alındı. Bağlantı bir saat geçerlidir; " +
-          "isteği siz yapmadıysanız bu e-postayı yok sayabilirsiniz.",
+        summary: t("notifications.templates.passwordReset"),
         path: `/reset/${encodeURIComponent(token)}`,
       };
     }
@@ -215,33 +249,33 @@ export interface RenderedEmail {
 }
 
 /**
- * Bir kişiye giden e-posta. Kısa aralıkta biriken bildirimler **tek e-postada**
- * birleşir (§12.3): olay başına ayrı posta, kalabalık yüzünden okunmayan posta
- * demektir.
+ * Render an email for one person. Notifications accumulated in a short interval
+ * are combined into **one email** (§12.3); one email per event becomes unreadable.
  */
 export function renderEmail(
   lines: NotificationLine[],
-  options: { baseUrl: string; digest: boolean },
+  options: { baseUrl: string; digest: boolean; locale?: Locale },
 ): RenderedEmail {
+  const t = createTranslator(options.locale ?? DEFAULT_LOCALE);
   const subject =
     lines.length === 1 && !options.digest
-      ? "Faaliyet Raporlama Sistemi — bildirim"
+      ? t("notifications.templates.emailSubject")
       : options.digest
-        ? `Faaliyet Raporlama Sistemi — günlük özet (${lines.length} bildirim)`
-        : `Faaliyet Raporlama Sistemi — ${lines.length} bildirim`;
+        ? t("notifications.templates.emailDigestSubject", { count: lines.length })
+        : t("notifications.templates.emailMultipleSubject", { count: lines.length });
 
-  const govde = lines
+  const body = lines
     .map((line) => `- ${line.summary}\n  ${options.baseUrl}${line.path}`)
     .join("\n\n");
 
   const text = [
     options.digest
-      ? "Bugün sizinle ilgili gelişmeler:"
-      : "Sizinle ilgili yeni gelişme var:",
+      ? t("notifications.templates.emailDigestIntro")
+      : t("notifications.templates.emailSingleIntro"),
     "",
-    govde,
+    body,
     "",
-    "Bu e-posta Faaliyet Raporlama Sistemi tarafından gönderildi.",
+    t("notifications.templates.emailFooter"),
   ].join("\n");
 
   return { subject, text };

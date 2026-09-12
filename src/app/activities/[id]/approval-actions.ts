@@ -9,6 +9,11 @@ import {
 } from "@/server/activities/approval";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   approveActivitySchema,
   rejectActivitySchema,
@@ -17,22 +22,25 @@ import {
 
 import { emptyActivityFormState, type ActivityFormState } from "../form-state";
 
-// Onay kararları (§5.4). Yetki servis katmanında doğrulanır: onay yalnız
-// **aktif onaylayıcıya** düşer ve o da §4.4'ün çözdüğü kişidir. Buradaki tek
-// iş, oturumu okuyup girdiyi doğrulamak.
+
+
+
 
 export async function approveActivityAction(
   _previous: ActivityFormState,
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const parsed = approveActivitySchema.safeParse({ id: formData.get("id") });
-  if (!parsed.success) return { error: "Faaliyet bilgisi geçersiz." };
+  if (!parsed.success) {
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
+  }
 
-  const sonuc = await approveActivity(prisma, user.id, parsed.data.id, new Date());
-  if (!sonuc.ok) return { error: sonuc.message };
+  const result = await approveActivity(prisma, user.id, parsed.data.id, new Date());
+  if (!result.ok) return { error: localizeServiceMessage(t, "approval", result) };
 
   revalidatePath(`/activities/${parsed.data.id}`);
   revalidatePath("/");
@@ -44,7 +52,8 @@ export async function requestChangesAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const parsed = requestChangesSchema.safeParse({
     id: formData.get("id"),
@@ -53,30 +62,31 @@ export async function requestChangesAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz." };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
-  const sonuc = await requestChanges(
+  const result = await requestChanges(
     prisma,
     user.id,
     parsed.data.id,
     { reasonId: parsed.data.reasonId, note: parsed.data.note },
     new Date(),
   );
-  if (!sonuc.ok) return { error: sonuc.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "approval", result) };
 
   revalidatePath(`/activities/${parsed.data.id}`);
   revalidatePath("/");
   return emptyActivityFormState;
 }
 
-/** Reddetme (ürün sahibi kararı, 19.08.2026). Gerekçe kategorisi zorunlu. */
+/** Reject an activity; a reason category is required by the product decision. */
 export async function rejectActivityAction(
   _previous: ActivityFormState,
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
-  if (!user) return { error: "Oturum bulunamadı." };
+  const t = await getTranslations();
+  if (!user) return { error: t("auth.sessionNotFound") };
 
   const parsed = rejectActivitySchema.safeParse({
     id: formData.get("id"),
@@ -85,17 +95,17 @@ export async function rejectActivityAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz." };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
-  const sonuc = await rejectActivity(
+  const result = await rejectActivity(
     prisma,
     user.id,
     parsed.data.id,
     { reasonId: parsed.data.reasonId, note: parsed.data.note },
     new Date(),
   );
-  if (!sonuc.ok) return { error: sonuc.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "approval", result) };
 
   revalidatePath(`/activities/${parsed.data.id}`);
   revalidatePath("/");

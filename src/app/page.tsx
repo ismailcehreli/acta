@@ -10,6 +10,7 @@ import {
   type FeedFilters,
 } from "@/server/activities/scope-feed";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocale } from "@/server/i18n/locale";
 import { subordinateUserIds } from "@/server/authz/visibility";
 import { activityTrend, statusDistribution } from "@/server/dashboard/charts";
 import { listWorkQueue } from "@/server/dashboard/work-queue";
@@ -38,21 +39,21 @@ import { EmptyState } from "@/components/ui/card";
 import { Page, PageHeader } from "@/components/ui/page";
 import { companyHour } from "@/shared/format/date-time";
 
-// Ana ekran (§13.1). **Düzen her kademede aynıdır; yalnızca kapsam genişler.**
-// Öğrenilecek tek bir arayüz olur.
+
+
 //
-// **Bu bir özet ekranıdır** (ürün sahibi kararı, 20.08.2026). Kapsam akışının
-// tamamı burada duruyordu ve bin kayıtlık bir şirkette sayfa sonu gelmeyen bir
-// listeye dönüşüyordu — özetin kendisi ekranın dışında kalıyordu. Akış
-// `/feed` sayfasına taşındı; ana ekranda yalnız son beş kayıt duruyor.
+
+
+
+
 //
-// Ekranın sırası "önce iş, sonra resim":
-//   1. Ölçüm şeridi — kapsamın o anki hâli, beş sayı.
-//   2. Bana düşen iş — karar bekleyen her şey.
-//   3. Bugünkü kaydınız — ince şerit.
-//   4. Grafikler — "nasıl gidiyor" sorusunun cevabı.
-//   5. Son kayıtlar — akışa açılan kapı.
-//   6. Sistem yöneticisine işletim bloğu.
+
+
+
+
+
+
+
 
 function parsePeriod(value: string | undefined): FeedFilters["period"] {
   return value === "today" || value === "all" || value === "week" ? value : "week";
@@ -61,17 +62,17 @@ function parsePeriod(value: string | undefined): FeedFilters["period"] {
 import { getTranslations } from "@/server/i18n/server";
 import type { TranslateFunction } from "@/shared/i18n";
 
-/** Ana ekrandaki önizlemede kaç kayıt gösterilir. */
-const ONIZLEME = 5;
 
-/** Grafik kaç günü gösteriyor. İki hafta, iki hafta sonu demek. */
-const TREND_GUN = 14;
+const PREVIEW_LIMIT = 5;
 
-function selamlama(now: Date, t: TranslateFunction): string {
-  const saat = companyHour(now);
 
-  if (saat < 12) return t("dashboard.greetingMorning");
-  if (saat < 18) return t("dashboard.greetingAfternoon");
+const TREND_DAYS = 14;
+
+function greeting(now: Date, t: TranslateFunction): string {
+  const hour = companyHour(now);
+
+  if (hour < 12) return t("dashboard.greetingMorning");
+  if (hour < 18) return t("dashboard.greetingAfternoon");
   return t("dashboard.greetingEvening");
 }
 
@@ -83,23 +84,24 @@ export default async function DashboardPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const t = await getTranslations();
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
 
   const params = await searchParams;
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
   const now = new Date();
 
   const filters: FeedFilters = { period: parsePeriod(params.period) };
-  const donem = filters.period ?? "week";
+  const period = filters.period ?? "week";
 
-  // Astlar bir kez hesaplanır ve her sorguya taşınır: aynı istekte tekrar
-  // tekrar çalıştırmak sayfayı gereksiz yere yavaşlatıyordu.
+
+
   const subordinates = await subordinateUserIds(prisma, viewer.id);
 
   const [
     scope,
-    onizleme,
-    toplamKayit,
+    preview,
+    totalRecord,
     todayCount,
     totalCount,
     workQueue,
@@ -115,7 +117,7 @@ export default async function DashboardPage({
     describeScope(prisma, viewer, subordinates),
     listScopeActivities(prisma, viewer, filters, now, {
       subordinates,
-      limit: ONIZLEME,
+      limit: PREVIEW_LIMIT,
       managedOnly: true,
     }),
     countScopeActivities(prisma, viewer, filters, now, {
@@ -127,18 +129,19 @@ export default async function DashboardPage({
       activityDate: toDateValue(companyDay(now)),
     }),
     countVisibleActivities(prisma, viewer, { authorId: user.id }),
-    // Tek iş kuyruğu: cevap bekleyen sorular, onaylar ve düzeltme talepleri
-    // aynı listede (Görev 10.5). "Cevap beklediklerim" izlenenlere ayrılıyor.
+
+
     listWorkQueue(prisma, viewer, now),
     listScopeActivities(prisma, viewer, { period: "all", unreadOnly: true }, now, {
       subordinates,
-      limit: ONIZLEME,
+      limit: PREVIEW_LIMIT,
       managedOnly: true,
       order: "oldest",
     }),
     teamParticipationToday(prisma, subordinates, now),
     departmentSummary(prisma, viewer, subordinates, filters.period, now, {
       includeRoot: true,
+      locale,
     }),
     user.isSystemAdmin ? operationsSummary(prisma, now) : Promise.resolve(null),
     personalDashboardMetrics(prisma, viewer, filters.period, now),
@@ -146,7 +149,7 @@ export default async function DashboardPage({
       canManageAbsences: user.isUnitManager,
       canManageFeedback: user.isSystemAdmin,
     }),
-    activityTrend(prisma, viewer, subordinates, TREND_GUN, now, {
+    activityTrend(prisma, viewer, subordinates, TREND_DAYS, now, {
       managedOnly: true,
     }),
     statusDistribution(
@@ -159,12 +162,12 @@ export default async function DashboardPage({
   ]);
 
   const shellUser = await toShellUser(user, subordinates);
-  const bekleyen = workQueue.items.length;
+  const pending = workQueue.items.length;
 
-  // Faaliyet yazması beklenmeyen kişide (§7.4 istisnası) "bugün yazmadınız"
-  // uyarısı da, "Benim faaliyetlerim" bloğu da gösterilmez: beklenmeyen bir
-  // şeyin eksikliği hatırlatılmaz.
-  const faaliyetYazar = user.writesActivities;
+
+
+
+  const writesActivities = user.writesActivities;
 
   const periodLabels: Record<"today" | "week" | "all", string> = {
     today: t("dashboard.periodToday"),
@@ -172,22 +175,22 @@ export default async function DashboardPage({
     all: t("dashboard.periodAll"),
   };
 
-  const akisAdresi = `/feed?${new URLSearchParams({ period: donem }).toString()}`;
+  const feedAddress = `/feed?${new URLSearchParams({ period }).toString()}`;
 
   return (
     <AppShell user={shellUser}>
-      <Page isaret="ana-ekran">
+      <Page marker="dashboard">
         <PageHeader
           marker={t("nav.today")}
-          title={`${selamlama(now, t)}, ${user.fullName}`}
+          title={`${greeting(now, t)}, ${user.fullName}`}
           description={
             [
-              !faaliyetYazar
+              !writesActivities
                 ? null
                 : todayCount === 0
                   ? t("dashboard.noActivityToday")
                   : t("dashboard.youWroteCount", { count: todayCount }),
-              bekleyen > 0 ? t("dashboard.pendingTasksCount", { count: bekleyen }) : null,
+              pending > 0 ? t("dashboard.pendingTasksCount", { count: pending }) : null,
             ]
               .filter(Boolean)
               .join(" ") || undefined
@@ -200,19 +203,19 @@ export default async function DashboardPage({
           <UnreadActivitiesBlock
             items={unreadPreview.items}
             count={shellUser.unreadCount}
-            href="/feed?period=all&okunmamis=1"
+            href="/feed?period=all&unread=1"
           />
         ) : null}
 
         <section
-          aria-labelledby="benim-durumum"
-          data-test="kisisel-durum"
+          aria-labelledby="personal-overview"
+          data-test="personal-overview"
           className="flex flex-col gap-(--spacing-block)"
         >
           <div className="flex items-end justify-between gap-4 border-b border-line pb-3">
             <div>
               <span className="section-label">{t("dashboard.personalSummary")}</span>
-              <h2 id="benim-durumum" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
+              <h2 id="personal-overview" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
                 {t("dashboard.myStatus")}
               </h2>
             </div>
@@ -223,32 +226,33 @@ export default async function DashboardPage({
 
           <MetricStrip
             metrics={personalMetrics}
-            donemEtiketi={periodLabels[donem]}
-            period={donem}
-            onaylayici={false}
-            headingId="kisisel-olcum-basligi"
+            periodLabel={periodLabels[period]}
+            period={period}
+            isApprover={false}
+            headingId="personal-metrics-heading"
             ownOnly
             authorId={user.id}
           />
 
-          {/* ── Bugünkü kaydınız ───────────────────────────────────────
-            İnce şerit; işi gölgelemez. Faaliyet yazması beklenmeyen kişide
-            (§7.4 istisnası) hiç görünmez — "0 kayıt" bile göstermez. */}
-          {faaliyetYazar ? (
+          {/* ── Today's record ─────────────────────────────────────────
+            A thin strip that does not compete with the work. It is hidden for
+            people who are not expected to log activities (§7.4 exception), even
+            when the count is zero. */}
+          {writesActivities ? (
             <MyActivitiesBlock todayCount={todayCount} totalCount={totalCount} />
           ) : null}
         </section>
 
         {subordinates.length > 0 ? (
           <section
-            aria-labelledby="yonettigim-alan"
-            data-test="yonetilen-alan"
+            aria-labelledby="managed-area"
+            data-test="managed-area"
             className="flex flex-col gap-(--spacing-block)"
           >
             <div className="flex items-end justify-between gap-4 border-b border-line pb-3">
               <div>
                 <span className="section-label">{t("dashboard.managedArea")}</span>
-                <h2 id="yonettigim-alan" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
+                <h2 id="managed-area" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
                   {t("dashboard.myManagedArea")}
                 </h2>
               </div>
@@ -259,10 +263,10 @@ export default async function DashboardPage({
 
             <MetricStrip
               metrics={managedMetrics}
-              donemEtiketi={periodLabels[donem]}
-              period={donem}
-              onaylayici={user.isUnitManager}
-              headingId="yonetilen-olcum-basligi"
+              periodLabel={periodLabels[period]}
+              period={period}
+              isApprover={user.isUnitManager}
+            headingId="managed-metrics-heading"
             />
 
             <ManagerSummaryBlock
@@ -272,37 +276,37 @@ export default async function DashboardPage({
 
             {participation ? <TeamBlock participation={participation} /> : null}
 
-            {/* ── Görsel özet ───────────────────────────────────────────
-            Kapsamı olmayan kişide grafik çizilmez: tek kişilik bir dağılım
-            bilgi değil süstür. */}
+            {/* ── Visual summary ───────────────────────────────────────
+            No chart is rendered without scope: a one-person distribution is
+            decoration rather than information. */}
             {scope.hasScope ? (
               <SummaryCharts
                 trend={trend}
                 departments={departmentRows}
                 statuses={statuses}
-                period={donem}
-                donemEtiketi={periodLabels[donem]}
+                period={period}
+                periodLabel={periodLabels[period]}
               />
             ) : null}
 
-            {/* ── Son kayıtlar ──────────────────────────────────────────
-            Akışın tamamı ayrı sayfada; burada yalnız kapı. */}
+            {/* ── Recent records ────────────────────────────────────────
+            The complete feed has its own page; this is only the entry point. */}
             {scope.hasScope ? (
               <FeedPreview
-                href={akisAdresi}
-                count={toplamKayit}
-                label={scope.label}
-                previewCount={ONIZLEME}
+                href={feedAddress}
+                count={totalRecord}
+                label={t(scope.label)}
+                previewCount={PREVIEW_LIMIT}
               >
-                {onizleme.items.length === 0 ? (
+                {preview.items.length === 0 ? (
                   <EmptyState
                     title={t("dashboard.noActivitiesInRange")}
                     description={t("dashboard.tryExpandingPeriod")}
                   />
                 ) : (
                   <ul className="divide-y divide-line">
-                    {onizleme.items.map((item) => (
-                      <FeedRow key={item.id} item={item} />
+                    {preview.items.map((item) => (
+                      <FeedRow key={item.id} item={item} locale={locale} t={t} />
                     ))}
                   </ul>
                 )}
@@ -310,19 +314,19 @@ export default async function DashboardPage({
             ) : null}
           </section>
         ) : (
-          // Kardeş bölümlerle (KİŞİSEL ÖZET / YÖNETİLEN ALAN) aynı metin
-          // başlığı deseni kullanılır — ayrı bir kutu (Card) değil, çünkü
-          // burada gösterilecek veri yok, yalnız kapsamın neden boş olduğunun
-          // açıklaması var. Farklı bir görsel kalıp yeni bir anlam üstlenmezdi
-          // (DESIGN-IS-2026-09-02, Görev 15.3).
+          // Use the same text-heading pattern as the sibling sections (PERSONAL
+          // SUMMARY / MANAGED AREA), not a separate Card: there is no data to
+          // display here, only an explanation of why the scope is empty. Another
+          // visual pattern would imply a different meaning (DESIGN-IS-2026-09-02,
+          // Task 15.3).
           <section
-            aria-labelledby="yonettigim-alan"
-            data-test="yonetilen-alan-yok"
+            aria-labelledby="managed-area-empty"
+            data-test="managed-area-empty"
             className="flex flex-col gap-(--spacing-block)"
           >
             <div className="border-b border-line pb-3">
               <span className="section-label">{t("dashboard.managedArea")}</span>
-              <h2 id="yonettigim-alan" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
+              <h2 id="managed-area-empty" className="mt-1 text-[length:var(--text-xl)] font-semibold text-ink">
                 {t("dashboard.myManagedArea")}
               </h2>
             </div>

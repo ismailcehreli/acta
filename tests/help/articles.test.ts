@@ -21,85 +21,85 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function kullanicilar() {
-  const birim = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const sistemYoneticisi = await createUser(birim.id, {
-    fullName: "Sistem Yöneticisi",
+async function setupUsers() {
+  const unit = await createOrgUnit({ name: "Company", type: "Root" });
+  const systemAdmin = await createUser(unit.id, {
+    fullName: "System Administrator",
     isSystemAdmin: true,
   });
-  const birimYoneticisi = await createUser(birim.id, {
-    fullName: "Birim Yöneticisi",
+  const unitManager = await createUser(unit.id, {
+    fullName: "Unit Manager",
     isUnitManager: true,
   });
-  const calisan = await createUser(birim.id, { fullName: "Çalışan" });
+  const employee = await createUser(unit.id, { fullName: "Employee" });
 
-  return { sistemYoneticisi, birimYoneticisi, calisan };
+  return { systemAdmin, unitManager, employee };
 }
 
-const yazi = {
-  category: "Başlangıç",
-  title: "Nasıl giriş yaparım?",
-  answer: "E-posta adresinizi ve parolanızı yazıp Giriş yap düğmesine basın.",
+const sampleArticle = {
+  category: "Getting Started",
+  title: "How do I log in?",
+  answer: "Enter your email address and password, then click Log In.",
   sortOrder: 1,
   isPublished: true,
 };
 
-describe("yardım kütüphanesi", () => {
-  it("yönetici yazı ekleyebilir, düzenleyebilir ve arşivleyebilir", async () => {
-    const { birimYoneticisi } = await kullanicilar();
+describe("help library", () => {
+  it("manager can add, edit, and archive articles", async () => {
+    const { unitManager } = await setupUsers();
 
-    const ekleme = await createHelpArticle(testDb, birimYoneticisi.id, yazi, NOW);
-    expect(ekleme.ok).toBe(true);
-    if (!ekleme.ok) return;
+    const created = await createHelpArticle(testDb, unitManager.id, sampleArticle, NOW);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
 
-    const duzenleme = await updateHelpArticle(
+    const updated = await updateHelpArticle(
       testDb,
-      birimYoneticisi.id,
-      ekleme.article.id,
-      { ...yazi, title: "Parolamı nasıl belirlerim?", isPublished: false },
+      unitManager.id,
+      created.article.id,
+      { ...sampleArticle, title: "How do I set my password?", isPublished: false },
       NOW,
     );
-    expect(duzenleme.ok).toBe(true);
+    expect(updated.ok).toBe(true);
 
     expect(await listHelpArticles(testDb)).toEqual([]);
     expect(await listHelpArticles(testDb, { includeUnpublished: true })).toHaveLength(1);
 
     expect(
-      await archiveHelpArticle(testDb, birimYoneticisi.id, ekleme.article.id, NOW),
+      await archiveHelpArticle(testDb, unitManager.id, created.article.id, NOW),
     ).toEqual({ ok: true });
     expect(await listHelpArticles(testDb, { includeUnpublished: true })).toEqual([]);
   });
 
-  it("içerik düz metin olmalı ve HTML kabul edilmez", async () => {
-    const { sistemYoneticisi } = await kullanicilar();
+  it("content must be plain text and reject HTML", async () => {
+    const { systemAdmin } = await setupUsers();
 
-    const sonuc = await createHelpArticle(
+    const result = await createHelpArticle(
       testDb,
-      sistemYoneticisi.id,
-      { ...yazi, answer: "<script>alert('x')</script>" },
+      systemAdmin.id,
+      { ...sampleArticle, answer: "<script>alert('x')</script>" },
       NOW,
     );
 
-    expect(sonuc).toEqual({
+    expect(result).toEqual({
       ok: false,
       error: "invalid_text",
-      message: "Kategori, başlık ve açıklama sınırlar içinde olmalı; HTML kullanılamaz.",
+      message: "Category, title, and description must be within their limits; HTML is not allowed.",
     });
   });
 
-  it("yayınlanmamış yazı yalnızca yöneticinin listesinde görünür", async () => {
-    const { sistemYoneticisi } = await kullanicilar();
-    await createHelpArticle(testDb, sistemYoneticisi.id, { ...yazi, isPublished: false }, NOW);
+  it("unpublished article only appears in manager listing", async () => {
+    const { systemAdmin } = await setupUsers();
+    await createHelpArticle(testDb, systemAdmin.id, { ...sampleArticle, isPublished: false }, NOW);
 
     expect(await listHelpArticles(testDb)).toHaveLength(0);
     expect(await listHelpArticles(testDb, { includeUnpublished: true })).toHaveLength(1);
   });
 
-  it("sistem yöneticisi ve birim yöneticisi yazıları yönetebilir", async () => {
-    const { sistemYoneticisi, birimYoneticisi, calisan } = await kullanicilar();
+  it("system admin and unit manager can manage help articles", async () => {
+    const { systemAdmin, unitManager, employee } = await setupUsers();
 
-    expect(canManageHelp(sistemYoneticisi)).toBe(true);
-    expect(canManageHelp(birimYoneticisi)).toBe(true);
-    expect(canManageHelp(calisan)).toBe(false);
+    expect(canManageHelp(systemAdmin)).toBe(true);
+    expect(canManageHelp(unitManager)).toBe(true);
+    expect(canManageHelp(employee)).toBe(false);
   });
 });

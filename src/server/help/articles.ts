@@ -142,7 +142,7 @@ export async function createHelpArticle(
     return {
       ok: false,
       error: "invalid_text",
-      message: "Kategori, başlık ve açıklama sınırlar içinde olmalı; HTML kullanılamaz.",
+      message: "Category, title, and description must be within their limits; HTML is not allowed.",
     };
   }
 
@@ -183,7 +183,7 @@ export async function updateHelpArticle(
     return {
       ok: false,
       error: "invalid_text",
-      message: "Kategori, başlık ve açıklama sınırlar içinde olmalı; HTML kullanılamaz.",
+      message: "Category, title, and description must be within their limits; HTML is not allowed.",
     };
   }
 
@@ -196,7 +196,7 @@ export async function updateHelpArticle(
       return {
         ok: false as const,
         error: "not_found" as const,
-        message: "Yardım yazısı bulunamadı.",
+        message: "Help article not found.",
       };
     }
 
@@ -229,7 +229,7 @@ export async function archiveHelpArticle(
       where: { id, archivedAt: null },
       select: { id: true, category: true },
     });
-    if (!existing) return { ok: false as const, message: "Yardım yazısı bulunamadı." };
+    if (!existing) return { ok: false as const, message: "Help article not found." };
 
     await tx.helpArticle.update({
       where: { id },

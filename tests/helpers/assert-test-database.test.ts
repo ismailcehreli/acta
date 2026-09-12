@@ -6,9 +6,9 @@ import {
   maskUrl,
 } from "./assert-test-database";
 
-// Bu koruma, testlerin yanlış veritabanını boşaltmasını engelliyor. Korumanın
-// kendisi test edilmezse "koruma var" demek bir iddiadan ibaret kalır
-// (denetim 17.08.2026, bulgu 3).
+
+
+// (audit 2026-08-17, finding 3).
 
 const TEST_URL = "postgresql://u:p@localhost:5433/faaliyet_test";
 const APP_URL = "postgresql://u:p@localhost:5442/faaliyet";
@@ -19,62 +19,62 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("test veritabanı doğrulaması", () => {
-  it("izinli test veritabanını kabul eder", () => {
+describe("test database URL validation", () => {
+  it("accepts an allowed test database", () => {
     expect(assertTestDatabaseUrl(TEST_URL, options)).toBe(TEST_URL);
   });
 
-  it("uçtan uca veritabanını da kabul eder", () => {
+  it("accepts the end-to-end database", () => {
     const e2eUrl = "postgresql://u:p@localhost:5433/faaliyet_e2e";
     expect(assertTestDatabaseUrl(e2eUrl, options)).toBe(e2eUrl);
   });
 
-  it("adres verilmezse durur", () => {
+  it("rejects a missing URL", () => {
     expect(() => assertTestDatabaseUrl(undefined, options)).toThrow(
-      /tanımlı değil/,
+      /is not set/,
     );
   });
 
-  it("uygulamanın veritabanını reddeder", () => {
+  it("rejects the application database", () => {
     expect(() => assertTestDatabaseUrl(APP_URL, options)).toThrow(
-      /DATABASE_URL değeriyle aynı/,
+      /same database as DATABASE_URL/,
     );
   });
 
-  it("adı 'test' içeren ama izinli olmayan veritabanını reddeder", () => {
-    // Eski koruma yalnızca "test" kelimesi arıyordu; bu adres onu geçerdi.
+  it("rejects a database whose name is not allowed", () => {
+
     expect(() =>
       assertTestDatabaseUrl("postgresql://u:p@localhost:5433/latest", options),
-    ).toThrow(/izinli bir test veritabanına işaret etmiyor/);
+    ).toThrow(/does not point to an allowed test database/);
   });
 
-  it("üretim veritabanı adını reddeder", () => {
+  it("rejects the production database name", () => {
     expect(() =>
       assertTestDatabaseUrl("postgresql://u:p@localhost:5433/faaliyet", options),
-    ).toThrow(/izinli bir test veritabanına işaret etmiyor/);
+    ).toThrow(/does not point to an allowed test database/);
   });
 
-  it("uzak sunucuyu reddeder", () => {
+  it("rejects a remote host", () => {
     expect(() =>
       assertTestDatabaseUrl(
         "postgresql://u:p@db.sirket.local:5432/faaliyet_test",
         options,
       ),
-    ).toThrow(/yerel olmayan bir sunucuya işaret ediyor/);
+    ).toThrow(/points to a non-local host/);
   });
 
-  it("üretim ortamında hiç çalışmaz", () => {
+  it("never runs in production", () => {
     vi.stubEnv("NODE_ENV", "production");
 
     expect(() => assertTestDatabaseUrl(TEST_URL, options)).toThrow(
-      /üretim ortamında/,
+      /cannot run in production/,
     );
   });
 
-  it("hata mesajı parolayı açığa çıkarmaz", () => {
-    const withPassword = "postgresql://faaliyet:gizli-parola@localhost:5442/faaliyet";
+  it("does not expose a password in error messages", () => {
+    const withPassword = "postgresql://faaliyet:secret-password@localhost:5442/faaliyet";
 
-    expect(maskUrl(withPassword)).not.toContain("gizli-parola");
+    expect(maskUrl(withPassword)).not.toContain("secret-password");
     expect(maskUrl(withPassword)).toContain("***");
 
     try {
@@ -82,39 +82,39 @@ describe("test veritabanı doğrulaması", () => {
         variableName: "TEST_DATABASE_URL",
         applicationUrl: withPassword,
       });
-      throw new Error("hata bekleniyordu");
+      throw new Error("an error was expected");
     } catch (error) {
-      expect((error as Error).message).not.toContain("gizli-parola");
+      expect((error as Error).message).not.toContain("secret-password");
     }
   });
 });
 
-// Denetim FAZ 2, bulgu 6: karşılaştırma iki ham metni `===` ile
-// eşleştiriyordu; aynı veritabanı farklı URL biçimiyle guard'dan geçebiliyordu.
-describe("aynı hedefi farklı yazımla tanır", () => {
-  it("localhost ile 127.0.0.1 aynı hedef sayılır", () => {
+
+
+describe("canonical database targets", () => {
+  it("treats localhost and 127.0.0.1 as the same target", () => {
     expect(canonicalTarget("postgresql://u:p@localhost:5442/faaliyet")).toBe(
       canonicalTarget("postgresql://baska:parola@127.0.0.1:5442/faaliyet"),
     );
   });
 
-  it("yazılmamış varsayılan port yazılmışla aynı hedeftir", () => {
+  it("treats the implicit default port as the explicit port", () => {
     expect(canonicalTarget("postgresql://u:p@127.0.0.1/faaliyet")).toBe(
       canonicalTarget("postgresql://u:p@127.0.0.1:5432/faaliyet"),
     );
   });
 
-  it("uygulama veritabanı başka bir yazımla verilse de reddedilir", () => {
-    // Eski kontrol bunu kaçırıyordu: metinler farklı, hedef aynı.
+  it("rejects the application database despite a different spelling", () => {
+
     expect(() =>
       assertTestDatabaseUrl("postgresql://u:p@localhost:5442/faaliyet", {
         variableName: "TEST_DATABASE_URL",
         applicationUrl: "postgresql://faaliyet:parola@127.0.0.1:5442/faaliyet",
       }),
-    ).toThrow(/aynı veritabanını gösteriyor|izinli bir test veritabanına/);
+    ).toThrow(/same database as DATABASE_URL|allowed test database/);
   });
 
-  it("farklı veritabanı adı farklı hedeftir", () => {
+  it("treats different database names as different targets", () => {
     expect(canonicalTarget("postgresql://u:p@127.0.0.1:5433/faaliyet_test")).not.toBe(
       canonicalTarget("postgresql://u:p@127.0.0.1:5433/faaliyet_e2e"),
     );

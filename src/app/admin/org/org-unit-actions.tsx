@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
+import { useTranslations } from "@/components/i18n/provider";
 
 import {
   deactivateOrgUnitAction,
@@ -13,10 +14,6 @@ import {
 } from "./actions";
 import { emptyOrgFormState } from "./form-state";
 import type { UnitOption } from "./org-form";
-
-// Birim başına üç işlem: taşıma, pasifleştirme ve aktifleştirme. Silme yoktur
-// (§16.6) — pasifleştirilen birim kayıtta kalır ve geri açılabilir.
-
 export function OrgUnitActions({
   unitId,
   unitName,
@@ -26,6 +23,7 @@ export function OrgUnitActions({
   unitName: string;
   options: UnitOption[];
 }) {
+  const t = useTranslations();
   const [moveState, moveAction, movePending] = useActionState(
     moveOrgUnitAction,
     emptyOrgFormState,
@@ -36,24 +34,24 @@ export function OrgUnitActions({
   );
 
   const message = moveState.error ?? deactivateState.error;
-  const onay = moveState.calendarConfirm;
+  const calendarChange = moveState.calendarConfirm;
 
   return (
     <span className="flex flex-wrap items-center gap-2">
       {options.length > 0 ? (
         <form action={moveAction} className="flex items-center gap-1.5">
           <input type="hidden" name="id" value={unitId} />
-          <label className="sr-only" htmlFor={`tasi-${unitId}`}>
-            {unitName} biriminin yeni üstü
+          <label className="sr-only" htmlFor={`move-${unitId}`}>
+            {t("screens.organization.moveLabel", { unit: unitName })}
           </label>
           <Select
-            id={`tasi-${unitId}`}
+            id={`move-${unitId}`}
             name="newParentId"
             defaultValue=""
             className="w-auto py-1 text-[length:var(--text-xs)]"
           >
             <option value="" disabled>
-              Taşı…
+              {t("screens.organization.movePlaceholder")}
             </option>
             {options.map((option) => (
               <option key={option.id} value={option.id}>
@@ -62,7 +60,7 @@ export function OrgUnitActions({
             ))}
           </Select>
           <Button type="submit" size="sm" disabled={movePending}>
-            Taşı
+            {t("screens.organization.move")}
           </Button>
         </form>
       ) : null}
@@ -70,44 +68,40 @@ export function OrgUnitActions({
       <form action={deactivateAction}>
         <input type="hidden" name="id" value={unitId} />
         <Button type="submit" size="sm" variant="danger" disabled={deactivatePending}>
-          Pasifleştir
+          {t("screens.organization.deactivate")}
         </Button>
       </form>
 
-      {message && !onay ? <Alert tone="danger">{message}</Alert> : null}
+      {message ? <Alert tone="danger">{message}</Alert> : null}
 
-      {/* **Taşımanın görünmeyen yan etkisi burada görünür oluyor** (tasarım
-          Paket H). Birim başka bir dala geçince mesai penceresini oradan
-          devralıyor; o birimdeki herkesin hatırlatma saati ve skor paydası
-          kayıyor. Onay adımı iki değeri yan yana gösteriyor. */}
-      {onay && onay.unitId === unitId ? (
+      {/* Show the calendar impact before a move is confirmed. */}
+      {calendarChange && calendarChange.unitId === unitId ? (
         <Alert tone="correction">
-          <span className="flex flex-col gap-2" data-test="tasima-takvim-uyarisi">
-            <strong>Bu taşıma mesai penceresini değiştirecek.</strong>
+          <span className="flex flex-col gap-2" data-test="move-calendar-warning">
+            <strong>{t("screens.organization.moveCalendarWarning")}</strong>
             <span className="flex flex-col gap-1 text-[length:var(--text-xs)]">
               <span>
-                Şu an: {onay.before.days} · {onay.before.hours} ·{" "}
-                {onay.before.holidays} ({onay.before.source})
+                {t("screens.organization.currentCalendar")}: {calendarChange.before.days} · {calendarChange.before.hours} ·{" "}
+                {calendarChange.before.holidays} ({calendarChange.before.source})
               </span>
               <span>
-                Taşındıktan sonra: {onay.after.days} · {onay.after.hours} ·{" "}
-                {onay.after.holidays} ({onay.after.source})
+                {t("screens.organization.nextCalendar")}: {calendarChange.after.days} · {calendarChange.after.hours} ·{" "}
+                {calendarChange.after.holidays} ({calendarChange.after.source})
               </span>
               <span className="text-muted">
-                Bu birimdeki kişilerin hatırlatma saati ve skor paydası da
-                değişir.
+                {t("screens.organization.moveCalendarDescription")}
               </span>
             </span>
             <form action={moveAction} className="flex items-center gap-2">
-              <input type="hidden" name="id" value={onay.unitId} />
-              <input type="hidden" name="newParentId" value={onay.newParentId} />
+              <input type="hidden" name="id" value={calendarChange.unitId} />
+              <input type="hidden" name="newParentId" value={calendarChange.newParentId} />
               <input
                 type="hidden"
                 name="confirmedCalendarSignature"
-                value={onay.signature}
+                value={calendarChange.signature}
               />
               <Button type="submit" size="sm" disabled={movePending}>
-                Taşımayı onayla
+                {t("screens.organization.confirmMove")}
               </Button>
             </form>
           </span>
@@ -118,10 +112,11 @@ export function OrgUnitActions({
 }
 
 /**
- * Pasif birimi geri açar. Yalnız pasif satırlarda görünür; aktif birimin
- * yanında "aktifleştir" düğmesi olması, düğmenin ne yaptığını belirsizleştirir.
+ * Reactivate an inactive unit. The action appears only on inactive rows so
+ * its meaning is unambiguous.
  */
 export function OrgUnitReactivate({ unitId }: { unitId: string }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     reactivateOrgUnitAction,
     emptyOrgFormState,
@@ -132,7 +127,9 @@ export function OrgUnitReactivate({ unitId }: { unitId: string }) {
       <form action={formAction}>
         <input type="hidden" name="id" value={unitId} />
         <Button type="submit" size="sm" disabled={pending}>
-          {pending ? "Açılıyor…" : "Aktifleştir"}
+          {pending
+            ? t("screens.organization.opening")
+            : t("screens.organization.reactivate")}
         </Button>
       </form>
 

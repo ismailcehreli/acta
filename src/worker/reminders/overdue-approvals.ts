@@ -11,16 +11,16 @@ import {
   SETTING_KEYS,
 } from "@/server/settings/system-settings";
 
-// Onay hatırlatması (§5.4). Müdür bakmazsa kayıt sessizce bekler: yazan
-// "gönderdim" sanır, üst kademe hiç görmez. Bu iş o sessizliği bozar.
+
+
 //
-// Sayaç, işin **onaylayıcının önüne düştüğü andan** işler
-// (`approvalSubmittedAt`); kaydın ilk yazıldığı andan değil. Düzeltilip
-// yeniden gönderilen kayıtta baştan başlar — açık soru 13'teki ilkeyle aynı:
-// hatırlatma "şu an senin sıranda ve şu kadar gündür bekliyor" demeli.
+
+
+
+
 //
-// **Eskalasyon yok.** Hatırlatma yalnız onaylayıcıya gider, üstüne değil;
-// yukarı taşıma ve eskalasyon Sürüm 2'dedir (§18.2).
+
+
 
 export type OverdueApprovalDb = Pick<
   PrismaClient,
@@ -32,9 +32,9 @@ export type OverdueApprovalDb = Pick<
 >;
 
 export interface OverdueApprovalOutcome {
-  /** Kuyruğa yazılan hatırlatma sayısı. */
+
   queued: number;
-  /** Eşiği aşmış kayıt sayısı. */
+
   overdue: number;
 }
 
@@ -44,7 +44,7 @@ export async function sendOverdueApprovalReminders(
 ): Promise<OverdueApprovalOutcome> {
   const outcome: OverdueApprovalOutcome = { queued: 0, overdue: 0 };
 
-  const bekleyenler = await activityMaintenanceReader(db).findMany({
+  const pendingRecords = await activityMaintenanceReader(db).findMany({
     where: {
       approvalStatus: "PENDING_APPROVAL",
       approverId: { not: null },
@@ -57,44 +57,44 @@ export async function sendOverdueApprovalReminders(
     },
   });
 
-  if (bekleyenler.length === 0) return outcome;
+  if (pendingRecords.length === 0) return outcome;
 
-  const enEski = bekleyenler.reduce(
-    (min, kayit) =>
-      kayit.approvalSubmittedAt! < min ? kayit.approvalSubmittedAt! : min,
-    bekleyenler[0].approvalSubmittedAt!,
+  const earliest = pendingRecords.reduce(
+    (min, record) =>
+      record.approvalSubmittedAt! < min ? record.approvalSubmittedAt! : min,
+    pendingRecords[0].approvalSubmittedAt!,
   );
 
-  const [calendarSettings, companyCalendar, esik] = await Promise.all([
+  const [calendarSettings, companyCalendar, threshold] = await Promise.all([
     readWorkCalendar(db),
-    loadWorkCalendar(db, enEski, now),
+    loadWorkCalendar(db, earliest, now),
     readNumericSetting(db, SETTING_KEYS.pendingApprovalBusinessDays),
   ]);
 
-  const takvim = {
+  const calendar = {
     workingDays: calendarSettings.workingDays,
     holidays: companyCalendar.holidays,
   };
 
-  for (const kayit of bekleyenler) {
-    const bekleyenAndan = kayit.approvalSubmittedAt!;
-    const isGunu = businessDaysBetween(bekleyenAndan, now, takvim);
+  for (const record of pendingRecords) {
+    const pendingSince = record.approvalSubmittedAt!;
+    const isDay = businessDaysBetween(pendingSince, now, calendar);
 
-    if (isGunu < esik) continue;
+    if (isDay < threshold) continue;
 
     outcome.overdue += 1;
 
-    // Anahtar bekleme anını taşır: kayıt düzeltilip yeniden gönderilirse yeni
-    // bir hatırlatma gidebilir, ama **aynı bekleyiş için** ikinci kez gitmez.
-    const yazildi = await enqueueNotification(db, {
-      userId: kayit.approverId!,
+
+
+    const enqueued = await enqueueNotification(db, {
+      userId: record.approverId!,
       eventType: NOTIFICATION_EVENTS.approvalOverdue,
-      payload: { activityId: kayit.id },
-      idempotencyKey: `approval_overdue:${kayit.id}:${bekleyenAndan.toISOString()}`,
+      payload: { activityId: record.id },
+      idempotencyKey: `approval_overdue:${record.id}:${pendingSince.toISOString()}`,
       now,
     });
 
-    if (yazildi) outcome.queued += 1;
+    if (enqueued) outcome.queued += 1;
   }
 
   return outcome;

@@ -1,16 +1,15 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Başlangıca dönüş eylemi de gerçek FormData ile sınanır. Sayfadaki yetki
-// uyarısı kaldırılmış olsa bile eylem, sistem yöneticisi olmayan isteği
-// çalıştırmamalıdır.
-const { oturum } = vi.hoisted(() => ({
-  oturum: {
-    kisi: null as { id: string; isSystemAdmin: boolean } | null,
+// System reset action is also tested with real FormData. Even if the authorization
+// warning on the page is removed, the action must not execute a non-system-admin request.
+const { sessionState } = vi.hoisted(() => ({
+  sessionState: {
+    user: null as { id: string; isSystemAdmin: boolean } | null,
   },
 }));
 
 vi.mock("@/server/auth/current-user", () => ({
-  getCurrentUser: async () => oturum.kisi,
+  getCurrentUser: async () => sessionState.user,
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
@@ -29,7 +28,7 @@ import { resetDatabase, testDb } from "../helpers/test-db";
 
 beforeEach(async () => {
   await resetDatabase();
-  oturum.kisi = null;
+  sessionState.user = null;
 });
 
 afterAll(async () => {
@@ -37,71 +36,71 @@ afterAll(async () => {
 });
 
 async function admin() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const user = await createUserWithPassword(root.id, "mevcut-parola-123", {
-    fullName: "Mevcut Sistem Yöneticisi",
-    email: "mevcut-reset@ornek.test",
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
+  const user = await createUserWithPassword(root.id, "current-password-123", {
+    fullName: "Current System Admin",
+    email: "current-reset@example.test",
     isSystemAdmin: true,
   });
-  oturum.kisi = { id: user.id, isSystemAdmin: true };
+  sessionState.user = { id: user.id, isSystemAdmin: true };
   return user;
 }
 
 function resetForm(confirmation: string): FormData {
   const form = new FormData();
-  form.set("currentPassword", "mevcut-parola-123");
-  form.set("bootstrapFullName", "Yeni Başlangıç Yöneticisi");
-  form.set("bootstrapEmail", "yeni-reset@ornek.test");
-  form.set("bootstrapPassword", "yeni-baslangic-parolasi-123");
-  form.set("bootstrapPasswordRepeat", "yeni-baslangic-parolasi-123");
+  form.set("currentPassword", "current-password-123");
+  form.set("bootstrapFullName", "New Bootstrap Admin");
+  form.set("bootstrapEmail", "new-reset@example.test");
+  form.set("bootstrapPassword", "new-bootstrap-password-123");
+  form.set("bootstrapPasswordRepeat", "new-bootstrap-password-123");
   form.set("confirmation", confirmation);
   return form;
 }
 
-describe("başlangıca dönüş sunucu eylemi", () => {
-  it("geçersiz onay metninde istek oluşturmaz", async () => {
+describe("system reset server action", () => {
+  it("does not create request with invalid confirmation text", async () => {
     await admin();
 
     const result = await requestSystemResetAction(
       { error: null, success: null },
-      resetForm("BAŞLANGICA DON"),
+      resetForm("RESET-APPLICATION"),
     );
 
-    expect(result.error).toContain("BAŞLANGICA DÖN yazın");
+    expect(result.error).toContain("Type RESET APPLICATION to start the operation");
     expect(await testDb.systemResetRequest.count()).toBe(0);
   });
 
-  it("geçerli FormData ile bekleyen istek oluşturur", async () => {
+  it("creates pending request with valid FormData", async () => {
     const actor = await admin();
 
     const result = await requestSystemResetAction(
       { error: null, success: null },
-      resetForm("BAŞLANGICA DÖN"),
+      resetForm("RESET APPLICATION"),
     );
 
     expect(result).toEqual({
       error: null,
       success:
-        "İstek sıraya alındı. Önce yedek alınacak; işlem başladığında mevcut oturumlar kapatılacak.",
+        "Request queued. A backup will be created first; active sessions will be signed out when the operation starts.",
     });
     await expect(testDb.systemResetRequest.findFirstOrThrow()).resolves.toMatchObject({
       requestedById: actor.id,
       status: "PENDING",
-      bootstrapEmail: "yeni-reset@ornek.test",
-      bootstrapPasswordHash: expect.not.stringContaining("yeni-baslangic-parolasi-123"),
+      bootstrapEmail: "new-reset@example.test",
+      bootstrapPasswordHash: expect.not.stringContaining("new-bootstrap-password-123"),
     });
   });
 
-  it("sistem yöneticisi olmayan kullanıcı eylemi çalıştıramaz", async () => {
+  it("non-system-admin user cannot execute action", async () => {
     const actor = await admin();
-    oturum.kisi = { id: actor.id, isSystemAdmin: false };
+    sessionState.user = { id: actor.id, isSystemAdmin: false };
 
     await expect(
       requestSystemResetAction(
         { error: null, success: null },
-        resetForm("BAŞLANGICA DÖN"),
+        resetForm("RESET APPLICATION"),
       ),
-    ).rejects.toThrow("sistem yöneticisi");
+    ).rejects.toThrow("system administrator");
     expect(await testDb.systemResetRequest.count()).toBe(0);
   });
 });

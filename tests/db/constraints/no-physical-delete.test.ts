@@ -3,10 +3,9 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createActivity, createOrgUnit, createUser } from "../../helpers/fixtures";
 import { resetDatabase, testDb } from "../../helpers/test-db";
 
-// §16.6: fiziksel silme yoktur. Yabancı anahtarlardaki RESTRICT yalnızca
-// referans verilen kayıtları korur; referanssız bir kullanıcı, boş bir birim
-// veya alt kaydı olmayan bir faaliyet silinebiliyordu
-// (denetim 17.08.2026, bulgu 9).
+// §16.6: Physical deletion is forbidden. RESTRICT on foreign keys only protects
+// referenced records; unreferenced users, empty units, or activities without child records
+// could previously be deleted (audit 2026-08-17, finding 9).
 
 beforeEach(async () => {
   await resetDatabase();
@@ -16,8 +15,8 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-describe("referanssız kayıtlar da silinemez", () => {
-  it("hiçbir yerde kullanılmayan kullanıcı silinemez", async () => {
+describe("unreferenced records cannot be physically deleted either", () => {
+  it("cannot delete an unreferenced user", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
 
@@ -26,7 +25,7 @@ describe("referanssız kayıtlar da silinemez", () => {
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("boş birim silinemez", async () => {
+  it("cannot delete an empty org unit", async () => {
     const root = await createOrgUnit();
     const empty = await createOrgUnit({ parentId: root.id });
 
@@ -35,7 +34,7 @@ describe("referanssız kayıtlar da silinemez", () => {
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("tek kök birim silinemez — ağaç köksüz kalamaz", async () => {
+  it("cannot delete single root unit - tree cannot become rootless", async () => {
     const root = await createOrgUnit();
 
     await expect(
@@ -43,7 +42,7 @@ describe("referanssız kayıtlar da silinemez", () => {
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("alt kaydı olmayan faaliyet silinemez", async () => {
+  it("cannot delete activity without child records", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
     const activity = await createActivity(user);
@@ -53,7 +52,7 @@ describe("referanssız kayıtlar da silinemez", () => {
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("toplu silme de reddedilir", async () => {
+  it("rejects bulk delete as well", async () => {
     const unit = await createOrgUnit();
     await createUser(unit.id);
 
@@ -62,7 +61,7 @@ describe("referanssız kayıtlar da silinemez", () => {
     );
   });
 
-  it("ham SQL ile silme de reddedilir", async () => {
+  it("rejects delete via raw SQL as well", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
 
@@ -72,9 +71,8 @@ describe("referanssız kayıtlar da silinemez", () => {
   });
 });
 
-// §15.2: denetim kaydı değişmezdir. Görev 6.1 bu tabloyu kullanmaya
-// başladığında koruma hazır olmalı.
-describe("denetim kaydı değişmezliği", () => {
+// §15.2: Audit log is immutable.
+describe("audit log immutability", () => {
   async function createAuditLog() {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
@@ -83,24 +81,24 @@ describe("denetim kaydı değişmezliği", () => {
       data: {
         userId: user.id,
         objectType: "Activity",
-        objectId: "ornek",
+        objectId: "sample",
         action: "created",
       },
     });
   }
 
-  it("denetim kaydı güncellenemez", async () => {
+  it("cannot update audit log", async () => {
     const log = await createAuditLog();
 
     await expect(
       testDb.auditLog.update({
         where: { id: log.id },
-        data: { action: "degistirildi" },
+        data: { action: "modified" },
       }),
     ).rejects.toThrow(/AUDIT_LOG_IMMUTABLE/);
   });
 
-  it("denetim kaydı silinemez", async () => {
+  it("cannot delete audit log", async () => {
     const log = await createAuditLog();
 
     await expect(
@@ -109,14 +107,13 @@ describe("denetim kaydı değişmezliği", () => {
   });
 });
 
-// Örnek veri temizliğinin açtığı **dar kapı** (20.08.2026).
+// Narrow backdoor opened by demo data purge (2026-08-20).
 //
-// Yasak varsayılan olarak yerinde; yalnız `app.demo_purge` oturum değişkeni
-// kurulmuşken silme geçiyor. Bu testler kapının kapalı kaldığını ve
-// açıldığında transaction'la birlikte kapandığını sabitler — kapı sızarsa
-// fiziksel silme yasağı fiilen ortadan kalkardı.
-describe("örnek veri temizliğinin dar kapısı", () => {
-  it("bayrak kurulmadan silme yine reddedilir", async () => {
+// The prohibition remains in place by default; deletion only succeeds when the
+// `app.demo_purge` session variable is set. These tests ensure the door remains
+// closed and closes along with the transaction when opened.
+describe("demo data purge narrow backdoor", () => {
+  it("rejects delete when flag is not set", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
 
@@ -125,19 +122,19 @@ describe("örnek veri temizliğinin dar kapısı", () => {
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("yanlış değerle kurulmuş bayrak kapıyı açmaz", async () => {
+  it("does not open door when flag is set with incorrect value", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
 
     await expect(
       testDb.$transaction(async (tx) => {
-        await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'belki'");
+        await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'maybe'");
         return tx.user.delete({ where: { id: user.id } });
       }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("bayrak kurulmuş transaction içinde silme geçer", async () => {
+  it("allows delete inside transaction when flag is set", async () => {
     const unit = await createOrgUnit();
     const user = await createUser(unit.id);
 
@@ -149,71 +146,69 @@ describe("örnek veri temizliğinin dar kapısı", () => {
     expect(await testDb.user.count({ where: { id: user.id } })).toBe(0);
   });
 
-  it("bayrak transaction'dan sonra kalmaz — sonraki silme yine reddedilir", async () => {
+  it("flag does not persist after transaction - subsequent delete is rejected", async () => {
     const unit = await createOrgUnit();
-    const silinecek = await createUser(unit.id);
-    const kalacak = await createUser(unit.id, { email: "kalacak@ornek.test" });
+    const toDelete = await createUser(unit.id);
+    const toKeep = await createUser(unit.id, { email: "to-keep@example.test" });
 
     await testDb.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL app.demo_purge = 'evet'");
-      await tx.user.delete({ where: { id: silinecek.id } });
+      await tx.user.delete({ where: { id: toDelete.id } });
     });
 
-    // `SET LOCAL` transaction'a bağlıdır; bağlantı havuzunda bir sonraki
-    // isteğe sızsaydı bu silme de geçerdi.
+    // `SET LOCAL` is bound to the transaction; if it leaked into the pool for the next request, this delete would pass.
     await expect(
-      testDb.user.delete({ where: { id: kalacak.id } }),
+      testDb.user.delete({ where: { id: toKeep.id } }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("faaliyet silme kapısı da kurulmadan faaliyet silinemez (03.09.2026)", async () => {
-    // Root'un silme yetkisi uygulama katmanında yaşıyor; veritabanı kapısı
-    // ikinci kilittir. Servis dışındaki hiçbir yol — elle yazılmış bir sorgu
-    // dâhil — faaliyeti silememeli.
+  it("cannot delete activity without activity delete door set (2026-09-03)", async () => {
+    // Root's deletion permission lives in application layer; database door is the second lock.
+    // No path outside the service - including raw queries - should be able to delete the activity.
     const unit = await createOrgUnit();
-    const user = await createUser(unit.id, { email: "yazan@ornek.test" });
-    const kayit = await createActivity(user);
+    const user = await createUser(unit.id, { email: "author@example.test" });
+    const activity = await createActivity(user);
 
     await expect(
-      testDb.activity.delete({ where: { id: kayit.id } }),
+      testDb.activity.delete({ where: { id: activity.id } }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
 
-    expect(await testDb.activity.count({ where: { id: kayit.id } })).toBe(1);
+    expect(await testDb.activity.count({ where: { id: activity.id } })).toBe(1);
   });
 
-  it("faaliyet kapısı kurulunca siler ve transaction sonrası kalmaz", async () => {
+  it("deletes when activity door is set and does not persist after transaction", async () => {
     const unit = await createOrgUnit();
-    const user = await createUser(unit.id, { email: "yazan2@ornek.test" });
-    const silinecek = await createActivity(user);
-    const kalacak = await createActivity(user);
+    const user = await createUser(unit.id, { email: "author2@example.test" });
+    const toDelete = await createActivity(user);
+    const toKeep = await createActivity(user);
 
     await testDb.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL app.activity_delete = 'evet'");
-      await tx.activityRevision.deleteMany({ where: { activityId: silinecek.id } });
-      await tx.activity.delete({ where: { id: silinecek.id } });
+      await tx.activityRevision.deleteMany({ where: { activityId: toDelete.id } });
+      await tx.activity.delete({ where: { id: toDelete.id } });
     });
 
-    expect(await testDb.activity.count({ where: { id: silinecek.id } })).toBe(0);
+    expect(await testDb.activity.count({ where: { id: toDelete.id } })).toBe(0);
 
     await expect(
-      testDb.activity.delete({ where: { id: kalacak.id } }),
+      testDb.activity.delete({ where: { id: toKeep.id } }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 
-  it("silme talebi kaydı da silinemez: kendisi bir denetim izidir", async () => {
+  it("activity deletion request record cannot be deleted: it is an audit trail", async () => {
     const unit = await createOrgUnit();
     const root = await createUser(unit.id, {
-      email: "root-kanit@ornek.test",
+      email: "root-proof@example.test",
       isRoot: true,
       isSystemAdmin: true,
     });
 
-    const talep = await testDb.activityDeletionRequest.create({
+    const request = await testDb.activityDeletionRequest.create({
       data: {
-        activityId: "silinmis-kayit",
-        activityTitle: "Bir faaliyet",
+        activityId: "deleted-record",
+        activityTitle: "An activity",
         activityDate: new Date("2026-08-18T00:00:00.000Z"),
-        activityAuthor: "Kalıpçı",
+        activityAuthor: "Technician",
         requestedById: root.id,
         codeHash: "a".repeat(64),
         expiresAt: new Date("2026-08-18T01:00:00.000Z"),
@@ -221,7 +216,7 @@ describe("örnek veri temizliğinin dar kapısı", () => {
     });
 
     await expect(
-      testDb.activityDeletionRequest.delete({ where: { id: talep.id } }),
+      testDb.activityDeletionRequest.delete({ where: { id: request.id } }),
     ).rejects.toThrow(/PHYSICAL_DELETE_FORBIDDEN/);
   });
 });

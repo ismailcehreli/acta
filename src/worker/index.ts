@@ -1,11 +1,11 @@
-// Arka plan işleyici süreci (tasarım §17.2): hatırlatmalar ve bildirim kuyruğu
-// web sürecinden ayrı çalışır ki biri diğerinin yükünü etkilemesin.
+
+
 //
-// Bildirim kuyruğu Görev 5.3a'da, hatırlatmalar Görev 5.4b'de, iş izleme
-// Görev 5.6'da bağlandı.
+
+
 //
-// Her adım kendi nabzını yazar (§12.4): bir adım hata verse bile diğerleri
-// çalışmaya devam eder ve hangisinin durduğu ekrandan görünür.
+
+
 
 import { prisma } from "@/server/db";
 import {
@@ -34,28 +34,28 @@ import { sendOverdueApprovalReminders } from "./reminders/overdue-approvals";
 const TICK_INTERVAL_MS = Number(process.env.WORKER_TICK_INTERVAL_MS ?? 60_000);
 const BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:3000";
 
-// Taşıyıcı her turda ayarlardan kurulur ki BT sorumlusu ekrandan SMTP
-// bilgisini değiştirdiğinde işleyiciyi yeniden başlatmak gerekmesin. Ayarlar
-// değişmediyse aynı taşıyıcı kullanılır; her turda yeni bağlantı havuzu
-// açmanın anlamı yok.
+
+
+
+
 let transport: EmailTransport = createLogTransport();
-let transportImzasi = "";
+let transportSignature = "";
 
-async function tasiyiciyiGuncelle(): Promise<void> {
+async function updateTransport(): Promise<void> {
   const smtp = await readSmtpSettings(prisma);
-  const imza = smtp ? JSON.stringify(smtp) : "";
+  const signature = smtp ? JSON.stringify(smtp) : "";
 
-  if (imza === transportImzasi) return;
+  if (signature === transportSignature) return;
 
-  transportImzasi = imza;
-  // SMTP ayarlanmadıysa posta **gönderilmez** ve bu her denemede günlüğe
-  // yazılır; sessizce gönderilmiş sayılmaz (§12.3).
+  transportSignature = signature;
+
+
   transport = smtp ? createSmtpTransport(smtp) : createLogTransport();
-  log(`e-posta taşıyıcısı: ${transport.name}`);
+  log(`email transport: ${transport.name}`);
 }
 
 let stopping = false;
-/** Bekleyen uykuyu erken bitirir; kapanma sinyalinde kullanılır. */
+/** Interrupts the pending sleep when the process receives a shutdown signal. */
 let interruptSleep: (() => void) | null = null;
 
 function log(message: string): void {
@@ -63,21 +63,22 @@ function log(message: string): void {
 }
 
 /**
- * Bir adımı çalıştırır ve nabzını yazar. Adımın hata vermesi turu bitirmez:
- * hata kaydedilir, sonraki adımlar çalışır ve arıza ekrandan görünür (§12.4).
+ * Runs one job step and records its heartbeat. A failed step does not stop the
+ * cycle: the failure is recorded, later steps run, and the issue is visible
+ * through health reporting (§12.4).
  */
-async function adim<T>(
+async function runJobStep<T>(
   jobName: JobName,
-  calistir: () => Promise<T>,
+  run: () => Promise<T>,
 ): Promise<T | null> {
   try {
-    const sonuc = await calistir();
+    const result = await run();
     await recordJobSuccess(prisma, jobName, new Date());
-    return sonuc;
+    return result;
   } catch (error) {
-    const mesaj = error instanceof Error ? error.message : String(error);
-    log(`${jobName} hatası: ${mesaj}`);
-    await recordJobFailure(prisma, jobName, mesaj);
+    const message = error instanceof Error ? error.message : String(error);
+    log(`${jobName} failed: ${message}`);
+    await recordJobFailure(prisma, jobName, message);
     return null;
   }
 }
@@ -85,63 +86,64 @@ async function adim<T>(
 async function tick(): Promise<void> {
   const now = new Date();
 
-  await tasiyiciyiGuncelle();
+  await updateTransport();
 
-  // Önce hatırlatmalar kuyruğa yazılır, sonra kuyruk gönderilir: aynı turda
-  // üretilen hatırlatma aynı turda yola çıksın.
-  const eksikFaaliyet = await adim(JOB_NAMES.missingActivityReminder, () =>
+  // Queue reminders before dispatching the queue so reminders created in this
+  // cycle can be delivered in the same cycle.
+  const missingActivity = await runJobStep(JOB_NAMES.missingActivityReminder, () =>
     sendMissingActivityReminders(prisma, now),
   );
-  if (eksikFaaliyet && eksikFaaliyet.queued > 0) {
+  if (missingActivity && missingActivity.queued > 0) {
     log(
-      `hatırlatma: ${eksikFaaliyet.queued} kişiye "bugün faaliyet yok" ` +
-        `(${eksikFaaliyet.skippedHasActivity} kişi girmiş, ` +
-        `${eksikFaaliyet.skippedNoActivityMark} kişi izinli)`,
+      `reminder: ${missingActivity.queued} people have no activity today ` +
+        `(${missingActivity.skippedHasActivity} entered one, ` +
+        `${missingActivity.skippedNoActivityMark} are on leave)`,
     );
   }
 
-  const cevapsiz = await adim(JOB_NAMES.overdueAnswerReminder, () =>
+  const overdueAnswers = await runJobStep(JOB_NAMES.overdueAnswerReminder, () =>
     sendOverdueAnswerReminders(prisma, now),
   );
-  if (cevapsiz && cevapsiz.queued > 0) {
+  if (overdueAnswers && overdueAnswers.queued > 0) {
     log(
-      `hatırlatma: ${cevapsiz.overdueConversations} cevapsız konuşma, ` +
-        `${cevapsiz.queued} bildirim` +
-        (cevapsiz.managerNotFound > 0
-          ? ` (${cevapsiz.managerNotFound} kişinin yöneticisi bulunamadı)`
+      `reminder: ${overdueAnswers.overdueConversations} overdue conversations, ` +
+        `${overdueAnswers.queued} notifications` +
+        (overdueAnswers.managerNotFound > 0
+          ? ` (${overdueAnswers.managerNotFound} managers not found)`
           : ""),
     );
   }
 
-  // Kapanan dönemin skoru saklanır: trend ve düşüş işareti geçmişe bakıyor,
-  // canlı hesap yalnız içinde bulunulan dönemi biliyor (Görev 11.11).
-  const skorDonemi = await adim(JOB_NAMES.scorePeriodClose, () =>
+  // Store closed-period scores: trends and decline detection use history,
+  // while live calculation covers only the current period (Task 11.11).
+  const scorePeriod = await runJobStep(JOB_NAMES.scorePeriodClose, () =>
     drainScorePeriodWork(prisma, now),
   );
-  if (skorDonemi && skorDonemi.processed > 0) {
+  if (scorePeriod && scorePeriod.processed > 0) {
     log(
-      `skor: ${skorDonemi.processed} iş, ${skorDonemi.written} karne sürümü ` +
-        `(${skorDonemi.periodStarts.join(", ")})`,
+      `score period: ${scorePeriod.processed} jobs, ${scorePeriod.written} score revisions ` +
+        `(${scorePeriod.periodStarts.join(", ")})`,
     );
   }
 
-  const gecikenOnay = await adim(JOB_NAMES.overdueApprovalReminder, () =>
+  const overdueApproval = await runJobStep(JOB_NAMES.overdueApprovalReminder, () =>
     sendOverdueApprovalReminders(prisma, now),
   );
-  if (gecikenOnay && gecikenOnay.queued > 0) {
+  if (overdueApproval && overdueApproval.queued > 0) {
     log(
-      `hatırlatma: ${gecikenOnay.overdue} geciken onay, ` +
-        `${gecikenOnay.queued} bildirim`,
+      `reminder: ${overdueApproval.overdue} overdue approvals, ` +
+        `${overdueApproval.queued} notifications`,
     );
   }
 
-  const result = await adim(JOB_NAMES.notificationDispatch, () =>
+  const result = await runJobStep(JOB_NAMES.notificationDispatch, () =>
     dispatchNotifications(prisma, transport, { now, baseUrl: BASE_URL }),
   );
 
-  // Push ayrı bir adımdır: posta sunucusu çökse de bildirim gitmeli, tersi de
-  // geçerli. İki kanalın birbirini düşürmemesi için kuyruk kayıtları da ayrı.
-  const push = await adim(JOB_NAMES.pushDispatch, () =>
+  // Push is a separate step: notifications should continue if the mail server
+  // fails, and vice versa. Queue records are separate so the channels do not
+  // block one another.
+  const push = await runJobStep(JOB_NAMES.pushDispatch, () =>
     dispatchPushNotifications(prisma, webPushTransport, {
       now,
       baseUrl: BASE_URL,
@@ -149,36 +151,35 @@ async function tick(): Promise<void> {
   );
   if (push && push.sent > 0) {
     log(
-      `push: ${push.sent} gönderim, ${push.delivered} bildirim, ` +
-        `${push.droppedSubscriptions} ölü abonelik düşürüldü`,
+      `push: ${push.sent} sends, ${push.delivered} notifications delivered, ` +
+        `${push.droppedSubscriptions} expired subscriptions dropped`,
     );
   }
 
-  // Gecikme alarmı turun **sonunda** kontrol edilir: bu turda çalışan adımlar
-  // nabızlarını çoktan yazmış olur, yoksa süreç her açılışta kendine "hiç
-  // çalışmadın" alarmı gönderirdi. Alarm kuyruğa yazılır ve bir sonraki turda
-  // yola çıkar.
+  // Check delayed-job alerts at the **end** of the cycle: completed steps have
+  // already written their heartbeats. Otherwise the process would alert about
+  // itself on every startup. Alerts are queued for the next cycle.
   //
-  // **Sınır:** işleyici tümüyle ölürse bu alarm da gönderilemez. O durumu
-  // yakalayan şey dış izlemedir — `/api/health` zamanlayıcı gecikmesini
-  // döndürür ve gecikme eşiği aşılınca "down" der (§12.4). Buradaki alarm,
-  // "süreç ayakta ama bir adım takılmış" durumu içindir.
-  const alarm = await alertOnDelayedJobs(prisma, new Date());
-  if (alarm.delayedJobs.length > 0) {
+  // **Limit:** if the worker dies completely, this alert cannot be sent. The
+  // external monitor catches that through `/api/health`, which reports
+  // scheduler lag and declares the worker "down" after the threshold (§12.4).
+  // This alert covers a live process with one stalled step.
+  const delayedJobAlert = await alertOnDelayedJobs(prisma, new Date());
+  if (delayedJobAlert.delayedJobs.length > 0) {
     log(
-      `gecikmiş iş: ${alarm.delayedJobs.join(", ")} · ${alarm.queued} alarm yazıldı`,
+      `delayed jobs: ${delayedJobAlert.delayedJobs.join(", ")} · ${delayedJobAlert.queued} alerts queued`,
     );
   }
 
-  // Sessiz tur diye bir şey yok: iş yapıldıysa sayılar, yapılmadıysa nabız
-  // yazılır. Zamanlayıcının çalıştığı günlükten anlaşılmalı (§12.4).
+  // There are no silent cycles: log counts when work was done and a heartbeat
+  // otherwise. The log should show that the scheduler is running (§12.4).
   if (result && result.sent + result.failed + result.givenUp > 0) {
     log(
-      `bildirim: ${result.sent} e-posta, ${result.delivered} kayıt gönderildi, ` +
-        `${result.failed} hata, ${result.givenUp} vazgeçildi`,
+      `notifications: ${result.sent} emails, ${result.delivered} sent, ` +
+        `${result.failed} failed, ${result.givenUp} abandoned`,
     );
   } else {
-    log("nabız");
+    log("heartbeat");
   }
 }
 
@@ -198,14 +199,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  log(`başladı (aralık: ${TICK_INTERVAL_MS} ms)`);
+  log(`started (interval: ${TICK_INTERVAL_MS} ms)`);
 
   while (!stopping) {
     try {
       await tick();
     } catch (error) {
-      // Tek bir tur hata verse de süreç ölmemeli; hata görünür olmalı.
-      log(`tur hatası: ${error instanceof Error ? error.message : error}`);
+      // One failed cycle must not terminate the process; the error must remain
+      // visible.
+      log(`cycle failed: ${error instanceof Error ? error.message : error}`);
     }
 
     if (stopping) break;
@@ -217,13 +219,13 @@ async function main(): Promise<void> {
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    log(`${signal} alındı, kapanılıyor`);
+    log(`${signal} received, shutting down`);
     stopping = true;
     interruptSleep?.();
   });
 }
 
 main().catch((error) => {
-  log(`ölümcül hata: ${error instanceof Error ? error.stack : error}`);
+  log(`fatal error: ${error instanceof Error ? error.stack : error}`);
   process.exit(1);
 });

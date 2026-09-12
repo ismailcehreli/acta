@@ -13,9 +13,9 @@ import {
   checkAttachmentCount,
   type AttachmentRefusal,
 } from "@/server/attachments/rules";
-// Taslak ekleri (§5.7, §15.4). Bu modülün bütün sorguları taslak kimliği ve
-// yazar kimliğini birlikte kullanır; taslak ekleri faaliyet görünürlüğüne
-// açılmaz, yalnız taslağın sahibine aittir.
+
+
+
 
 export type DraftAttachmentDb = Pick<
   PrismaClient,
@@ -47,7 +47,7 @@ function fail(error: DraftAttachmentError): DraftAttachmentResult<never> {
     error,
     message:
       error === "draft_not_found"
-        ? "Taslak bulunamadı."
+        ? "Draft not found."
         : ATTACHMENT_MESSAGES[error],
   };
 }
@@ -56,7 +56,7 @@ function fingerprint(file: { sha256: string; originalName: string }): string {
   return `${file.sha256}:${file.originalName}`;
 }
 
-/** Taslak satırını kilitler; ek sayımı kilit dışında yapılmaz. */
+/** Lock the draft row; attachment counting must happen under the same lock. */
 export async function lockDraftForMaintenance(
   db: Pick<PrismaClient, "$executeRaw">,
   draftId: string,
@@ -66,7 +66,7 @@ export async function lockDraftForMaintenance(
   `;
 }
 
-/** Bir taslağın ek listesini yalnız sahibine açar. */
+/** Expose a draft's attachment list only to its author. */
 export async function listDraftAttachments(
   db: Pick<PrismaClient, "activityDraftAttachment">,
   authorId: string,
@@ -88,9 +88,8 @@ export async function listDraftAttachments(
 }
 
 /**
- * Yeni dosyaları taslağa ekler. Aynı taslak satırı kilitlenirken aynı içerik
- * ve ad daha önce kaydedilmişse yeniden yazılmaz; otomatik kaydetme böylece
- * eki çoğaltmaz.
+ * Add new files to a draft. If the same content and name were already saved while
+ * the draft row was locked, do not write it again; this keeps autosave idempotent.
  */
 export async function saveDraftAttachments(
   db: DraftAttachmentDb,
@@ -122,12 +121,12 @@ export async function saveDraftAttachments(
 
       if (!draft) return null;
 
-      const mevcut = new Set(draft.attachments.map(fingerprint));
-      const yeni = validated.value.filter((file, index, all) => {
+      const existingFingerprints = new Set(draft.attachments.map(fingerprint));
+      const next = validated.value.filter((file, index, all) => {
         const key = fingerprint(file);
-        if (mevcut.has(key)) return false;
-        // Aynı FormData içinde aynı dosyanın iki kez gelmesi de idempotent
-        // olmalı; ilk satır yeterlidir.
+        if (existingFingerprints.has(key)) return false;
+        // The same file can appear twice in one FormData as well; the first entry
+        // is sufficient and the operation must remain idempotent.
         if (all.findIndex((candidate) => fingerprint(candidate) === key) !== index) {
           return false;
         }
@@ -137,13 +136,13 @@ export async function saveDraftAttachments(
       const limits = await readAttachmentLimits(tx);
       const countProblem = checkAttachmentCount(
         draft.attachments.length,
-        yeni.length,
+        next.length,
         limits,
       );
       if (countProblem) throw new DraftAttachmentLimitError(countProblem);
-      if (yeni.length === 0) return [];
+      if (next.length === 0) return [];
 
-      stored = await storeValidatedFiles(yeni);
+      stored = await storeValidatedFiles(next);
 
       const created: ActivityDraftAttachment[] = [];
       for (const file of stored) {

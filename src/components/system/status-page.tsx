@@ -1,19 +1,19 @@
 import type { ReactNode } from "react";
 
-// Sistem durumu yüzeyleri (Görev 10.1): yükleniyor, hata, bulunamadı.
+
 //
-// Bunlar **kabuğun dışında** çizilir. Sebebi: kabuk oturumu, markayı ve
-// okunmamış sayısını veritabanından okuyor. Hata sayfası veritabanı çöktüğü
-// için gösteriliyorsa, kabuğu çizmeye çalışmak aynı hataya ikinci kez
-// düşmek olurdu — kullanıcı hata sayfası yerine boş ekran görürdü.
+
+
+
+
 //
-// Bu yüzden burada dış bağımlılık yok: yalnız metin, ikon ve bağlantı.
+
 //
-// Tasarım kararı (brief §8): hata yüzeyi özür dileyen bir illüstrasyon
-// değil, **bir bildirim**. Ortalanmış daire-ikon-nokta düzeni yerine sola
-// hizalı editoryal blok: kenar işareti, durum etiketi, başlık, ne yapılacağı.
-// Aynı sistemin diğer ekranlarıyla aynı dili konuşur; kullanıcı başka bir
-// uygulamaya düşmüş hissetmez.
+
+
+
+
+
 
 export function StatusPage({
   icon,
@@ -21,30 +21,30 @@ export function StatusPage({
   description,
   detail,
   actions,
-  /** Durum etiketi; sayfanın ne tür bir yüzey olduğunu tek kelimeyle söyler. */
-  marker = "Durum",
+
+  marker,
   tone = "neutral",
 }: {
   icon: ReactNode;
   title: string;
   description: string;
-  /** Teknik ayrıntı; kullanıcının okuması gerekmez ama destek için lazım. */
+
   detail?: ReactNode;
   actions?: ReactNode;
-  marker?: string;
+  marker: string;
   tone?: "neutral" | "danger";
 }) {
-  // `data-durum-yuzeyi`: hata, "bulunamadı" ve yükleniyor yüzeyleri de `main`
-  // çiziyor ve kabul ölçümü yalnız `main` bekliyordu; o zaman hataya düşmüş
-  // bir sayfa da başarılı ölçüm sayılabiliyordu (denetim 23.08.2026,
-  // bulgu 10). Ölçüm artık bu işaretin **yokluğunu** arıyor.
+
+
+
+
   return (
     <main
-      data-durum-yuzeyi={marker}
+      data-status-surface="status-page"
       className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center px-6 py-12"
     >
       <div className="relative ps-5">
-        {/* Kenar işareti: renk tek taşıyıcı değil, konum da anlam taşıyor. */}
+
         <span
           aria-hidden
           className={`absolute inset-y-0 start-0 w-[3px] ${
@@ -76,7 +76,7 @@ export function StatusPage({
   );
 }
 
-/** Yükleniyor göstergesi. Hareket, "durdu mu?" sorusunu ortadan kaldırır. */
+/** Loading indicator. Motion makes it clear that the operation is still active. */
 export function Spinner({ label }: { label: string }) {
   return (
     <div
@@ -103,7 +103,7 @@ export function Spinner({ label }: { label: string }) {
   );
 }
 
-export function UyariIkonu() {
+export function WarningIcon() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.75">
       <path d="M12 8.5v4.5" strokeLinecap="round" />
@@ -113,7 +113,7 @@ export function UyariIkonu() {
   );
 }
 
-export function BulunamadiIkonu() {
+export function NotFoundIcon() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.75">
       <circle cx="11" cy="11" r="7" />
@@ -122,7 +122,7 @@ export function BulunamadiIkonu() {
   );
 }
 
-export function BaglantiIkonu() {
+export function ConnectionIcon() {
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.75">
       <path d="M3 3l18 18" strokeLinecap="round" />

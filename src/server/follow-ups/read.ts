@@ -7,14 +7,14 @@ import { loadWorkCalendar } from "@/server/calendar/work-calendar";
 import { visibleActivityWhere, type Viewer, type VisibilityDb } from "@/server/authz/visibility";
 import { readNumericSetting, SETTING_KEYS } from "@/server/settings/system-settings";
 
-// Takip maddesi listeleri (§11.2).
+// Follow-up item lists (§11.2).
 //
-// **Görünürlük modülünden geçer:** göremediğin bir faaliyetin takip maddesi de
-// sana görünmez. Aksi hâlde takip listesi, görünürlük modelini dolaşmanın yolu
-// olurdu — başlık ve "sonraki adım" metni de içerik taşır.
+
+
+
 //
-// Sistem hiçbir maddeyi yukarı taşımaz; hareketsiz olanları yalnız **ayrı bir
-// listede görünür kılar** (§11.2).
+
+
 
 export type FollowUpReadDb = VisibilityDb &
   Pick<PrismaClient, "followUpItem" | "workCalendar" | "holiday" | "systemSetting">;
@@ -26,62 +26,40 @@ export interface FollowUpView {
   activityTitle: string;
   ownerName: string;
   ownerId: string;
-  /** Sorumlunun profil resmi uzantısı; boşsa baş harfler (Görev 11.5). */
+
   ownerAvatarExtension: string | null;
   nextStep: string | null;
   reviewDate: Date | null;
   openedAt: Date;
   lastMovedAt: Date;
-  /** Kaç iş günüdür hareket yok. */
+
   idleBusinessDays: number;
-  /** Eşiği aştı mı; satırda rozetle gösterilir. */
+
   stale: boolean;
-  /**
-   * Sorumlusu bakan kişi mi.
-   *
-   * Grup başlığı ("Sorumlusu siz olanlar") kalktığı için bilgi satıra indi
-   * (Görev 11.3). Sunucuda hesaplanıyor: ekranın kimliği karşılaştırması
-   * yapması, aynı kuralın iki yerde yaşaması demekti.
-   */
+
   mine: boolean;
-  /** Gözden geçirme günü geçmiş mi. */
+
   reviewOverdue: boolean;
 }
 
-/**
- * Takip listesinin daraltmaları (Görev 11.3).
- *
- * Sayfa önce üç ayrı liste döndürüyordu (hareketsizler, bende, diğerleri).
- * Ürün sahibi kararı (21.08.2026): **tek liste**, öncelik satırın kendi
- * alanlarında. Gruplu yapı sayfalanamıyordu — "3. sayfa" hangi grubun
- * üçüncü sayfasıydı belirsizdi — ve süzgeç uygulanınca grupların anlamı
- * kayboluyordu.
- */
+
 export interface FollowUpFilters {
-  /** Varsayılan `OPEN`: kapanmış madde iş listesinde yer kaplamaz. */
+
   status?: "OPEN" | "CLOSED";
   ownerId?: string;
-  /** Yalnız eşiği aşmış, uzun süredir hareketsiz maddeler. */
+
   staleOnly?: boolean;
   period?: FeedFilters["period"];
 }
 
 export interface FollowUpPage {
   items: FollowUpView[];
-  /** Süzgeçli toplam; sayfa sayısı buradan çıkar. */
+
   total: number;
   staleThreshold: number;
 }
 
-/**
- * Kapsamdaki takip maddeleri, süzgeçli ve sayfalı.
- *
- * **Hareketsizlik süzgeci ve sıralaması bellekte yapılır.** "Kaç iş günüdür
- * hareket yok" sorusunun cevabı çalışma takvimine bağlı ve veritabanı onu
- * bilmiyor; SQL'de ifade edilebilecek bir kural değil. Maddeler bir yöneticinin
- * açık işleri kadardır, tamamını okumak burada doğru takas — aynı gerekçe
- * onay kuyruğunda da yazılı.
- */
+
 export async function listFollowUps(
   db: FollowUpReadDb,
   viewer: Viewer,
@@ -89,21 +67,21 @@ export async function listFollowUps(
   filters: FollowUpFilters = {},
   options: { limit?: number; skip?: number } = {},
 ): Promise<FollowUpPage> {
-  const [scope, ayarlar, esik] = await Promise.all([
+  const [scope, calendarSettings, threshold] = await Promise.all([
     visibleActivityWhere(db, viewer),
     readWorkCalendar(db),
     readNumericSetting(db, SETTING_KEYS.followUpStaleBusinessDays),
   ]);
 
-  // Varsayılan **tümü**: açık bir takip maddesi ne zaman açılmış olursa
-  // olsun listede kalmalı. `periodStart` boş dönemi "bu hafta" sayıyor ve
-  // ilk yazımda öyle bırakılmıştı — geçen ay açılmış, aylardır bekleyen
-  // maddeler listeden düşüyordu ki bu tam da sayfanın amacına ters.
+
+
+
+
   const start = periodStart(filters.period ?? "all", now);
 
   const rows = await db.followUpItem.findMany({
-    // Kapsam koşulu her zaman ilk sırada ve süzgeçler onun üstüne biner;
-    // hiçbir alan görünürlüğü genişletemez (§8.4).
+
+
     where: {
       status: filters.status ?? "OPEN",
       activity: scope,
@@ -124,57 +102,57 @@ export async function listFollowUps(
     },
   });
 
-  if (rows.length === 0) return { items: [], total: 0, staleThreshold: esik };
+  if (rows.length === 0) return { items: [], total: 0, staleThreshold: threshold };
 
-  const enEski = rows.reduce(
-    (min, satir) => (satir.lastMovedAt < min ? satir.lastMovedAt : min),
+  const earliest = rows.reduce(
+    (min, row) => (row.lastMovedAt < min ? row.lastMovedAt : min),
     rows[0].lastMovedAt,
   );
-  const takvim = await loadWorkCalendar(db, enEski, now);
-  const gunSecenekleri = {
-    workingDays: ayarlar.workingDays,
-    holidays: takvim.holidays,
+  const calendar = await loadWorkCalendar(db, earliest, now);
+  const dayOptions = {
+    workingDays: calendarSettings.workingDays,
+    holidays: calendar.holidays,
   };
 
-  let gorunumler: FollowUpView[] = rows.map((satir) => {
-    const idle = businessDaysBetween(satir.lastMovedAt, now, gunSecenekleri);
+  let views: FollowUpView[] = rows.map((row) => {
+    const idle = businessDaysBetween(row.lastMovedAt, now, dayOptions);
 
     return {
-      id: satir.id,
-      activityId: satir.activityId,
-      activityNo: satir.activity.activityNo,
-      activityTitle: satir.activity.title,
-      ownerId: satir.ownerId,
-      ownerName: satir.owner.fullName,
-      ownerAvatarExtension: satir.owner.avatarExtension,
-      nextStep: satir.nextStep,
-      reviewDate: satir.reviewDate,
-      openedAt: satir.openedAt,
-      lastMovedAt: satir.lastMovedAt,
+      id: row.id,
+      activityId: row.activityId,
+      activityNo: row.activity.activityNo,
+      activityTitle: row.activity.title,
+      ownerId: row.ownerId,
+      ownerName: row.owner.fullName,
+      ownerAvatarExtension: row.owner.avatarExtension,
+      nextStep: row.nextStep,
+      reviewDate: row.reviewDate,
+      openedAt: row.openedAt,
+      lastMovedAt: row.lastMovedAt,
       idleBusinessDays: idle,
-      stale: idle >= esik,
-      mine: satir.ownerId === viewer.id,
+      stale: idle >= threshold,
+      mine: row.ownerId === viewer.id,
       reviewOverdue:
-        satir.reviewDate !== null && satir.reviewDate.getTime() < now.getTime(),
+        row.reviewDate !== null && row.reviewDate.getTime() < now.getTime(),
     };
   });
 
-  if (filters.staleOnly) gorunumler = gorunumler.filter((madde) => madde.stale);
+  if (filters.staleOnly) views = views.filter((item) => item.stale);
 
-  // Sıralama önceliği taşır: grup başlıkları kalktığına göre en uzun bekleyen
-  // madde en üstte olmalı; kullanıcı süzmeden de doğru yere bakar.
-  gorunumler.sort((a, b) => b.idleBusinessDays - a.idleBusinessDays);
+
+
+  views.sort((a, b) => b.idleBusinessDays - a.idleBusinessDays);
 
   const { limit, skip = 0 } = options;
 
   return {
-    items: limit === undefined ? gorunumler : gorunumler.slice(skip, skip + limit),
-    total: gorunumler.length,
-    staleThreshold: esik,
+    items: limit === undefined ? views : views.slice(skip, skip + limit),
+    total: views.length,
+    staleThreshold: threshold,
   };
 }
 
-/** Faaliyet sayfasındaki kart için: en son kapanmış madde (varsa). */
+
 export async function findLatestClosedFollowUp(
   db: Pick<PrismaClient, "followUpItem">,
   activityId: string,
@@ -193,7 +171,7 @@ export async function findLatestClosedFollowUp(
   });
 }
 
-/** Faaliyet sayfasındaki kart için: o kaydın açık maddesi. */
+
 export async function findOpenFollowUp(
   db: Pick<PrismaClient, "followUpItem">,
   activityId: string,

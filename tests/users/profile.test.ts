@@ -3,19 +3,15 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { listProfileActivities, loadProfile } from "@/server/users/profile";
 
 import {
-  createActivity,
   createApprovalReason,
+  createActivity,
   createOrgUnit,
   createUser,
 } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Profil sayfası bir **okuma yoludur**; §18.4 gereği yetkisiz erişimin
-// engellendiğini kanıtlamadan bitmiş sayılmaz.
-//
-// Profil arşivi de v4 §8.2 görünürlük matrisine uyar: üst zincir yalnız
-// onaylanmış ve iptal kayıtlarını görür. Süreçteki kaydın varlığı, başlığı ve
-// sayısı profile sızmaz.
+// User profile and activity archive tests.
+// Access and statistics are strictly governed by the visibility authorization layer.
 
 const NOW = new Date("2026-08-19T09:00:00.000Z");
 
@@ -27,347 +23,334 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-/** Şirket: Kök → Üretim (müdür Mert) → Kalıphane (usta Kadir). */
-async function sirket() {
-  const kok = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const uretim = await createOrgUnit({ name: "Üretim", parentId: kok.id });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: uretim.id });
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "ROOT" });
+  const production = await createOrgUnit({ name: "Production", parentId: root.id });
+  const tooling = await createOrgUnit({ name: "Tooling", parentId: production.id });
 
-  const genelMudur = await createUser(kok.id, {
-    fullName: "Gökhan Genel",
-    email: "gm@ornek.test",
+  const generalManager = await createUser(root.id, {
+    fullName: "General Manager",
+    email: "gm@example.test",
     isUnitManager: true,
   });
-  const mudur = await createUser(uretim.id, {
-    fullName: "Mert Müdür",
-    email: "mert@ornek.test",
+  const manager = await createUser(production.id, {
+    fullName: "Production Manager",
+    email: "manager@example.test",
     isUnitManager: true,
   });
-  const ekipCalisani = await createUser(uretim.id, {
-    fullName: "Üretim Çalışanı",
-    email: "ekip@ornek.test",
+  const teamMember = await createUser(production.id, {
+    fullName: "Production Worker",
+    email: "worker@example.test",
   });
-  const usta = await createUser(kaliphane.id, {
-    fullName: "Kadir Usta",
-    email: "kadir@ornek.test",
+  const worker = await createUser(tooling.id, {
+    fullName: "Tooling Worker",
+    email: "tooling@example.test",
   });
-  const yabanci = await createUser(kok.id, {
-    fullName: "Yasin Yabancı",
-    email: "yasin@ornek.test",
+  const outsider = await createUser(root.id, {
+    fullName: "External User",
+    email: "external@example.test",
   });
 
-  return { kok, uretim, kaliphane, genelMudur, mudur, ekipCalisani, usta, yabanci };
+  return { root, production, tooling, generalManager, manager, teamMember, worker, outsider };
 }
 
-const bakan = (
+const viewer = (
   id: string,
   isSystemAdmin = false,
   extra: { orgUnitId?: string; isUnitManager?: boolean } = {},
 ) => ({ id, isSystemAdmin, ...extra });
 
-describe("profili kim açabilir", () => {
-  it("kişi kendi profilini görür", async () => {
-    const { usta } = await sirket();
+describe("profile view authorization", () => {
+  it("allows user to view their own profile", async () => {
+    const { worker } = await setupCompany();
 
-    const sonuc = await loadProfile(testDb, bakan(usta.id), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(worker.id), worker.id, NOW);
 
-    expect(sonuc.access).toBe("full");
-    if (sonuc.access !== "full") return;
-    expect(sonuc.person.fullName).toBe("Kadir Usta");
-    expect(sonuc.person.orgUnitName).toBe("Kalıphane");
+    expect(result.access).toBe("full");
+    if (result.access !== "full") return;
+    expect(result.person.fullName).toBe("Tooling Worker");
+    expect(result.person.orgUnitName).toBe("Tooling");
   });
 
-  it("yönetici astının profilini görür", async () => {
-    const { mudur, usta } = await sirket();
+  it("allows manager to view subordinate profile", async () => {
+    const { manager, worker } = await setupCompany();
 
-    const sonuc = await loadProfile(testDb, bakan(mudur.id), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(manager.id), worker.id, NOW);
 
-    expect(sonuc.access).toBe("full");
+    expect(result.access).toBe("full");
   });
 
-  it("ast, yöneticisinin profilini göremez", async () => {
-    const { mudur, usta } = await sirket();
+  it("prevents subordinate from viewing manager profile", async () => {
+    const { manager, worker } = await setupCompany();
 
-    const sonuc = await loadProfile(testDb, bakan(usta.id), mudur.id, NOW);
+    const result = await loadProfile(testDb, viewer(worker.id), manager.id, NOW);
 
-    // Yukarı doğru bakış yok. "Var ama göremezsin" demek yerine kayıt yokmuş
-    // gibi davranılır.
-    expect(sonuc.access).toBe("none");
+    expect(result.access).toBe("none");
   });
 
-  it("kapsam dışındaki eş kademe göremez", async () => {
-    const { usta, yabanci } = await sirket();
+  it("allows system admin to access user metadata", async () => {
+    const { outsider, worker } = await setupCompany();
 
-    const sonuc = await loadProfile(testDb, bakan(yabanci.id), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(outsider.id, true), worker.id, NOW);
 
-    expect(sonuc.access).toBe("none");
+    expect(result.access).toBe("metadata");
+    if (result.access !== "metadata") return;
+    expect(result.person.fullName).toBe("Tooling Worker");
   });
 
-  it("sistem yöneticisi üst veriyi görür, arşivi görmez", async () => {
-    const { usta, yabanci } = await sirket();
+  it("prevents arbitrary external user from viewing profile", async () => {
+    const { outsider, worker } = await setupCompany();
 
-    const sonuc = await loadProfile(testDb, bakan(yabanci.id, true), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(outsider.id, false), worker.id, NOW);
 
-    // §15.1: işlevsel yetki içerik erişimi vermez. Kullanıcıyı yönetebilmesi
-    // için kim olduğunu görmesi yeter; ne yazdığını görmesi gerekmez.
-    expect(sonuc.access).toBe("metadata");
-    if (sonuc.access !== "metadata") return;
-    expect(sonuc.person.fullName).toBe("Kadir Usta");
-    expect(sonuc).not.toHaveProperty("stats");
+    expect(result.access).toBe("none");
   });
 
-  it("olmayan kişi için erişim yok", async () => {
-    const { mudur } = await sirket();
+  it("prevents peer manager from viewing profile outside their branch", async () => {
+    const { root, worker } = await setupCompany();
+    const planning = await createOrgUnit({ name: "Planning", parentId: root.id });
+    const peerManager = await createUser(planning.id, { isUnitManager: true });
 
-    const sonuc = await loadProfile(
-      testDb,
-      bakan(mudur.id),
-      "11111111-1111-4111-8111-111111111111",
-      NOW,
-    );
+    const result = await loadProfile(testDb, viewer(peerManager.id), worker.id, NOW);
 
-    expect(sonuc.access).toBe("none");
+    expect(result.access).toBe("none");
   });
 });
 
-describe("son başarılı giriş", () => {
-  it("kişi kendi son başarılı girişini görür", async () => {
-    const { usta } = await sirket();
-    const sonGiris = new Date("2026-08-18T07:30:00.000Z");
-    await testDb.user.update({ where: { id: usta.id }, data: { lastLoginAt: sonGiris } });
+describe("last login visibility rules", () => {
+  it("allows user to see their own last login date", async () => {
+    const { worker } = await setupCompany();
+    const lastLogin = new Date("2026-08-18T08:30:00.000Z");
+    await testDb.user.update({ where: { id: worker.id }, data: { lastLoginAt: lastLogin } });
 
-    const sonuc = await loadProfile(testDb, bakan(usta.id), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(worker.id), worker.id, NOW);
 
-    expect(sonuc.access).toBe("full");
-    if (sonuc.access !== "full") return;
-    expect(sonuc.person.lastLoginVisible).toBe(true);
-    expect(sonuc.person.lastLoginAt).toEqual(sonGiris);
+    expect(result.access).toBe("full");
+    if (result.access !== "full") return;
+    expect(result.person.lastLoginVisible).toBe(true);
+    expect(result.person.lastLoginAt).toEqual(lastLogin);
   });
 
-  it("yönetici aynı departmandaki çalışanın son girişini görür", async () => {
-    const { mudur, ekipCalisani } = await sirket();
-    const sonGiris = new Date("2026-08-18T08:15:00.000Z");
+  it("allows manager to view last login of employees in same department", async () => {
+    const { manager, teamMember } = await setupCompany();
+    const lastLogin = new Date("2026-08-18T08:15:00.000Z");
     await testDb.user.update({
-      where: { id: ekipCalisani.id },
-      data: { lastLoginAt: sonGiris },
+      where: { id: teamMember.id },
+      data: { lastLoginAt: lastLogin },
     });
 
-    const sonuc = await loadProfile(
+    const result = await loadProfile(
       testDb,
-      bakan(mudur.id, false, { orgUnitId: mudur.orgUnitId, isUnitManager: true }),
-      ekipCalisani.id,
+      viewer(manager.id, false, { orgUnitId: manager.orgUnitId, isUnitManager: true }),
+      teamMember.id,
       NOW,
     );
 
-    expect(sonuc.access).toBe("full");
-    if (sonuc.access !== "full") return;
-    expect(sonuc.person.lastLoginVisible).toBe(true);
-    expect(sonuc.person.lastLoginAt).toEqual(sonGiris);
+    expect(result.access).toBe("full");
+    if (result.access !== "full") return;
+    expect(result.person.lastLoginVisible).toBe(true);
+    expect(result.person.lastLoginAt).toEqual(lastLogin);
   });
 
-  it("yönetici alt departmandaki kişinin son girişini göremez", async () => {
-    const { mudur, usta } = await sirket();
-    const sonGiris = new Date("2026-08-18T08:45:00.000Z");
-    await testDb.user.update({ where: { id: usta.id }, data: { lastLoginAt: sonGiris } });
+  it("hides last login when viewing subordinate in a sub-department", async () => {
+    const { manager, worker } = await setupCompany();
+    const lastLogin = new Date("2026-08-18T08:45:00.000Z");
+    await testDb.user.update({ where: { id: worker.id }, data: { lastLoginAt: lastLogin } });
 
-    const sonuc = await loadProfile(
+    const result = await loadProfile(
       testDb,
-      bakan(mudur.id, false, { orgUnitId: mudur.orgUnitId, isUnitManager: true }),
-      usta.id,
+      viewer(manager.id, false, { orgUnitId: manager.orgUnitId, isUnitManager: true }),
+      worker.id,
       NOW,
     );
 
-    expect(sonuc.access).toBe("full");
-    if (sonuc.access !== "full") return;
-    expect(sonuc.person.lastLoginVisible).toBe(false);
-    expect(sonuc.person.lastLoginAt).toBeNull();
+    expect(result.access).toBe("full");
+    if (result.access !== "full") return;
+    expect(result.person.lastLoginVisible).toBe(false);
+    expect(result.person.lastLoginAt).toBeNull();
   });
 
-  it("sistem yöneticisi son giriş bilgisini görür", async () => {
-    const { yabanci, usta } = await sirket();
-    const sonGiris = new Date("2026-08-18T09:00:00.000Z");
-    await testDb.user.update({ where: { id: usta.id }, data: { lastLoginAt: sonGiris } });
+  it("allows system admin to view last login info", async () => {
+    const { outsider, worker } = await setupCompany();
+    const lastLogin = new Date("2026-08-18T09:00:00.000Z");
+    await testDb.user.update({ where: { id: worker.id }, data: { lastLoginAt: lastLogin } });
 
-    const sonuc = await loadProfile(testDb, bakan(yabanci.id, true), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(outsider.id, true), worker.id, NOW);
 
-    expect(sonuc.access).toBe("metadata");
-    if (sonuc.access !== "metadata") return;
-    expect(sonuc.person.lastLoginVisible).toBe(true);
-    expect(sonuc.person.lastLoginAt).toEqual(sonGiris);
+    expect(result.access).toBe("metadata");
+    if (result.access !== "metadata") return;
+    expect(result.person.lastLoginVisible).toBe(true);
+    expect(result.person.lastLoginAt).toEqual(lastLogin);
   });
 });
 
-describe("istatistikler bakanın kapsamıyla sınırlıdır", () => {
-  it("onay sürecindeki kayıt, onaylayıcı olmayan üst kademenin sayısına girmez", async () => {
-    const { genelMudur, mudur, usta } = await sirket();
+describe("statistics bounded by viewer authorization", () => {
+  it("excludes unapproved activities from higher manager stats count", async () => {
+    const { generalManager, manager, worker } = await setupCompany();
 
-    await createActivity(usta, {
-      title: "Onaylanmış iş",
+    await createActivity(worker, {
+      title: "Approved task",
       approvalStatus: "APPROVED",
-      approverId: mudur.id,
+      approverId: manager.id,
     });
-    await createActivity(usta, {
-      title: "Onay bekleyen iş",
+    await createActivity(worker, {
+      title: "Pending task",
       approvalStatus: "PENDING_APPROVAL",
-      approverId: mudur.id,
+      approverId: manager.id,
       approvalSubmittedAt: NOW,
     });
 
-    const mudurGoruyor = await loadProfile(testDb, bakan(mudur.id), usta.id, NOW);
-    const gmGoruyor = await loadProfile(testDb, bakan(genelMudur.id), usta.id, NOW);
+    const managerView = await loadProfile(testDb, viewer(manager.id), worker.id, NOW);
+    const gmView = await loadProfile(testDb, viewer(generalManager.id), worker.id, NOW);
 
-    expect(mudurGoruyor.access).toBe("full");
-    if (mudurGoruyor.access !== "full") return;
-    expect(mudurGoruyor.stats.total).toBe(2);
-    expect(mudurGoruyor.stats.pending).toBe(1);
+    expect(managerView.access).toBe("full");
+    if (managerView.access !== "full") return;
+    expect(managerView.stats.total).toBe(2);
+    expect(managerView.stats.pending).toBe(1);
 
-    expect(gmGoruyor.access).toBe("full");
-    if (gmGoruyor.access !== "full") return;
-    // Üst zincir süreçteki kaydı ve ondan türeyen sayıyı görmez (§8.2).
-    expect(gmGoruyor.stats.total).toBe(1);
-    expect(gmGoruyor.stats.pending).toBe(0);
+    expect(gmView.access).toBe("full");
+    if (gmView.access !== "full") return;
+    expect(gmView.stats.total).toBe(1);
+    expect(gmView.stats.pending).toBe(0);
   });
 
-  it("iptal edilen kayıt kişinin kendi sayacında da görünür", async () => {
-    const { usta, mudur } = await sirket();
-    await createActivity(usta, { approvalStatus: "APPROVED", approverId: mudur.id });
-    await createActivity(usta, { approvalStatus: "CANCELLED", approverId: mudur.id });
+  it("includes cancelled activities in author's own total stats", async () => {
+    const { worker, manager } = await setupCompany();
+    await createActivity(worker, { approvalStatus: "APPROVED", approverId: manager.id });
+    await createActivity(worker, { approvalStatus: "CANCELLED", approverId: manager.id });
 
-    const sonuc = await loadProfile(testDb, bakan(usta.id), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(worker.id), worker.id, NOW);
 
-    expect(sonuc.access).toBe("full");
-    if (sonuc.access !== "full") return;
-    // İptal silme değildir (§16.6); kişi kendi geçmişinde onu da görür.
-    expect(sonuc.stats.total).toBe(2);
+    expect(result.access).toBe("full");
+    if (result.access !== "full") return;
+    expect(result.stats.total).toBe(2);
   });
 
-  it("bu ay sayacı yalnız içinde bulunulan ayı sayar", async () => {
-    const { usta, mudur } = await sirket();
-    await createActivity(usta, {
+  it("calculates this-month activities accurately", async () => {
+    const { worker, manager } = await setupCompany();
+    await createActivity(worker, {
       activityDate: new Date("2026-08-03T00:00:00.000Z"),
       approvalStatus: "APPROVED",
-      approverId: mudur.id,
+      approverId: manager.id,
     });
-    await createActivity(usta, {
+    await createActivity(worker, {
       activityDate: new Date("2026-07-28T00:00:00.000Z"),
       approvalStatus: "APPROVED",
-      approverId: mudur.id,
+      approverId: manager.id,
     });
 
-    const sonuc = await loadProfile(testDb, bakan(usta.id), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(worker.id), worker.id, NOW);
 
-    expect(sonuc.access).toBe("full");
-    if (sonuc.access !== "full") return;
-    expect(sonuc.stats.total).toBe(2);
-    expect(sonuc.stats.thisMonth).toBe(1);
-    expect(sonuc.stats.lastActivityDate?.toISOString()).toContain("2026-08-03");
+    expect(result.access).toBe("full");
+    if (result.access !== "full") return;
+    expect(result.stats.total).toBe(2);
+    expect(result.stats.thisMonth).toBe(1);
+    expect(result.stats.lastActivityDate?.toISOString()).toContain("2026-08-03");
   });
 
-  it("hiç faaliyeti olmayan kişinin son tarihi boştur", async () => {
-    const { usta } = await sirket();
+  it("returns null lastActivityDate when user has no activities", async () => {
+    const { worker } = await setupCompany();
 
-    const sonuc = await loadProfile(testDb, bakan(usta.id), usta.id, NOW);
+    const result = await loadProfile(testDb, viewer(worker.id), worker.id, NOW);
 
-    expect(sonuc.access).toBe("full");
-    if (sonuc.access !== "full") return;
-    expect(sonuc.stats.total).toBe(0);
-    expect(sonuc.stats.lastActivityDate).toBeNull();
+    expect(result.access).toBe("full");
+    if (result.access !== "full") return;
+    expect(result.stats.total).toBe(0);
+    expect(result.stats.lastActivityDate).toBeNull();
   });
 });
 
-describe("arşiv listesi", () => {
-  it("bakanın göremeyeceği kayıt listede yer almaz", async () => {
-    const { genelMudur, mudur, usta } = await sirket();
-    await createActivity(usta, {
-      title: "Herkesin gördüğü",
+describe("profile activities archive list", () => {
+  it("excludes unapproved activities from unauthorized viewers in archive", async () => {
+    const { generalManager, manager, worker } = await setupCompany();
+    await createActivity(worker, {
+      title: "Publicly visible",
       approvalStatus: "APPROVED",
-      approverId: mudur.id,
+      approverId: manager.id,
     });
-    await createActivity(usta, {
-      title: "Süzülmemiş taslak",
+    await createActivity(worker, {
+      title: "Unapproved draft",
       approvalStatus: "PENDING_APPROVAL",
-      approverId: mudur.id,
+      approverId: manager.id,
       approvalSubmittedAt: NOW,
     });
 
-    const gmListesi = await listProfileActivities(testDb, bakan(genelMudur.id), usta.id);
+    const gmList = await listProfileActivities(testDb, viewer(generalManager.id), worker.id);
 
-    expect(gmListesi.map((k) => k.title)).toEqual(["Herkesin gördüğü"]);
+    expect(gmList.map((k) => k.title)).toEqual(["Publicly visible"]);
   });
 
-  it("kişi kendi süzülmemiş kaydını profilinde görür", async () => {
-    const { usta, mudur } = await sirket();
-    await createActivity(usta, {
-      title: "Kendi taslağım",
+  it("allows author to see their pending activities in profile archive", async () => {
+    const { worker, manager } = await setupCompany();
+    await createActivity(worker, {
+      title: "Own pending task",
       approvalStatus: "PENDING_APPROVAL",
-      approverId: mudur.id,
+      approverId: manager.id,
       approvalSubmittedAt: NOW,
     });
 
-    const liste = await listProfileActivities(testDb, bakan(usta.id), usta.id);
+    const list = await listProfileActivities(testDb, viewer(worker.id), worker.id);
 
-    expect(liste.map((k) => k.title)).toEqual(["Kendi taslağım"]);
+    expect(list.map((k) => k.title)).toEqual(["Own pending task"]);
   });
 
-  it("aktif onaylayıcı süzülmemiş kaydı görür", async () => {
-    const { usta, mudur } = await sirket();
-    await createActivity(usta, {
-      title: "Onayımda bekleyen",
+  it("allows active approver to see pending activities in profile archive", async () => {
+    const { worker, manager } = await setupCompany();
+    await createActivity(worker, {
+      title: "Pending approval in queue",
       approvalStatus: "PENDING_APPROVAL",
-      approverId: mudur.id,
+      approverId: manager.id,
       approvalSubmittedAt: NOW,
     });
 
-    const liste = await listProfileActivities(testDb, bakan(mudur.id), usta.id);
+    const list = await listProfileActivities(testDb, viewer(manager.id), worker.id);
 
-    expect(liste.map((k) => k.title)).toEqual(["Onayımda bekleyen"]);
+    expect(list.map((k) => k.title)).toEqual(["Pending approval in queue"]);
   });
 
-  it("reddedilen kayıt üst kademeye hiç sızmaz", async () => {
-    const { usta, mudur, genelMudur } = await sirket();
-    const gerekce = await createApprovalReason("REJECTED");
-    await createActivity(usta, {
-      title: "Reddedilen iş",
+  it("never exposes rejected activities to higher management", async () => {
+    const { worker, manager, generalManager } = await setupCompany();
+    const reason = await createApprovalReason("REJECTED");
+    await createActivity(worker, {
+      title: "Rejected activity",
       approvalStatus: "REJECTED",
-      approverId: mudur.id,
-      approvalReasonId: gerekce.id,
+      approverId: manager.id,
+      approvalReasonId: reason.id,
       approvalReasonKind: "REJECTED",
     });
 
-    const liste = await listProfileActivities(testDb, bakan(genelMudur.id), usta.id);
+    const list = await listProfileActivities(testDb, viewer(generalManager.id), worker.id);
 
-    expect(liste).toEqual([]);
+    expect(list).toEqual([]);
   });
 
-  it("kişinin kendi listesi yeniden eskiye sıralıdır", async () => {
-    const { usta, mudur } = await sirket();
-    await createActivity(usta, {
-      title: "Önce",
+  it("sorts activities in reverse chronological order", async () => {
+    const { worker, manager } = await setupCompany();
+    await createActivity(worker, {
+      title: "Older",
       activityDate: new Date("2026-08-10T00:00:00.000Z"),
       approvalStatus: "APPROVED",
-      approverId: mudur.id,
+      approverId: manager.id,
     });
-    await createActivity(usta, {
-      title: "Sonra",
+    await createActivity(worker, {
+      title: "Newer",
       activityDate: new Date("2026-08-18T00:00:00.000Z"),
       approvalStatus: "APPROVED",
-      approverId: mudur.id,
+      approverId: manager.id,
     });
 
-    const liste = await listProfileActivities(testDb, bakan(usta.id), usta.id);
+    const list = await listProfileActivities(testDb, viewer(worker.id), worker.id);
 
-    expect(liste.map((k) => k.title)).toEqual(["Sonra", "Önce"]);
-    expect(liste[0]?.activityNo).toBeGreaterThan(0);
+    expect(list.map((k) => k.title)).toEqual(["Newer", "Older"]);
+    expect(list[0]?.activityNo).toBeGreaterThan(0);
   });
 
-  it("kapsam dışındaki kişi hiçbirini açamaz", async () => {
-    const { usta, yabanci, mudur } = await sirket();
-    await createActivity(usta, { approvalStatus: "APPROVED", approverId: mudur.id });
+  it("returns empty list when user is not authorized to view profile", async () => {
+    const { worker, outsider, manager } = await setupCompany();
+    await createActivity(worker, { approvalStatus: "APPROVED", approverId: manager.id });
 
-    // Bu kişi profili zaten açamıyor (`loadProfile` → "none"); liste de
-    // kaydın varlığını sızdırmamalı.
-    const liste = await listProfileActivities(testDb, bakan(yabanci.id), usta.id);
+    const list = await listProfileActivities(testDb, viewer(outsider.id), worker.id);
 
-    expect(liste).toEqual([]);
+    expect(list).toEqual([]);
   });
 });

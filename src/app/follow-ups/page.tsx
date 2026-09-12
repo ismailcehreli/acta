@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Card, CardBody, CardHeader, EmptyState } from "@/components/ui/card";
 import { Page, PageHeader } from "@/components/ui/page";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocale } from "@/server/i18n/locale";
 import { prisma } from "@/server/db";
 import {
   listFollowUps,
@@ -21,26 +23,25 @@ import { FilterBar } from "@/components/filters/filter-bar";
 import { Pagination } from "@/components/ui/pagination";
 import { buildQueryAddress } from "@/shared/filters/query-address";
 import { formatDay } from "@/shared/format/date-time";
+import type { Locale } from "@/shared/i18n";
 
-// Takip maddeleri ekranı (§11.2).
-//
-// **Sistem hiçbir maddeyi yukarı taşımaz.** Yaptığı tek şey hareketsiz olanları
-// görünür kılmak; yukarı taşıma kararı her zaman insana ait.
-//
-// Liste **tek**tir (ürün sahibi kararı, 21.08.2026). Önce üç gruba
-// bölünüyordu — hareketsizler, bende, diğerleri — ama gruplu yapı
-// sayfalanamıyordu ve süzgeç uygulanınca grupların anlamı kayboluyordu.
-// Öncelik kaybolmadı: sıralama en uzun bekleyeni öne alır, sahiplik ve
-// hareketsizlik satırın rozetlerinde durur.
-//
-// Liste görünürlük modülünden geçiyor: göremediğin faaliyetin maddesi burada
-// da yok — başlık ve "sonraki adım" metni de içerik taşır.
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.followUps.pageTitle");
+}
 
-export const metadata = { title: "Takipler" };
+type Translator = Awaited<ReturnType<typeof getTranslations>>;
 
-function Satir({ item }: { item: FollowUpView }) {
+function Row({
+  item,
+  t,
+  locale,
+}: {
+  item: FollowUpView;
+  t: Translator;
+  locale: Locale;
+}) {
   return (
-    <li data-test="takip-satiri" data-hareketsiz={item.stale ? "evet" : "hayir"}>
+    <li data-test="follow-up-record" data-stale={item.stale ? "true" : "false"}>
       <Link
         href={`/activities/${item.activityId}`}
         className="flex flex-col gap-0.5 rounded-(--radius-sm) px-2 py-2.5 transition-colors hover:bg-inset"
@@ -52,21 +53,20 @@ function Satir({ item }: { item: FollowUpView }) {
           <span className="min-w-0 flex-1 truncate text-[length:var(--text-sm)] font-medium text-ink">
             {item.activityTitle}
           </span>
-          {/* Öncelik grup başlığıyla değil, satırın kendi rozetleriyle
-              taşınıyor (Görev 11.3): gruplu yapı sayfalanamıyordu ve süzgeç
-              uygulanınca grupların anlamı kayboluyordu. */}
           {item.stale ? (
-            <Badge tone="danger">{item.idleBusinessDays} iş günüdür</Badge>
+            <Badge tone="danger">
+              {t("screens.followUps.staleBadge", { days: item.idleBusinessDays })}
+            </Badge>
           ) : null}
-          {item.mine ? <Badge tone="primary">sizde</Badge> : null}
+          {item.mine ? <Badge tone="primary">{t("screens.followUps.mine")}</Badge> : null}
           {item.reviewOverdue ? (
-            <Badge tone="correction">gözden geçirme günü geçti</Badge>
+            <Badge tone="correction">{t("screens.followUps.reviewOverdue")}</Badge>
           ) : null}
         </span>
 
         {item.nextStep ? (
           <span className="text-[length:var(--text-xs)] text-muted">
-            Sonraki adım: {item.nextStep}
+            {t("screens.followUps.nextStep")} {item.nextStep}
           </span>
         ) : null}
 
@@ -83,10 +83,12 @@ function Satir({ item }: { item: FollowUpView }) {
           {" · "}
           <span className={item.stale ? "text-correction" : undefined}>
             {item.idleBusinessDays === 0
-              ? "bugün hareket etti"
-              : `${item.idleBusinessDays} iş günüdür hareketsiz`}
+              ? t("screens.followUps.activeToday")
+              : t("screens.followUps.inactiveFor", { days: item.idleBusinessDays })}
           </span>
-          {item.reviewDate ? ` · gözden geçirme ${formatDay(item.reviewDate)}` : ""}
+          {item.reviewDate
+            ? ` · ${t("screens.followUps.reviewDate", { date: formatDay(item.reviewDate, locale) })}`
+            : ""}
         </span>
       </Link>
     </li>
@@ -97,44 +99,44 @@ export default async function FollowUpsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    durum?: string;
-    sorumlu?: string;
-    hareketsiz?: string;
+    status?: string;
+    assigneeId?: string;
+    stale?: string;
     period?: string;
-    sayfa?: string;
-    boyut?: string;
+    page?: string;
+    pageSize?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
   const params = await searchParams;
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
   const now = new Date();
 
   const filters: FollowUpFilters = {
-    status: params.durum === "kapali" ? "CLOSED" : "OPEN",
-    ownerId: params.sorumlu || undefined,
-    staleOnly: params.hareketsiz === "evet" || undefined,
+    status: params.status === "closed" ? "CLOSED" : "OPEN",
+    ownerId: params.assigneeId || undefined,
+    staleOnly: params.stale === "true" || undefined,
     period:
       params.period === "today" || params.period === "week" ? params.period : "all",
   };
 
-  const SAYFA_BOYU = await resolvePageSize(params.boyut);
-  const istenen = Number.parseInt(params.sayfa ?? "1", 10);
-  const sayfa = Number.isFinite(istenen) && istenen > 0 ? istenen : 1;
-
+  const pageSize = await resolvePageSize(params.pageSize);
+  const requested = Number.parseInt(params.page ?? "1", 10);
+  const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
   const subordinates = await subordinateUserIds(prisma, user.id);
 
-  // Toplam, sayfa sayısını bilmek için önce okunuyor; hareketsizlik hesabı
-  // çalışma takvimine bağlı olduğu için sorgu zaten belleğe iniyor.
-  const ilk = await listFollowUps(prisma, viewer, now, filters);
-  const sayfaSayisi = Math.max(1, Math.ceil(ilk.total / SAYFA_BOYU));
-  const gecerliSayfa = Math.min(sayfa, sayfaSayisi);
-
-  const items = ilk.items.slice(
-    (gecerliSayfa - 1) * SAYFA_BOYU,
-    gecerliSayfa * SAYFA_BOYU,
+  // Load the full filtered set once to calculate pagination. Inactivity is
+  // tied to the work calendar, so the query is already materialized in memory.
+  const initial = await listFollowUps(prisma, viewer, now, filters);
+  const pageCount = Math.max(1, Math.ceil(initial.total / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const items = initial.items.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
   );
 
   const [shellUser, people] = await Promise.all([
@@ -142,48 +144,49 @@ export default async function FollowUpsPage({
     listScopePeople(prisma, viewer, subordinates),
   ]);
 
-  const adres = (ek: Record<string, string> = {}) =>
+  const address = (attachment: Record<string, string> = {}) =>
     buildQueryAddress(
       "/follow-ups",
       {
-        durum: params.durum,
-        sorumlu: params.sorumlu,
-        hareketsiz: params.hareketsiz,
+        status: params.status,
+        assigneeId: params.assigneeId,
+        stale: params.stale,
         period: params.period,
-        boyut: String(SAYFA_BOYU),
+        pageSize: String(pageSize),
       },
-      ek,
+      attachment,
     );
 
-  const suzgecliMi =
-    Boolean(params.durum) ||
-    Boolean(params.sorumlu) ||
-    Boolean(params.hareketsiz) ||
+  const isFiltered =
+    Boolean(params.status) ||
+    Boolean(params.assigneeId) ||
+    Boolean(params.stale) ||
     (params.period ?? "all") !== "all";
-
-  const kapaliMi = filters.status === "CLOSED";
+  const closed = filters.status === "CLOSED";
 
   return (
     <AppShell user={shellUser}>
-      <Page isaret="takipler">
+      <Page marker="follow-ups">
         <PageHeader
-          marker="Takipler"
-          title="Takip maddeleri"
-          description="Kapanmamış konular. Sistem hiçbir maddeyi kendiliğinden üst kademeye taşımaz; yalnız görünür kılar."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Takipler" }]}
+          title={t("screens.followUps.pageTitle")}
+          description={t("screens.followUps.pageDescription")}
+          breadcrumbs={[
+            { label: t("screens.followUps.dashboard"), href: "/" },
+            { label: t("screens.followUps.pageTitle") },
+          ]}
         />
 
         <Card>
           <CardHeader
-            title={kapaliMi ? "Kapanmış maddeler" : "Açık maddeler"}
+            title={closed ? t("screens.followUps.closedItems") : t("screens.followUps.openItems")}
             description={
-              kapaliMi
-                ? "Kapatılmış takip maddeleri, kapanış notlarıyla birlikte kayıtta durur."
-                : `En uzun süredir bekleyen madde en üstte. ${ilk.staleThreshold} iş günü ve üzeri bekleyenler işaretlenir.`
+              closed
+                ? t("screens.followUps.closedDescription")
+                : t("screens.followUps.openDescription", { days: initial.staleThreshold })
             }
             action={
               <span className="mono text-[length:var(--text-sm)] text-muted">
-                {ilk.total} madde
+                {t("screens.followUps.itemCount", { count: initial.total })}
               </span>
             }
           />
@@ -191,82 +194,82 @@ export default async function FollowUpsPage({
           <FilterBar
             action="/follow-ups"
             clearHref="/follow-ups"
-            filtered={suzgecliMi}
-            pageSize={SAYFA_BOYU}
+            filtered={isFiltered}
+            pageSize={pageSize}
             fields={[
               {
-                name: "durum",
-                label: "Durum",
-                value: params.durum ?? "acik",
+                name: "status",
+                label: t("screens.followUps.status"),
+                value: params.status ?? "open",
                 width: "w-36",
                 options: [
-                  { value: "acik", label: "Açık" },
-                  { value: "kapali", label: "Kapanmış" },
+                  { value: "open", label: t("screens.followUps.open") },
+                  { value: "closed", label: t("screens.followUps.closed") },
                 ],
               },
               {
-                name: "sorumlu",
-                label: "Sorumlu",
-                value: params.sorumlu ?? "",
+                name: "assigneeId",
+                label: t("screens.followUps.assignee"),
+                value: params.assigneeId ?? "",
                 options: [
-                  { value: "", label: "Herkes" },
-                  ...people.map((k) => ({ value: k.id, label: k.fullName })),
+                  { value: "", label: t("screens.followUps.everyone") },
+                  ...people.map((person) => ({ value: person.id, label: person.fullName })),
                 ],
               },
               {
-                name: "hareketsiz",
-                label: "Hareketsizlik",
-                value: params.hareketsiz ?? "",
+                name: "stale",
+                label: t("screens.followUps.inactivity"),
+                value: params.stale ?? "",
                 width: "w-48",
                 options: [
-                  { value: "", label: "Hepsi" },
+                  { value: "", label: t("screens.followUps.everyone") },
                   {
-                    value: "evet",
-                    label: `${ilk.staleThreshold} iş günü ve üzeri`,
+                    value: "true",
+                    label: t("screens.followUps.staleOption", { days: initial.staleThreshold }),
                   },
                 ],
               },
               {
                 name: "period",
-                label: "Açılma dönemi",
+                label: t("screens.followUps.openingPeriod"),
                 value: params.period ?? "all",
                 width: "w-36",
                 options: [
-                  { value: "all", label: "Tümü" },
-                  { value: "today", label: "Bugün" },
-                  { value: "week", label: "Bu hafta" },
+                  { value: "all", label: t("screens.followUps.all") },
+                  { value: "today", label: t("screens.followUps.today") },
+                  { value: "week", label: t("screens.followUps.week") },
                 ],
               },
             ]}
           />
 
           {items.length === 0 ? (
-            suzgecliMi ? (
+            isFiltered ? (
               <EmptyState
-                title="Süzgece uyan madde yok."
-                description="Süzgeci temizleyerek bütün takip maddelerini görebilirsiniz."
+                title={t("screens.followUps.filterNoMatch")}
+                description={t("screens.followUps.clearFilters")}
               />
             ) : (
               <EmptyState
-                title="Açık takip maddesi yok."
-                description="Bir faaliyette “bu konu açık kalsın” dediğinizde burada görünür."
+                title={t("screens.followUps.noOpenItems")}
+                description={t("screens.followUps.noOpenItemsDescription")}
               />
             )
           ) : (
             <CardBody className="py-2">
               <ul className="flex flex-col">
                 {items.map((item) => (
-                  <Satir key={item.id} item={item} />
+                  <Row key={item.id} item={item} t={t} locale={locale} />
                 ))}
               </ul>
             </CardBody>
           )}
 
           <Pagination
-            page={gecerliSayfa}
-            pageCount={sayfaSayisi}
-            hrefFor={(hedef) =>
-              hedef === 1 ? adres() : adres({ sayfa: String(hedef) })
+            page={currentPage}
+            pageCount={pageCount}
+            hrefFor={(targetPage) =>
+              targetPage === 1 ? address() : address({ page: String(targetPage) })
             }
           />
         </Card>

@@ -10,8 +10,8 @@ import {
 import { createActivity, createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §4.6: pasifleştirme, kişinin üzerinde açık iş varken engellenir. Engel
-// listesi sistem yöneticisine gösterilir; hiçbiri sessizce atlanmaz.
+// Deactivation blockers and reactivation rules (§4.6).
+// Deactivation is blocked when user has open blockers (conversations, subordinates).
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
@@ -24,17 +24,17 @@ afterAll(async () => {
 });
 
 async function twoLevelTree() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
+  const root = await createOrgUnit({ name: "Company Root", type: "Root" });
   const department = await createOrgUnit({
-    name: "Kalıphane",
-    type: "Departman",
+    name: "Workshop",
+    type: "Department",
     parentId: root.id,
   });
   return { root, department };
 }
 
-describe("engelsiz pasifleştirme", () => {
-  it("üzerinde açık iş olmayan kullanıcı pasifleştirilir", async () => {
+describe("unblocked deactivation", () => {
+  it("deactivates user without open blockers", async () => {
     const { department } = await twoLevelTree();
     const user = await createUser(department.id);
 
@@ -44,11 +44,10 @@ describe("engelsiz pasifleştirme", () => {
     const stored = await testDb.user.findUniqueOrThrow({
       where: { id: user.id },
     });
-    // Kayıt silinmez, yalnızca bayrağı düşer (§16.6).
     expect(stored.isActive).toBe(false);
   });
 
-  it("pasifleştirilen kişinin açık oturumları kapanır", async () => {
+  it("revokes active sessions of deactivated user", async () => {
     const { department } = await twoLevelTree();
     const user = await createUser(department.id);
     const session = await createSession(testDb, user.id, NOW);
@@ -61,21 +60,19 @@ describe("engelsiz pasifleştirme", () => {
     expect(await findActiveSession(testDb, session.token, NOW)).toBeNull();
   });
 
-  it("yöneticilik bayrağı düşer, birime yeni yönetici atanabilir", async () => {
+  it("clears unit manager flag on deactivation so replacement can be assigned", async () => {
     const { department } = await twoLevelTree();
     const manager = await createUser(department.id, { isUnitManager: true });
 
     await deactivateUser(testDb, manager.id, NOW);
 
-    // Bayrak kalsaydı, birim başına tek yönetici kısıtı yeni atamayı
-    // engellerdi (§4.2).
     const replacement = await createUser(department.id, {
       isUnitManager: true,
     });
     expect(replacement.isUnitManager).toBe(true);
   });
 
-  it("faaliyeti olan kullanıcı pasifleştirilebilir — geçmiş kayıt engel değil", async () => {
+  it("user with past activities can be deactivated", async () => {
     const { department } = await twoLevelTree();
     const user = await createUser(department.id);
     await createActivity(user);
@@ -86,7 +83,7 @@ describe("engelsiz pasifleştirme", () => {
   });
 });
 
-describe("açık konuşma engeli", () => {
+describe("open conversation blocker", () => {
   async function openConversation(
     askerId: string,
     responsibleId: string,
@@ -98,7 +95,7 @@ describe("açık konuşma engeli", () => {
     });
   }
 
-  it("cevap bekleyen sorunun sorumlusu pasifleştirilemez", async () => {
+  it("blocks deactivation of user responsible for open question", async () => {
     const { root, department } = await twoLevelTree();
     const asker = await createUser(root.id);
     const responsible = await createUser(department.id);
@@ -111,7 +108,7 @@ describe("açık konuşma engeli", () => {
     expect(result.blockers.openConversationCount).toBe(1);
   });
 
-  it("soruyu soran kişi de pasifleştirilemez", async () => {
+  it("blocks deactivation of user who asked the question", async () => {
     const { root, department } = await twoLevelTree();
     const asker = await createUser(root.id);
     const responsible = await createUser(department.id);
@@ -124,7 +121,7 @@ describe("açık konuşma engeli", () => {
     expect(result.blockers.openConversationCount).toBe(1);
   });
 
-  it("konuşma kapandıktan sonra pasifleştirme serbesttir", async () => {
+  it("permits deactivation once conversation is closed", async () => {
     const { root, department } = await twoLevelTree();
     const asker = await createUser(root.id);
     const responsible = await createUser(department.id);
@@ -144,49 +141,47 @@ describe("açık konuşma engeli", () => {
   });
 });
 
-describe("altındaki kullanıcı engeli", () => {
-  it("ekibi olan yönetici pasifleştirilemez ve ekip listelenir", async () => {
+describe("subordinate blocker", () => {
+  it("blocks deactivation of manager with team members and lists them", async () => {
     const { department } = await twoLevelTree();
     const manager = await createUser(department.id, {
       isUnitManager: true,
-      fullName: "Departman Müdürü",
+      fullName: "Department Manager",
     });
-    await createUser(department.id, { fullName: "Ekip Üyesi" });
+    await createUser(department.id, { fullName: "Team Member" });
 
     const result = await deactivateUser(testDb, manager.id, NOW);
 
     expect(result.ok).toBe(false);
     if (result.ok || result.reason !== "blocked") return;
     expect(result.blockers.subordinates.map((s) => s.fullName)).toEqual([
-      "Ekip Üyesi",
+      "Team Member",
     ]);
   });
 
-  it("alt birimdeki kullanıcılar da yöneticiye bağlı sayılır", async () => {
+  it("users in descendant units count as subordinates of parent manager", async () => {
     const { root, department } = await twoLevelTree();
     const director = await createUser(root.id, {
       isUnitManager: true,
-      fullName: "Direktör",
+      fullName: "Director",
     });
-    // Departmanın kendi yöneticisi yok; kişi zincirde direktöre bağlanır.
-    await createUser(department.id, { fullName: "Departman Çalışanı" });
+    await createUser(department.id, { fullName: "Department Worker" });
 
     const result = await deactivateUser(testDb, director.id, NOW);
 
     expect(result.ok).toBe(false);
     if (result.ok || result.reason !== "blocked") return;
     expect(result.blockers.subordinates.map((s) => s.fullName)).toEqual([
-      "Departman Çalışanı",
+      "Department Worker",
     ]);
   });
 
-  it("ekip devredildikten sonra pasifleştirme serbesttir", async () => {
+  it("allows deactivation once team is transferred", async () => {
     const { root, department } = await twoLevelTree();
     const director = await createUser(root.id, { isUnitManager: true });
     const outgoing = await createUser(department.id, { isUnitManager: true });
     const member = await createUser(department.id);
 
-    // Ekip üyesi başka bir yöneticinin altına taşınır.
     await testDb.user.update({
       where: { id: member.id },
       data: { orgUnitId: root.id },
@@ -198,7 +193,7 @@ describe("altındaki kullanıcı engeli", () => {
     expect(await findSubordinates(testDb, director)).toHaveLength(1);
   });
 
-  it("yönetici olmayan kişinin altında kimse aranmaz", async () => {
+  it("returns empty subordinates for non-manager", async () => {
     const { department } = await twoLevelTree();
     const worker = await createUser(department.id);
 
@@ -206,8 +201,8 @@ describe("altındaki kullanıcı engeli", () => {
   });
 });
 
-describe("bilinmeyen kullanıcı", () => {
-  it("olmayan kullanıcı pasifleştirilemez", async () => {
+describe("unknown user handling", () => {
+  it("returns user_not_found for non-existent user", async () => {
     const result = await deactivateUser(
       testDb,
       "00000000-0000-0000-0000-000000000000",
@@ -218,20 +213,20 @@ describe("bilinmeyen kullanıcı", () => {
   });
 });
 
-describe("aktifleştirme", () => {
-  it("pasifleştirilen kullanıcı geri açılır", async () => {
+describe("reactivation", () => {
+  it("reactivates deactivated user", async () => {
     const { department } = await twoLevelTree();
     const user = await createUser(department.id);
 
     await deactivateUser(testDb, user.id, NOW);
-    const sonuc = await reactivateUser(testDb, user.id, NOW);
+    const result = await reactivateUser(testDb, user.id, NOW);
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     const stored = await testDb.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(stored.isActive).toBe(true);
   });
 
-  it("yöneticilik bayrağı geri verilmez", async () => {
+  it("does not automatically restore unit manager role upon reactivation", async () => {
     const { department } = await twoLevelTree();
     const manager = await createUser(department.id, { isUnitManager: true });
 
@@ -239,12 +234,10 @@ describe("aktifleştirme", () => {
     await reactivateUser(testDb, manager.id, NOW);
 
     const stored = await testDb.user.findUniqueOrThrow({ where: { id: manager.id } });
-    // Boşluğa başka biri atanmış olabilir; bayrağı sessizce geri vermek bir
-    // birimde iki yönetici oluşturmayı denemek olurdu (§4.2).
     expect(stored.isUnitManager).toBe(false);
   });
 
-  it("birimi pasif olan kullanıcı açılamaz", async () => {
+  it("rejects reactivation if unit is inactive", async () => {
     const { department } = await twoLevelTree();
     const user = await createUser(department.id);
 
@@ -254,57 +247,56 @@ describe("aktifleştirme", () => {
       data: { isActive: false },
     });
 
-    const sonuc = await reactivateUser(testDb, user.id, NOW);
+    const result = await reactivateUser(testDb, user.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.reason).toBe("inactive_org_unit");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("inactive_org_unit");
 
     const stored = await testDb.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(stored.isActive).toBe(false);
   });
 
-  it("zaten aktif kullanıcı reddedilir", async () => {
+  it("rejects reactivation of already active user", async () => {
     const { department } = await twoLevelTree();
     const user = await createUser(department.id);
 
-    const sonuc = await reactivateUser(testDb, user.id, NOW);
+    const result = await reactivateUser(testDb, user.id, NOW);
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.reason).toBe("already_active");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("already_active");
   });
 
-  it("olmayan kullanıcı reddedilir", async () => {
-    const sonuc = await reactivateUser(
+  it("rejects reactivation of non-existent user", async () => {
+    const result = await reactivateUser(
       testDb,
       "00000000-0000-4000-8000-000000000000",
       NOW,
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.reason).toBe("user_not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("user_not_found");
   });
 
-  it("eski parola çalışmaya devam eder", async () => {
+  it("existing password continues to function after reactivation", async () => {
     const { department } = await twoLevelTree();
     const { createUserWithPassword } = await import("../helpers/fixtures");
     const { login } = await import("@/server/auth/login");
 
-    const user = await createUserWithPassword(department.id, "ilk-parola-1234", {
-      email: "geri@ornek.test",
+    const user = await createUserWithPassword(department.id, "initial-password-1234", {
+      email: "reactivated@example.test",
     });
 
     await deactivateUser(testDb, user.id, NOW);
     await reactivateUser(testDb, user.id, NOW);
 
-    // Pasifleştirme yalnız oturumları iptal etmişti; kimlik bilgisi duruyor.
-    const sonuc = await login(
+    const result = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.9", sleep: async () => {} },
-      { email: "geri@ornek.test", password: "ilk-parola-1234" },
+      { email: "reactivated@example.test", password: "initial-password-1234" },
     );
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
   });
 });

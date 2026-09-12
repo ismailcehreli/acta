@@ -2,38 +2,40 @@
 
 import { useActionState, useState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import { Button } from "@/components/ui/button";
 
 import { deleteDraftAction } from "./actions";
 import { emptyDraftState } from "./form-state";
 
-// Taslak silme.
+// Draft deletion.
 //
-// **İki adımlı**, çünkü geri alınamaz: taslak silinince metin gider. Tek
-// tıkla silen bir düğme, yanlış satıra basan kullanıcının yazdığını yok
-// ederdi.
+
+
+// A draft is removed only after the user confirms the action.
 //
-// Tarayıcı `confirm()` kutusu kullanılmıyor: sayfayı bloke ediyor, biçimi
-// sisteme ait değil ve mobilde kaba duruyor. Yerine düğme kendi yerinde
-// "Sil / Vazgeç" ikilisine dönüşüyor.
+
+
+
 
 export function DeleteDraftButton({ id, title }: { id: string; title: string }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     deleteDraftAction,
     emptyDraftState,
   );
-  const [onayBekliyor, setOnayBekliyor] = useState(false);
+  const [approvalPending, setApprovalPending] = useState(false);
 
-  if (!onayBekliyor) {
+  if (!approvalPending) {
     return (
       <>
         <Button
           type="button"
           size="sm"
-          onClick={() => setOnayBekliyor(true)}
-          aria-label={`${title} taslağını sil`}
+          onClick={() => setApprovalPending(true)}
+          aria-label={`${title}: ${t("screens.drafts.delete")}`}
         >
-          Sil
+          {t("screens.drafts.delete")}
         </Button>
         {state.error ? (
           <span className="text-[length:var(--text-xs)] text-danger">
@@ -47,12 +49,14 @@ export function DeleteDraftButton({ id, title }: { id: string; title: string }) 
   return (
     <form action={formAction} className="flex items-center gap-2">
       <input type="hidden" name="id" value={id} />
-      <span className="text-[length:var(--text-xs)] text-muted">Silinsin mi?</span>
+      <span className="text-[length:var(--text-xs)] text-muted">
+        {t("screens.drafts.deleteConfirm")}
+      </span>
       <Button type="submit" variant="danger" size="sm" disabled={pending}>
-        {pending ? "Siliniyor…" : "Sil"}
+        {pending ? t("screens.drafts.deleting") : t("screens.drafts.delete")}
       </Button>
-      <Button type="button" size="sm" onClick={() => setOnayBekliyor(false)}>
-        Vazgeç
+      <Button type="button" size="sm" onClick={() => setApprovalPending(false)}>
+        {t("common.cancel")}
       </Button>
     </form>
   );

@@ -18,7 +18,7 @@ import {
   resolveAbsenceApproversForUser,
   visibleAbsenceUserIds,
 } from "./approval-routing";
-import { GECERLI_DONEM } from "./period-filter";
+import { CURRENT_PERIOD } from "./period-filter";
 
 export {
   listAbsenceDeputies,
@@ -26,11 +26,11 @@ export {
   visibleAbsenceUserIds,
 } from "./approval-routing";
 
-// "Faaliyet beklenmiyor" dönemi, kişiye belirli günlerde faaliyet hatırlatması
-// gönderilmemesini sağlar. Çalışanın kendi talebi, yöneticisi onaylayana kadar
-// geçerli değildir. Birim yöneticisinin kendi kaydı ve aynı departmandaki
-// çalışan için yöneticinin girdiği kayıt doğrudan onaylıdır. Bu alan izin türü
-// veya izin bakiyesi yönetmez.
+
+
+
+
+
 
 export type AbsenceDb = Pick<
   PrismaClient,
@@ -50,29 +50,29 @@ export interface AbsenceInput {
   startDate: string;
   endDate: string;
   note?: string;
-  /** Yönetici yokluğunda görev alacak aktif birim yöneticisi. */
+
   deputyId?: string;
 }
 
 export type AbsenceError =
-  /** Hedef kişi işaretleyenin departmanında yönetici olmayan çalışan değil. */
+
   | "not_subordinate"
-  /** Vekil, izne çıkanla aynı kişi. */
+
   | "deputy_is_self"
-  /** Vekâlet yalnız yönetici için tanımlanabilir. */
+
   | "absent_not_manager"
-  /** Vekil de birim yöneticisi olmalı. */
+
   | "deputy_not_manager"
-  /** Aralık başka bir işaretle çakışıyor. */
+
   | "overlaps"
   | "invalid_range"
-  /** İptal gerekçesi boş. */
+
   | "reason_required"
-  /** Kayıt bulunamadı ya da zaten iptal edilmiş. */
+
   | "not_found"
-  /** Kişinin kendi girebileceği süreyi aşıyor (Görev 11.8). */
+
   | "too_long_for_self"
-  /** Talebi karara bağlayacak aktif yönetici bulunamadı. */
+
   | "manager_not_found";
 
 export type AbsenceResult =
@@ -80,23 +80,20 @@ export type AbsenceResult =
   | { ok: false; error: AbsenceError; message: string };
 
 const MESSAGES: Record<AbsenceError, string> = {
-  // Yetkisiz işaretlemede kişinin varlığı da doğrulanmaz (§18.4).
-  not_subordinate: "Bu kişi için kayıt giremezsiniz.",
-  overlaps: "Bu kişi için bu tarihlerde zaten bir kayıt var.",
-  invalid_range: "Bitiş tarihi başlangıçtan önce olamaz.",
-  deputy_is_self: "Kişi kendi vekili olamaz.",
+  not_subordinate: "You cannot enter a record for this person.",
+  overlaps: "A record already exists for this person on these dates.",
+  invalid_range: "The end date cannot be before the start date.",
+  deputy_is_self: "A person cannot be their own deputy.",
   absent_not_manager:
-    "Vekil yalnız birim yöneticisi için tanımlanabilir. Yönetici olmayan bir kişide devredilecek onay kuyruğu yoktur.",
+    "A deputy can only be assigned to a unit manager. A non-manager has no approval queue to delegate.",
   deputy_not_manager:
-    "Vekil de birim yöneticisi olmalı: vekâlet, vekâlet edilen kişinin kapsamını açar.",
-  reason_required: "İptal gerekçesi yazılmalı.",
-  // Yetkisiz erişimde kaydın varlığı da doğrulanmaz (§18.4): "sizin değil"
-  // demek, kaydın var olduğunu söylerdi.
-  not_found: "Kayıt bulunamadı.",
+    "The deputy must also be a unit manager because delegation grants the covered manager's visibility scope.",
+  reason_required: "A cancellation reason is required.",
+  not_found: "Record not found.",
   too_long_for_self:
-    "Bu kadar uzun bir dönemi kendiniz giremezsiniz; yöneticiniz girebilir.",
+    "You cannot enter a period this long for yourself; your manager can enter it.",
   manager_not_found:
-    "Talebinizi karara bağlayacak aktif yönetici bulunamadı. Sistem yöneticisine başvurun.",
+    "No active manager was found to decide this request. Contact a system administrator.",
 };
 
 function fail(error: AbsenceError): AbsenceResult {
@@ -111,46 +108,33 @@ export interface AbsenceView {
   endDate: string;
   note: string | null;
   deputyName: string | null;
-  /** İptal edilmişse gerekçesi; edilmemişse `null`. */
+
   cancelledReason: string | null;
-  /** Talebin karar durumu. */
+  /** Decision status of the request. */
   status: NoActivityPeriodStatus;
-  /** Reddedilmişse yöneticinin yazdığı gerekçe. */
+
   decisionReason: string | null;
   decidedAt: Date | null;
-  /** Kararı veren kişinin adı. */
+
   decidedByName: string | null;
-  /** Kararın doğrudan yönetici, vekil veya üst yönetici yolunu belirtir. */
+
   decisionRoute: NoActivityDecisionRoute | null;
-  /** Bu satır için oturumdaki yöneticinin karar yetkisi var mı? */
+
   canDecide?: boolean;
-  /** Bu satır doğrudan yöneticinin iptal edebileceği kapsamda mı? */
+
   canCancel?: boolean;
-  /** Kaydı kişinin kendisi mi girdi, yöneticisi mi (Görev 11.8). */
+
   markedBySelf?: boolean;
 }
 
-/**
- * Ekip izin listesinin daraltmaları (Görev 11.4).
- *
- * İptal edilen kayıtlar listede kaldığı için (bilerek — aşağıda gerekçesi)
- * liste zamanla uzuyor ve "Kadir'in girilmiş dönemleri" sorusu gözle
- * taranarak cevaplanıyordu.
- */
+
 export interface AbsenceFilters {
   userId?: string;
-  /** `active` onaylı/geçerli, `pending` bekleyen, `rejected` reddedilen. */
+
   status?: "active" | "pending" | "rejected" | "cancelled";
 }
 
-/**
- * İzin ekranındaki yazma kapsamı.
- *
- * Yöneticiler yalnız kendi departmanlarındaki çalışanlar için doğrudan kayıt
- * açar. Ekranın okuma kapsamı bundan geniş olabilir; üst yöneticiler alt
- * organizasyonun izin geçmişini görür, karar düğmeleri ise satır bazında
- * ayrıca yetki kontrolünden geçer.
- */
+
 export async function departmentEmployeeIds(
   db: Pick<PrismaClient, "user">,
   managerId: string,
@@ -176,14 +160,7 @@ export async function departmentEmployeeIds(
   return people.map((person) => person.id);
 }
 
-/**
- * Yönetici vekâleti kurulurken kullanılabilecek aktif yöneticiler.
- *
- * Çalışan izinleri için bu küme kullanılmaz; çalışan yetkisi yalnızca
- * `departmentEmployeeIds` ile aynı departmana iner. Bu ayrı küme, mevcut
- * vekâlet akışında üst yöneticinin başka bir yöneticinin yokluğunu kayda
- * alabilmesi içindir. Vekâlet, çalışan izinlerine ek bir erişim vermez.
- */
+
 export async function subordinateManagerIds(
   db: Pick<PrismaClient, "user" | "$queryRaw">,
   managerId: string,
@@ -221,48 +198,47 @@ async function scopedDepartmentEmployees(
   const allowed = await visibleAbsenceUserIds(db, managerId, now);
   if (!supplied) return allowed;
 
-  // Çağıran önceden hesaplanmış bir liste gönderebilir. Bu liste hiçbir zaman
-  // yetki kaynağı değildir; yalnızca izin yönetimi kapsamının kesişimi olarak
-  // kullanılabilir.
+  // A caller may pass a precomputed list. It is never an authorization source;
+  // it can only narrow the absence-management scope.
   const suppliedSet = new Set(supplied);
   return allowed.filter((id) => suppliedSet.has(id));
 }
 
 /**
- * Ekip koşulu ve süzgeçler **`AND` ile** birleşir.
+ * The team condition and filters are combined with **`AND`**.
  *
- * Nesne yayma (`{ userId: { in: ekip }, ...suzgec }`) ile yazılmıştı ve bu bir
- * sızıntıydı: Prisma'da aynı alan iki kez verilince **sonuncusu kazanır**, yani
- * kişi süzgeci ekip koşulunu eziyordu. Adres çubuğuna asta olmayan birinin
- * kimliğini yazan yönetici onun izin kayıtlarını görebiliyordu.
+ * Object spreading (`{ userId: { in: team }, ...filters }`) caused a leak:
+ * when Prisma received the same field twice, **the last value won**, so the
+ * person filter replaced the team condition. A manager could put someone
+ * outside the team into the URL and view that person's leave records.
  *
- * `AND` listesi bu hatayı yapısal olarak imkânsız kılar: koşullar birbirini
- * ezemez, yalnız daraltır (§8.4). Sızıntı testi bulguyu yakaladı.
+ * The `AND` list makes this structurally impossible: conditions can only
+ * narrow the result (§8.4). The visibility test caught the original defect.
  */
 function absenceWhere(
-  ekip: string[],
+  team: string[],
   filters: AbsenceFilters,
 ): Prisma.NoActivityPeriodWhereInput {
-  const kosullar: Prisma.NoActivityPeriodWhereInput[] = [
-    { userId: { in: ekip } },
+  const conditions: Prisma.NoActivityPeriodWhereInput[] = [
+    { userId: { in: team } },
   ];
 
-  if (filters.userId) kosullar.push({ userId: filters.userId });
+  if (filters.userId) conditions.push({ userId: filters.userId });
   if (filters.status === "active") {
-    kosullar.push({ cancelledAt: null, status: "APPROVED" });
+    conditions.push({ cancelledAt: null, status: "APPROVED" });
   }
   if (filters.status === "pending") {
-    kosullar.push({ cancelledAt: null, status: "PENDING" });
+    conditions.push({ cancelledAt: null, status: "PENDING" });
   }
-  if (filters.status === "rejected") kosullar.push({ status: "REJECTED" });
+  if (filters.status === "rejected") conditions.push({ status: "REJECTED" });
   if (filters.status === "cancelled") {
-    kosullar.push({ cancelledAt: { not: null } });
+    conditions.push({ cancelledAt: { not: null } });
   }
 
-  return { AND: kosullar };
+  return { AND: conditions };
 }
 
-/** Yöneticinin ekibi için konulmuş işaretler. */
+/** Absence periods entered for a manager's team. */
 export async function listTeamAbsences(
   db: AbsenceDb,
   managerId: string,
@@ -271,24 +247,23 @@ export async function listTeamAbsences(
   options: { limit?: number; skip?: number; now?: Date } = {},
 ): Promise<AbsenceView[]> {
   const now = options.now ?? new Date();
-  const ekip = await scopedDepartmentEmployees(
+  const team = await scopedDepartmentEmployees(
     db,
     managerId,
     subordinates,
     now,
   );
-  if (ekip.length === 0) return [];
+  if (team.length === 0) return [];
 
-  // İptal edilenler de listelenir, üstü çizili olarak: kaybolan bir kayıt
-  // "ben bunu girmiş miydim?" sorusunu doğurur. İptal edildiğini görmek,
-  // hiç görmemekten iyidir (§16.5'teki genel kalıp).
+  // Cancelled records remain visible with a strike-through so users can
+  // distinguish history from an accidentally missing record (§16.5).
   const [actor, rows] = await Promise.all([
     db.user.findUnique({
       where: { id: managerId },
       select: { orgUnitId: true, isUnitManager: true, isActive: true },
     }),
     db.noActivityPeriod.findMany({
-      where: absenceWhere(ekip, filters),
+      where: absenceWhere(team, filters),
       ...(options.limit === undefined ? {} : { take: options.limit }),
       ...(options.skip === undefined ? {} : { skip: options.skip }),
       orderBy: [{ cancelledAt: { sort: "asc", nulls: "first" } }, { startDate: "desc" }],
@@ -343,7 +318,7 @@ export async function listTeamAbsences(
   }));
 }
 
-/** Süzgeçli toplam; sayfa sayısı buradan çıkar. */
+/** Count the filtered result; pagination derives its page count from this. */
 export async function countTeamAbsences(
   db: AbsenceDb,
   managerId: string,
@@ -351,30 +326,30 @@ export async function countTeamAbsences(
   filters: AbsenceFilters = {},
   now: Date = new Date(),
 ): Promise<number> {
-  const ekip = await scopedDepartmentEmployees(db, managerId, subordinates, now);
-  if (ekip.length === 0) return 0;
+  const team = await scopedDepartmentEmployees(db, managerId, subordinates, now);
+  if (team.length === 0) return 0;
 
-  return db.noActivityPeriod.count({ where: absenceWhere(ekip, filters) });
+  return db.noActivityPeriod.count({ where: absenceWhere(team, filters) });
 }
 
 /**
- * Kişinin **kendi** "faaliyet beklenmiyor" dönemi (Görev 11.8).
+ * A person's own "no activity expected" period (Task 11.8).
  *
- * Herkes kendi dönemini girebilir. Yönetici olmayan kişinin talebi, kendi
- * departmanındaki görevde olan yöneticilere gider. Bu yöneticiler izinliyse
- * aktif vekile, vekil yoksa ilk aktif üst yöneticiye yönlenir; yöneticinin
- * kendi kaydı ise doğrudan onaylıdır.
+ * Anyone can enter their own period. A non-manager's request goes to active
+ * managers in their department. If those managers are away, it is routed to
+ * an active deputy, or to the first active manager above them; a manager's own
+ * entry is approved directly.
  *
- * İki fark var:
+ * Two differences apply:
  *
- *   · Süre sınırı. Kişi ayarda yazan günden uzun bir dönem giremez; daha
- *     uzunu yöneticisi girer. Sınır yalnız kendi girişine ait: yöneticinin
- *     girdiği dönemde onu tanıyan biri kararı zaten vermiş oluyor.
- *   · Çalışan kendi adına vekil seçemez. Vekâlet yönetici düzeyinde bir
- *     karardır; birim yöneticisi kendi kaydında aktif bir yönetici seçebilir.
+ *   · Duration limit. A person cannot enter a period longer than the setting;
+ *     their manager can enter a longer one. The limit applies only to self-entry
+ *     because a manager's entry is already an authorized decision.
+ *   · An employee cannot choose a deputy for themselves. Delegation is a
+ *     manager-level decision; a unit manager may choose an active manager.
  *
- * Bekleyen kayıt geçerli sayılmaz; onaylanırsa hatırlatma ve katılım
- * hesaplarından düşer.
+ * A pending record is not effective; once approved, it is excluded from
+ * reminders and participation calculations.
  */
 export async function markOwnNoActivityPeriod(
   db: AbsenceDb & Pick<PrismaClient, "notificationQueue">,
@@ -407,13 +382,13 @@ export async function markOwnNoActivityPeriod(
     if (!deputy) return fail("deputy_not_manager");
   }
 
-  const sinir = await readNumericSetting(db, SETTING_KEYS.selfAbsenceMaxDays);
-  const gun =
+  const maximumDays = await readNumericSetting(db, SETTING_KEYS.selfAbsenceMaxDays);
+  const durationDays =
     Math.round(
       (toDateValue(input.endDate).getTime() - toDateValue(input.startDate).getTime()) /
         86_400_000,
     ) + 1;
-  if (gun > sinir) return fail("too_long_for_self");
+  if (durationDays > maximumDays) return fail("too_long_for_self");
 
   const status: NoActivityPeriodStatus = person.isUnitManager
     ? "APPROVED"
@@ -425,7 +400,7 @@ export async function markOwnNoActivityPeriod(
     if (approvers.length === 0) return fail("manager_not_found");
   }
 
-  const sonuc = await kaydet(
+  const result = await save(
     db,
     {
       userId,
@@ -445,7 +420,7 @@ export async function markOwnNoActivityPeriod(
         }
       : { status },
   );
-  if (!sonuc.ok) return sonuc;
+  if (!result.ok) return result;
 
   if (approvers.length > 0) {
     for (const approver of approvers) {
@@ -456,16 +431,16 @@ export async function markOwnNoActivityPeriod(
           personName: person.fullName,
           range: `${input.startDate} – ${input.endDate}`,
         },
-        idempotencyKey: `absence_request:${sonuc.id}:${approver.id}`,
+        idempotencyKey: `absence_request:${result.id}:${approver.id}`,
         now,
       });
     }
   }
 
-  return sonuc;
+  return result;
 }
 
-/** Kişinin kendi dönemleri; iptal edilenler de görünür. */
+/** A person's own periods; cancelled records remain visible. */
 export async function listOwnAbsences(
   db: AbsenceDb,
   userId: string,
@@ -512,7 +487,7 @@ export async function listOwnAbsences(
   }));
 }
 
-/** Kişinin kendi dönem sayısı; sayfalama için. */
+/** Count a person's own periods for pagination. */
 export async function countOwnAbsences(
   db: AbsenceDb,
   userId: string,
@@ -534,52 +509,52 @@ export async function markNoActivityPeriod(
   });
   if (!manager?.isUnitManager || !manager.isActive) return fail("not_subordinate");
 
-  // Yönetici kendi kaydını bu ortak servis üzerinden açabilsin; bu kayıt
-  // onay beklemez. Ekipten seçilecek çalışanlar ise yalnız aynı departmandaki
-  // aktif ve yönetici olmayan kişilerdir.
-  const kendiKaydi = input.userId === managerId;
-  const ekip = kendiKaydi
+  // A manager can enter their own record through this shared service; it does
+  // not wait for approval. Employee selections are limited to active,
+  // non-manager people in the same department.
+  const ownRecord = input.userId === managerId;
+  const team = ownRecord
     ? []
     : await departmentEmployeeIds(db, managerId, { activeOnly: true });
-  const vekaletYoneticileri = !kendiKaydi
+  const deputyManagers = !ownRecord
     ? await subordinateManagerIds(db, managerId)
     : [];
-  const yoneticiVekaleti =
-    !kendiKaydi && vekaletYoneticileri.includes(input.userId);
+  const managerDelegation =
+    !ownRecord && deputyManagers.includes(input.userId);
 
-  // Çalışan yetkisi burada özellikle doğrudan departmanla sınırlıdır.
-  // Bunun tek ayrı yolu, mevcut vekâlet akışı için aktif bir yöneticinin
-  // yokluğunu ve vekilini kayda almaktır; bu yol çalışanlara açılamaz.
-  if (!kendiKaydi && !ekip.includes(input.userId) && !yoneticiVekaleti) {
+  // Employee scope is deliberately limited to the direct department here.
+  // The only exception records an active manager's absence and deputy for the
+  // existing delegation flow; employees cannot use that path.
+  if (!ownRecord && !team.includes(input.userId) && !managerDelegation) {
     return fail("not_subordinate");
   }
 
   if (input.deputyId) {
-    // **Vekâlet yalnız yönetici düzeyinde** (ürün sahibi kararı,
-    // 21.08.2026). İki gerekçesi var:
+    // **Delegation is manager-only** (product decision, 2026-08-21). There
+    // are two reasons:
     //
-    //   · Devredilecek iş yöneticide birikiyor — onay kuyruğu. Çalışanda
-    //     devredilecek şey genelde yalnız açık sorular ve onlar için §9.3
-    //     zaten bir yol veriyor.
-    //   · Vekil, vekâlet ettiği kişinin kapsamını kazanıyor. Yönetici
-    //     olmayan birine bir departmanın kapsamını açmak, ağaçtan gelmeyen
-    //     bir yetki yaratırdı.
+    //   · The delegated work is a manager's approval queue. For an employee,
+    //     the delegated work is usually open questions, which §9.3 already
+    //     handles.
+    //   · A deputy gains the covered person's visibility scope. Giving a
+    //     department scope to a non-manager would create authority outside
+    //     the organization tree.
     if (input.deputyId === input.userId) return fail("deputy_is_self");
 
-    if (!kendiKaydi && !yoneticiVekaleti) return fail("absent_not_manager");
-    if (!vekaletYoneticileri.includes(input.deputyId)) {
-      const vekil = await db.user.findUnique({
+    if (!ownRecord && !managerDelegation) return fail("absent_not_manager");
+    if (!deputyManagers.includes(input.deputyId)) {
+      const deputy = await db.user.findUnique({
         where: { id: input.deputyId },
         select: { isUnitManager: true, isActive: true },
       });
-      if (!vekil?.isUnitManager || !vekil.isActive) {
+      if (!deputy?.isUnitManager || !deputy.isActive) {
         return fail("deputy_not_manager");
       }
       return fail("not_subordinate");
     }
   }
 
-  return kaydet(db, input, managerId, now, {
+  return save(db, input, managerId, now, {
     status: "APPROVED",
     decidedAt: now,
     decidedById: managerId,
@@ -588,13 +563,13 @@ export async function markNoActivityPeriod(
 }
 
 /**
- * Kaydı yazan ortak yol (Görev 11.8).
+ * Shared write path for absence records (Task 11.8).
  *
- * Müdürün girdiği ve kişinin kendi girdiği dönem aynı kuralları paylaşıyor:
- * aynı denetim izi, aynı çakışma kısıtı. İki ayrı yazma yolu, birinde
- * düzeltilen bir kuralın diğerinde kalması demekti.
+ * Manager-entered and self-entered periods share the same rules, audit trail,
+ * and overlap constraint. Separate write paths would let a rule fixed in one
+ * path remain broken in the other.
  */
-async function kaydet(
+async function save(
   db: AbsenceDb,
   input: AbsenceInput,
   markedById: string,
@@ -609,7 +584,7 @@ async function kaydet(
 ): Promise<AbsenceResult> {
   try {
     const created = await db.$transaction(async (tx) => {
-      const satir = await tx.noActivityPeriod.create({
+      const row = await tx.noActivityPeriod.create({
         data: {
           userId: input.userId,
           startDate: toDateValue(input.startDate),
@@ -626,9 +601,8 @@ async function kaydet(
         },
       });
 
-      // Vekil atamak bir yetki devridir (§4.5) ve yetki değişiklikleri iz
-      // bırakır (§15.2). İşin kendi işleminde yazılır: "vekâlet verildi ama
-      // izi yok" durumu mümkün olmamalı.
+      // Assigning a deputy grants authority (§4.5), and authority changes are
+      // audited (§15.2). Record both in the same transaction.
       await recordAudit(tx, {
         userId: markedById,
         objectType: AUDIT_OBJECTS.user,
@@ -638,7 +612,7 @@ async function kaydet(
             ? AUDIT_ACTIONS.absenceRequestSubmitted
             : AUDIT_ACTIONS.absenceMarked,
         detail: {
-          periodId: satir.id,
+          periodId: row.id,
           startDate: input.startDate,
           endDate: input.endDate,
           deputyId: input.deputyId ?? null,
@@ -647,18 +621,18 @@ async function kaydet(
         now,
       });
 
-      return satir;
+      return row;
     });
 
     return { ok: true, id: created.id, status: created.status };
   } catch (error) {
-    // Çakışma veritabanı kısıtıyla engellenir (`NoActivityPeriod_no_overlap`);
-    // uygulama katmanı devre dışıyken de geçerli olsun diye orada durur.
+    // Overlaps are prevented by the database constraint
+    // (`NoActivityPeriod_no_overlap`) so the rule still holds if the app layer
+    // is bypassed.
     //
-    // **Çıplak ad aranmıyor**: paketlenmiş kaynakta bu ad zaten geçiyor ve
-    // başka bir veritabanı hatası "çakışıyor" diye çevriliyordu
-    // (denetim 23.08.2026, bulgu 11). Yardımcı SQLSTATE kodunu ve kısıt
-    // adının tırnaklı biçimini birlikte arıyor.
+    // Do not match the bare constraint name: bundled sources may contain that
+    // text and turn an unrelated database error into an overlap error. The
+    // helper checks both SQLSTATE and the quoted constraint name.
     if (isExclusionViolation(error, "NoActivityPeriod_no_overlap")) {
       return fail("overlaps");
     }
@@ -667,15 +641,14 @@ async function kaydet(
 }
 
 /**
- * İşareti **iptal eder** (denetim 21.08.2026, bulgu 7).
+ * Cancel an absence record (audit finding 7, 2026-08-21).
  *
- * Silmez. Vekilin bütün geçmiş görünürlüğü bu satırdan türer (§4.5); satır
- * gidince vekil, vekâlet ettiği dönemin kayıtlarını bir anda kaybeder ve
- * "sonradan soru gelirse cevap verebilmeli" kuralı sessizce çöker. Silme
- * ayrıca veritabanı tetikleyicisiyle de engelli.
+ * Do not delete it. A deputy's historical visibility derives from this row
+ * (§4.5); deleting it would silently remove the covered period's records.
+ * Database triggers also prevent physical deletion.
  *
- * Yalnızca kendi ekibi için: başkasının ekibindeki işaret bulunamamış
- * sayılır, "senin değil" demek kaydın varlığını ele verirdi.
+ * Only the manager's own team is in scope. Treat another team's record as
+ * missing so the response does not disclose that it exists.
  */
 export async function cancelNoActivityPeriod(
   db: AbsenceDb,
@@ -684,15 +657,15 @@ export async function cancelNoActivityPeriod(
   reason: string,
   now: Date = new Date(),
 ): Promise<AbsenceResult> {
-  const gerekce = reason.trim();
-  if (gerekce.length === 0) return fail("reason_required");
+  const trimmedReason = reason.trim();
+  if (trimmedReason.length === 0) return fail("reason_required");
 
   return db.$transaction(async (tx) => {
-    // Satır kilitlenir: iki yönetici aynı kaydı aynı anda iptal ederse
-    // ikincisi burada durur ve ikinci bir iptal izi doğmaz.
+    // Lock row: if two managers cancel the same record simultaneously,
+    // the second waits here and prevents duplicate audit logs.
     await tx.$executeRaw`SELECT "id" FROM "NoActivityPeriod" WHERE "id" = ${periodId} FOR UPDATE`;
 
-    const [actor, kayit] = await Promise.all([
+    const [actor, record] = await Promise.all([
       tx.user.findUnique({
         where: { id: managerId },
         select: {
@@ -713,29 +686,28 @@ export async function cancelNoActivityPeriod(
         },
       }),
     ]);
-    if (!kayit) return fail("not_found");
+    if (!record) return fail("not_found");
 
-    const izinliKendi = kayit.userId === managerId;
-    const izinliDepartmandaCalisan =
+    const isSelf = record.userId === managerId;
+    const isDepartmentEmployee =
       actor?.isUnitManager === true &&
       actor.isActive &&
-      kayit.user.orgUnitId === actor.orgUnitId &&
-      kayit.user.isUnitManager === false;
-    const yoneticiVekaleti =
-      kayit.deputyId !== null &&
+      record.user.orgUnitId === actor.orgUnitId &&
+      record.user.isUnitManager === false;
+    const isManagerDeputy =
+      record.deputyId !== null &&
       actor?.isUnitManager === true &&
       actor.isActive &&
-      kayit.user.isUnitManager &&
-      (await subordinateManagerIds(tx, managerId)).includes(kayit.userId);
+      record.user.isUnitManager &&
+      (await subordinateManagerIds(tx, managerId)).includes(record.userId);
 
-    if (!izinliKendi && !izinliDepartmandaCalisan && !yoneticiVekaleti) {
+    if (!isSelf && !isDepartmentEmployee && !isManagerDeputy) {
       return fail("not_found");
     }
 
-    const gecerliKayit = await tx.noActivityPeriod.findFirst({
-      // Bekleyen talep de sahibi tarafından geri çekilebilir. `GECERLI_DONEM`
-      // yalnız hatırlatma ve skor hesaplarının geçerli kayıtlarını seçer;
-      // burada PENDING de işlem yapılabilir durumda olmalıdır.
+    const validRecord = await tx.noActivityPeriod.findFirst({
+      // A pending request can also be withdrawn by its owner.
+      // Both PENDING and APPROVED states must be actionable here.
       where: {
         id: periodId,
         cancelledAt: null,
@@ -743,39 +715,39 @@ export async function cancelNoActivityPeriod(
       },
       select: { id: true, userId: true, deputyId: true, status: true },
     });
-    if (!gecerliKayit) return fail("not_found");
+    if (!validRecord) return fail("not_found");
 
     await tx.noActivityPeriod.update({
-      where: { id: gecerliKayit.id },
+      where: { id: validRecord.id },
       data: {
         cancelledAt: now,
         cancelledById: managerId,
-        cancellationReason: gerekce,
+        cancellationReason: trimmedReason,
       },
     });
 
-    // Vekâlet bir **yetki**dir; verilmesi de geri alınması da iz bırakır
-    // (§15.2). Gerekçe metni ize yazılmaz: denetim izi içerik taşımaz.
+    // Delegation is an authorization grant; grant and revocation are audited.
+    // The reason text is excluded from the audit log to keep audit trails lean.
     await recordAudit(tx, {
       userId: managerId,
       objectType: AUDIT_OBJECTS.user,
-      objectId: gecerliKayit.userId,
+      objectId: validRecord.userId,
       action:
-        gecerliKayit.status === "PENDING"
+        validRecord.status === "PENDING"
           ? AUDIT_ACTIONS.absenceRequestWithdrawn
           : AUDIT_ACTIONS.absenceCancelled,
       detail: {
-        periodId: gecerliKayit.id,
-        hadDeputy: gecerliKayit.deputyId !== null,
-        status: gecerliKayit.status,
+        periodId: validRecord.id,
+        hadDeputy: validRecord.deputyId !== null,
+        status: validRecord.status,
       },
       now,
     });
 
     return {
       ok: true,
-      id: gecerliKayit.id,
-      status: gecerliKayit.status,
+      id: validRecord.id,
+      status: validRecord.status,
     } satisfies AbsenceResult;
   });
 }
@@ -783,11 +755,11 @@ export async function cancelNoActivityPeriod(
 export type AbsenceDecision = "APPROVED" | "REJECTED";
 
 /**
- * Bekleyen çalışan talebini karara bağlar.
+ * Decides on a pending employee absence request.
  *
- * Satır önce kilitlenir, sonra hem durum hem departman tekrar doğrulanır.
- * Böylece aynı departmandaki iki yönetici aynı anda tıklasa bile yalnız ilk
- * karar kaydedilir; başka departmandaki bir kaydın kimliği de açığa çıkmaz.
+ * The row is locked first, then status and department are re-verified.
+ * Ensures that if two managers in the same department click simultaneously,
+ * only the first decision is saved.
  */
 export async function decideNoActivityPeriod(
   db: AbsenceDb,
@@ -797,15 +769,15 @@ export async function decideNoActivityPeriod(
   reason = "",
   now: Date = new Date(),
 ): Promise<AbsenceResult> {
-  const gerekce = reason.trim();
-  if (decision === "REJECTED" && gerekce.length === 0) {
+  const trimmedReason = reason.trim();
+  if (decision === "REJECTED" && trimmedReason.length === 0) {
     return fail("reason_required");
   }
 
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT "id" FROM "NoActivityPeriod" WHERE "id" = ${periodId} FOR UPDATE`;
 
-    const [actor, kayit] = await Promise.all([
+    const [actor, record] = await Promise.all([
       tx.user.findUnique({
         where: { id: managerId },
         select: {
@@ -834,28 +806,26 @@ export async function decideNoActivityPeriod(
     if (
       !actor?.isUnitManager ||
       !actor.isActive ||
-      !kayit ||
-      kayit.status !== "PENDING" ||
-      kayit.cancelledAt !== null ||
-      kayit.user.isUnitManager
+      !record ||
+      record.status !== "PENDING" ||
+      record.cancelledAt !== null ||
+      record.user.isUnitManager
     ) {
       return fail("not_found");
     }
 
-    // Doğrudan yönetici, aktif vekil ve geçici üst yönetici yolları aynı
-    // çözümden gelir. Böylece vekil ya da üst yönetici, formdaki talep
-    // kimliğini değiştirerek başka bir departmana erişemez.
-    const route = await absenceDecisionRoute(tx, managerId, kayit.userId, now);
+    // Direct manager, active deputy, and escalation routing all resolve through the same path.
+    const route = await absenceDecisionRoute(tx, managerId, record.userId, now);
     if (!route) return fail("not_found");
 
-    const yeniStatus: NoActivityPeriodStatus = decision;
+    const newStatus: NoActivityPeriodStatus = decision;
     await tx.noActivityPeriod.update({
-      where: { id: kayit.id },
+      where: { id: record.id },
       data: {
-        status: yeniStatus,
+        status: newStatus,
         decidedAt: now,
         decidedById: managerId,
-        decisionReason: decision === "REJECTED" ? gerekce : null,
+        decisionReason: decision === "REJECTED" ? trimmedReason : null,
         decisionRoute: route,
       },
     });
@@ -863,52 +833,52 @@ export async function decideNoActivityPeriod(
     await recordAudit(tx, {
       userId: managerId,
       objectType: AUDIT_OBJECTS.user,
-      objectId: kayit.userId,
+      objectId: record.userId,
       action:
         decision === "APPROVED"
           ? AUDIT_ACTIONS.absenceRequestApproved
           : AUDIT_ACTIONS.absenceRequestRejected,
       detail: {
-        periodId: kayit.id,
-        status: yeniStatus,
+        periodId: record.id,
+        status: newStatus,
         decisionRoute: route,
       },
       now,
     });
 
     await enqueueNotification(tx, {
-      userId: kayit.userId,
+      userId: record.userId,
       eventType:
         decision === "APPROVED"
           ? NOTIFICATION_EVENTS.absenceRequestApproved
           : NOTIFICATION_EVENTS.absenceRequestRejected,
       payload: {
-        personName: kayit.user.fullName,
-        range: `${kayit.startDate.toISOString().slice(0, 10)} – ${kayit.endDate
+        personName: record.user.fullName,
+        range: `${record.startDate.toISOString().slice(0, 10)} – ${record.endDate
           .toISOString()
           .slice(0, 10)}`,
         approverName: actor.fullName,
         decisionRoute: route,
       },
-      idempotencyKey: `absence_decision:${kayit.id}:${decision}`,
+      idempotencyKey: `absence_decision:${record.id}:${decision}`,
       now,
     });
 
-    return { ok: true, id: kayit.id, status: yeniStatus } satisfies AbsenceResult;
+    return { ok: true, id: record.id, status: newStatus } satisfies AbsenceResult;
   });
 }
 
-/** Kişi o gün için "faaliyet beklenmiyor" işareti taşıyor mu? */
+/** Check if user has "no activity expected" period on the given day. */
 export async function isNoActivityDay(
   db: Pick<PrismaClient, "noActivityPeriod">,
   userId: string,
   day: string,
 ): Promise<boolean> {
   const date = toDateValue(day);
-  const kayit = await db.noActivityPeriod.findFirst({
-    where: { userId, ...GECERLI_DONEM, startDate: { lte: date }, endDate: { gte: date } },
+  const record = await db.noActivityPeriod.findFirst({
+    where: { userId, ...CURRENT_PERIOD, startDate: { lte: date }, endDate: { gte: date } },
     select: { id: true },
   });
 
-  return kayit !== null;
+  return record !== null;
 }

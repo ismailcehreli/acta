@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { useLocale, useTranslations } from "@/components/i18n";
 
 import type { ManagedUser } from "@/server/users/list";
 import { Avatar } from "@/components/ui/avatar";
@@ -34,6 +35,7 @@ export function UserEditForm({
   units: UnitChoice[];
   mode: EditMode;
 }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     updateUserAction,
     emptyUserFormState,
@@ -44,33 +46,31 @@ export function UserEditForm({
   return (
     <Card>
       <CardHeader
-        title={rootSelf ? "Ana hesap ayarları" : "Kullanıcı bilgileri"}
+        title={rootSelf ? t("screens.users.accountSettings") : t("screens.users.userInformation")}
         description={
           rootSelf
-            ? "Ana hesabın kimliği, sistem yöneticisi rolü ve aktiflik durumu korunur. Aşağıdaki seçenekler yalnızca hesabın çalışma biçimini belirler."
+            ? t("screens.users.accountSettingsDescription")
             : fullAccess
-              ? "Bu hesabın iletişim, birim ve rol ayarlarını buradan güncelleyebilirsiniz."
-              : "Birim yöneticisi olarak yalnızca ad ve unvanı güncelleyebilirsiniz."
+              ? t("screens.users.userInformationDescription")
+              : t("screens.users.managerDescription")
         }
       />
       <CardBody>
         {rootSelf ? (
           <div className="mb-5">
             <Alert tone="info">
-              Bu hesap korunur. Başka hiçbir kullanıcı hesabın adını, e-posta
-              adresini, sistem yöneticisi rolünü veya aktiflik durumunu
-              değiştiremez.
+              {t("screens.users.protectedAccount")}
             </Alert>
           </div>
         ) : null}
 
-        <form action={formAction} className="flex flex-col gap-5">
+        <form action={formAction} className="flex flex-col gap-5" data-test="user-edit-form">
           <input type="hidden" name="id" value={user.id} />
 
           <FormGrid columns={fullAccess ? 3 : 2}>
             {!rootSelf ? (
               <>
-                <Field htmlFor="fullName" label="Ad soyad" required>
+                <Field htmlFor="fullName" label={t("screens.users.fullName")} required>
                   <Input
                     id="fullName"
                     name="fullName"
@@ -78,13 +78,13 @@ export function UserEditForm({
                     required
                   />
                 </Field>
-                <Field htmlFor="title" label="Unvan">
+                <Field htmlFor="title" label={t("screens.users.title")}>
                   <Input
                     id="title"
                     name="title"
                     defaultValue={user.title ?? ""}
                     maxLength={100}
-                    placeholder="İsteğe bağlı"
+                    placeholder={t("screens.users.optional")}
                   />
                 </Field>
               </>
@@ -92,7 +92,7 @@ export function UserEditForm({
 
             {fullAccess ? (
               <>
-                <Field htmlFor="email" label="E-posta" required>
+                <Field htmlFor="email" label={t("common.email")} required>
                   <Input
                     id="email"
                     name="email"
@@ -101,7 +101,7 @@ export function UserEditForm({
                     required
                   />
                 </Field>
-                <Field htmlFor="orgUnitId" label="Birim" required>
+                <Field htmlFor="orgUnitId" label={t("screens.users.unit")} required>
                   <Select
                     id="orgUnitId"
                     name="orgUnitId"
@@ -119,7 +119,7 @@ export function UserEditForm({
             ) : null}
 
             {rootSelf ? (
-              <Field htmlFor="orgUnitId" label="Bağlı olduğu birim" required>
+              <Field htmlFor="orgUnitId" label={t("screens.users.unit")} required>
                 <Select
                   id="orgUnitId"
                   name="orgUnitId"
@@ -139,7 +139,7 @@ export function UserEditForm({
           {fullAccess || rootSelf ? (
             <fieldset className="flex flex-col gap-3 border-t border-line pt-4">
               <legend className="text-sm font-medium text-ink">
-                Çalışma seçenekleri
+                {t("screens.users.workOptions")}
               </legend>
 
               {fullAccess ? (
@@ -147,12 +147,12 @@ export function UserEditForm({
                   <Checkbox
                     name="isUnitManager"
                     defaultChecked={user.isUnitManager}
-                    label="Birim yöneticisi"
+                    label={t("screens.users.unitManager")}
                   />
                   <Checkbox
                     name="isSystemAdmin"
                     defaultChecked={user.isSystemAdmin}
-                    label="Sistem yöneticisi"
+                    label={t("screens.users.systemAdministrator")}
                   />
                 </>
               ) : null}
@@ -160,37 +160,36 @@ export function UserEditForm({
               <Checkbox
                 name="isScored"
                 defaultChecked={user.isScored}
-                label="Skoru hesaplansın"
+                label={t("screens.users.includeInScoring")}
               />
               <Checkbox
                 name="canAppreciate"
                 defaultChecked={user.canAppreciate}
-                label="Takdir verebilir"
+                label={t("screens.users.canAppreciate")}
               />
               <Checkbox
                 name="canViewReports"
                 defaultChecked={user.canViewReports}
-                label="Yönetim raporlarını görebilir"
-                description="Rapor kapsamı, kullanıcının bağlı olduğu birim ve alt birimlerle sınırlıdır."
+                label={t("screens.users.canViewReports")}
+                description={t("screens.users.canViewReportsDescription")}
               />
               <Checkbox
                 name="canViewScoreReports"
                 defaultChecked={user.canViewScoreReports}
-                label="Skor ve takdir raporlarını görebilir"
-                description="Skor raporu ayrı bir yetkidir; rapor ekranındaki diğer özetleri etkilemez."
+                label={t("screens.users.canViewScoreReports")}
+                description={t("screens.users.canViewScoreReportsDescription")}
               />
               <Checkbox
                 name="writesActivities"
                 defaultChecked={user.writesActivities}
-                label="Günlük faaliyet yazar"
+                label={t("screens.users.writesActivities")}
               />
             </fieldset>
           ) : null}
 
           {!fullAccess && !rootSelf ? (
             <p className="border-t border-line pt-4 text-[length:var(--text-sm)] text-muted">
-              Roller, skor ve faaliyet seçenekleri yalnızca sistem yöneticisi
-              tarafından değiştirilebilir.
+              {t("screens.users.managerOnlyOptions")}
             </p>
           ) : null}
 
@@ -198,7 +197,7 @@ export function UserEditForm({
             message={<FormMessage error={state.error} success={state.success} />}
           >
             <Button type="submit" variant="primary" disabled={pending}>
-              {pending ? "Kaydediliyor…" : "Değişiklikleri kaydet"}
+              {pending ? t("screens.users.saving") : t("screens.users.saveChanges")}
             </Button>
           </FormActions>
         </form>
@@ -208,6 +207,7 @@ export function UserEditForm({
 }
 
 function CloseConversationsForm({ userId }: { userId: string }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     closeConversationsForUserAction,
     emptyUserFormState,
@@ -216,11 +216,11 @@ function CloseConversationsForm({ userId }: { userId: string }) {
   return (
     <form action={formAction} className="mt-3 flex max-w-xl flex-col gap-3">
       <input type="hidden" name="id" value={userId} />
-      <Field htmlFor="close-reason" label="Kapatma gerekçesi" required>
+      <Field htmlFor="close-reason" label={t("screens.users.closeReason")} required>
         <Input id="close-reason" name="reason" required maxLength={500} />
       </Field>
       <Button type="submit" size="sm" disabled={pending}>
-        Açık konuşmaları kapat
+        {t("screens.users.closeOpenConversations")}
       </Button>
       <FormMessage error={state.error} success={state.success} />
     </form>
@@ -234,6 +234,7 @@ function DeactivateButton({
   user: ManagedUser;
   canCloseConversations: boolean;
 }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     deactivateUserAction,
     emptyUserFormState,
@@ -244,7 +245,7 @@ function DeactivateButton({
       <form action={formAction}>
         <input type="hidden" name="id" value={user.id} />
         <Button type="submit" variant="danger" disabled={pending}>
-          {pending ? "Pasifleştiriliyor…" : "Hesabı pasifleştir"}
+          {pending ? t("screens.users.deactivating") : t("screens.users.deactivate")}
         </Button>
       </form>
       {state.error ? (
@@ -254,7 +255,7 @@ function DeactivateButton({
             <ul className="mt-2 ml-5 list-disc text-muted">
               {state.blockers.openConversationCount > 0 ? (
                 <li>
-                  {state.blockers.openConversationCount} açık konuşma var.
+                  {t("screens.users.openConversationCount", { count: state.blockers.openConversationCount })}
                   {canCloseConversations ? (
                     <CloseConversationsForm userId={user.id} />
                   ) : null}
@@ -262,10 +263,9 @@ function DeactivateButton({
               ) : null}
               {state.blockers.subordinates.length > 0 ? (
                 <li>
-                  Önce şu kişilerin yöneticiliğini devredin: {" "}
-                  {state.blockers.subordinates
-                    .map((person) => person.fullName)
-                    .join(", ")}
+                  {t("screens.users.transferManagers", {
+                    users: state.blockers.subordinates.map((person) => person.fullName).join(", "),
+                  })}
                 </li>
               ) : null}
             </ul>
@@ -277,6 +277,7 @@ function DeactivateButton({
 }
 
 function ReactivateButton({ user }: { user: ManagedUser }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     reactivateUserAction,
     emptyUserFormState,
@@ -287,7 +288,7 @@ function ReactivateButton({ user }: { user: ManagedUser }) {
       <form action={formAction}>
         <input type="hidden" name="id" value={user.id} />
         <Button type="submit" disabled={pending}>
-          {pending ? "Aktifleştiriliyor…" : "Hesabı aktifleştir"}
+          {pending ? t("screens.users.activating") : t("screens.users.activate")}
         </Button>
       </form>
       <FormMessage error={state.error} success={state.success} />
@@ -296,6 +297,7 @@ function ReactivateButton({ user }: { user: ManagedUser }) {
 }
 
 function PasswordForm({ user }: { user: ManagedUser }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     setUserPasswordAction,
     emptyUserFormState,
@@ -303,14 +305,11 @@ function PasswordForm({ user }: { user: ManagedUser }) {
 
   return (
     <div className="border-t border-line pt-5">
-      <h3 className="text-sm font-semibold text-ink">Parolayı yenile</h3>
-      <p className="mt-1 text-xs text-muted">
-        Yeni parola mevcut oturumları kapatır. Parolanın kendisini kullanıcıya
-        güvenli bir yoldan iletin.
-      </p>
+      <h3 className="text-sm font-semibold text-ink">{t("screens.users.renewPassword")}</h3>
+      <p className="mt-1 text-xs text-muted">{t("screens.users.passwordDescription")}</p>
       <form action={formAction} className="mt-3 flex flex-wrap items-end gap-3">
         <input type="hidden" name="id" value={user.id} />
-        <Field htmlFor="new-password" label="Yeni parola" required hint="En az 10 karakter">
+        <Field htmlFor="new-password" label={t("screens.users.newPassword")} required hint={t("screens.users.passwordHint")}>
           <Input
             id="new-password"
             name="newPassword"
@@ -320,7 +319,7 @@ function PasswordForm({ user }: { user: ManagedUser }) {
           />
         </Field>
         <Button type="submit" variant="primary" disabled={pending}>
-          {pending ? "Değiştiriliyor…" : "Parolayı değiştir"}
+          {pending ? t("screens.users.changing") : t("screens.users.changePassword")}
         </Button>
       </form>
       <div className="mt-3">
@@ -331,6 +330,7 @@ function PasswordForm({ user }: { user: ManagedUser }) {
 }
 
 function ResetLinkButton({ user }: { user: ManagedUser }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     triggerPasswordResetAction,
     emptyUserFormState,
@@ -338,15 +338,12 @@ function ResetLinkButton({ user }: { user: ManagedUser }) {
 
   return (
     <div className="border-t border-line pt-5">
-      <h3 className="text-sm font-semibold text-ink">Parola bağlantısı</h3>
-      <p className="mt-1 text-xs text-muted">
-        Kullanıcı kendi e-posta adresine gelen bağlantıyla yeni parolasını
-        belirler.
-      </p>
+      <h3 className="text-sm font-semibold text-ink">{t("screens.users.passwordLink")}</h3>
+      <p className="mt-1 text-xs text-muted">{t("screens.users.passwordLinkDescription")}</p>
       <form action={formAction} className="mt-3">
         <input type="hidden" name="id" value={user.id} />
         <Button type="submit" disabled={pending}>
-          {pending ? "Gönderiliyor…" : "Sıfırlama bağlantısı gönder"}
+          {pending ? t("screens.users.sending") : t("screens.users.sendResetLink")}
         </Button>
       </form>
       <div className="mt-3">
@@ -365,20 +362,21 @@ export function UserSecurityPanel({
   canSetPassword: boolean;
   canCloseConversations: boolean;
 }) {
+  const t = useTranslations();
   return (
     <Card>
       <CardHeader
-        title="Hesap işlemleri"
-        description="Aktiflik ve parola işlemleri ayrı tutulur; geçmiş kayıtlar silinmez."
+        title={t("screens.users.accountActions")}
+        description={t("screens.users.securityDescription")}
       />
       <CardBody className="flex flex-col gap-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold text-ink">Hesap durumu</p>
+            <p className="text-sm font-semibold text-ink">{t("screens.users.accountStatus")}</p>
             <p className="mt-1 text-xs text-muted">
               {user.isActive
-                ? "Kullanıcı sisteme giriş yapabilir."
-                : "Kullanıcı sisteme giriş yapamaz; geçmiş kayıtları korunur."}
+                ? t("screens.users.canSignIn")
+                : t("screens.users.cannotSignIn")}
             </p>
           </div>
           {user.isActive ? (
@@ -402,25 +400,27 @@ export function UserSecurityPanel({
 }
 
 export function UserIdentityCard({ user }: { user: ManagedUser }) {
+  const locale = useLocale();
+  const t = useTranslations();
   return (
     <Card>
       <CardBody className="flex flex-wrap items-center gap-4">
-        <Avatar user={user} size={72} />
+        <Avatar user={user} size={72} locale={locale} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[length:var(--text-xl)] font-semibold text-ink">
               {user.fullName}
             </h2>
-            {user.isRoot ? <Badge tone="primary">Ana sistem yöneticisi</Badge> : null}
-            {!user.isActive ? <Badge tone="neutral">Pasif</Badge> : null}
+            {user.isRoot ? <Badge tone="primary">{t("screens.users.primarySystemAdministrator")}</Badge> : null}
+            {!user.isActive ? <Badge tone="neutral">{t("screens.users.inactive")}</Badge> : null}
           </div>
           <p className="mt-1 text-sm text-muted">
             {[user.title, user.orgUnitName, user.email].filter(Boolean).join(" · ")}
           </p>
           <p className="mt-2 text-xs text-faint">
             {user.lastLoginAt
-              ? `Son giriş: ${formatInstantShort(user.lastLoginAt)}`
-              : "Henüz giriş yapmadı"}
+              ? t("screens.users.lastSignInAt", { date: formatInstantShort(user.lastLoginAt, locale) })
+              : t("screens.users.neverSignedIn")}
           </p>
         </div>
       </CardBody>

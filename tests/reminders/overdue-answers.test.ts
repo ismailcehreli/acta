@@ -10,16 +10,14 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// "3 iş günüdür cevap yok" (§12.2): sorumluya **ve yöneticisine** gider.
+// "No answer for 3 business days" (§12.2): sent to assignee and their manager.
 //
-// Sayaç sorumluluğun **son el değiştirdiği** andan işler (ürün sahibi kararı,
-// 18.08.2026): konuşmanın açılışından ölçmek, canlı bir tartışmanın ortasında
-// da hatırlatma göndermek demekti.
+// Counter runs from the moment responsibility last changed hands (18.08.2026):
+// measuring from conversation opening would fire reminders in the middle of active discussion.
 //
-// Bu kural §9.3'teki 10 iş günüyle aynı şey değildir: o, soranın üstüne
-// kapatma yetkisi verir; bu, cevap vermeyene hatırlatma gönderir.
+// Not the same as 10 business days in §9.3: that allows closing; this sends reminders.
 
-const ACILIS = new Date("2026-08-17T09:00:00.000Z"); // Pazartesi
+const OPENED_AT = new Date("2026-08-17T09:00:00.000Z"); // Monday
 
 beforeEach(async () => {
   await resetDatabase();
@@ -30,187 +28,185 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function acikKonusma() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const gm = await createOrgUnit({ name: "Genel Müdürlük", parentId: root.id });
-  const kaliphane = await createOrgUnit({ name: "Kalıphane", parentId: gm.id });
+async function setupOpenConversation() {
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
+  const gm = await createOrgUnit({ name: "Executive Office", parentId: root.id });
+  const workshop = await createOrgUnit({ name: "Workshop", parentId: gm.id });
 
-  const genelMudur = await createUser(gm.id, {
-    fullName: "Genel Müdür",
+  const generalManager = await createUser(gm.id, {
+    fullName: "General Manager",
     isUnitManager: true,
   });
-  const kalipMudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const workshopManager = await createUser(workshop.id, {
+    fullName: "Workshop Manager",
     isUnitManager: true,
   });
 
   const activity = await testDb.activity.create({
     data: {
-      authorId: kalipMudur.id,
-      authorOrgUnitId: kaliphane.id,
+      authorId: workshopManager.id,
+      authorOrgUnitId: workshop.id,
       activityDate: new Date("2026-08-17T00:00:00.000Z"),
-      title: "Başlık",
-      description: "Açıklama",
+      title: "Title",
+      description: "Description",
       approvalStatus: "APPROVED",
-      createdAt: ACILIS,
-      updatedAt: ACILIS,
+      createdAt: OPENED_AT,
+      updatedAt: OPENED_AT,
     },
   });
 
-  const soru = await askQuestion(
+  const question = await askQuestion(
     testDb,
-    { id: genelMudur.id, isSystemAdmin: false },
-    { activityId: activity.id, text: "Bu ne durumda?" },
-    ACILIS,
+    { id: generalManager.id, isSystemAdmin: false },
+    { activityId: activity.id, text: "What is the status?" },
+    OPENED_AT,
   );
-  if (!soru.ok) throw new Error("kurulum");
+  if (!question.ok) throw new Error("setup");
 
-  // Soru bildirimi kuyrukta duruyor; hatırlatmaları ondan ayırt edebilmek için
-  // temizlenir.
+  // Clean queue so reminders can be distinguished from question notification
   await testDb.notificationQueue.deleteMany({});
 
-  return { genelMudur, kalipMudur, conversation: soru.value };
+  return { generalManager, workshopManager, conversation: question.value };
 }
 
-async function hatirlatmalar() {
+async function getReminders() {
   return testDb.notificationQueue.findMany({
     where: { eventType: "answer_overdue" },
   });
 }
 
-describe("üç iş günü sayacı", () => {
-  it("üç iş günü dolmadan hatırlatma gitmez", async () => {
-    await acikKonusma();
-    // Perşembe: 18, 19 → iki iş günü.
-    const sonuc = await sendOverdueAnswerReminders(
+describe("three business days counter", () => {
+  it("does not send reminder before three business days elapse", async () => {
+    await setupOpenConversation();
+    // Wednesday: 18, 19 -> two business days
+    const result = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-19T09:00:00.000Z"),
     );
 
-    expect(sonuc.overdueConversations).toBe(0);
-    expect(await hatirlatmalar()).toHaveLength(0);
+    expect(result.overdueConversations).toBe(0);
+    expect(await getReminders()).toHaveLength(0);
   });
 
-  it("üç iş günü dolunca sorumluya ve yöneticisine gider", async () => {
-    const { genelMudur, kalipMudur } = await acikKonusma();
-    // 18, 19, 20 → üç iş günü.
-    const sonuc = await sendOverdueAnswerReminders(
+  it("sends to assignee and manager after three business days", async () => {
+    const { generalManager, workshopManager } = await setupOpenConversation();
+    // 18, 19, 20 -> three business days
+    const result = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-20T09:00:00.000Z"),
     );
 
     expect(OVERDUE_ANSWER_BUSINESS_DAYS).toBe(3);
-    expect(sonuc.overdueConversations).toBe(1);
-    expect(sonuc.queued).toBe(2);
+    expect(result.overdueConversations).toBe(1);
+    expect(result.queued).toBe(2);
 
-    const alicilar = (await hatirlatmalar()).map((k) => k.userId).sort();
-    // Sorumlu faaliyeti yazan kişidir; yöneticisi Genel Müdür.
-    expect(alicilar).toEqual([kalipMudur.id, genelMudur.id].sort());
+    const recipients = (await getReminders()).map((k) => k.userId).sort();
+    // Assignee is activity author; manager is General Manager
+    expect(recipients).toEqual([workshopManager.id, generalManager.id].sort());
   });
 
-  it("hafta sonu sayacı ilerletmez", async () => {
-    await acikKonusma();
-    // Cuma bekleyen bir konuşma için Pazartesi henüz üç iş günü değildir.
-    // Mesaj silinmez (veritabanı silmeyi engelliyor); zamanı geriye alınır.
-    const cuma = new Date("2026-08-21T09:00:00.000Z");
-    await testDb.conversationMessage.updateMany({ data: { createdAt: cuma } });
-    await testDb.conversation.updateMany({ data: { openedAt: cuma } });
+  it("weekends do not advance the counter", async () => {
+    await setupOpenConversation();
+    // For conversation pending Friday, Monday is not yet three business days
+    const friday = new Date("2026-08-21T09:00:00.000Z");
+    await testDb.conversationMessage.updateMany({ data: { createdAt: friday } });
+    await testDb.conversation.updateMany({ data: { openedAt: friday } });
 
-    const pazartesi = await sendOverdueAnswerReminders(
+    const monday = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-24T09:00:00.000Z"),
     );
-    expect(pazartesi.overdueConversations).toBe(0);
+    expect(monday.overdueConversations).toBe(0);
 
-    // Çarşamba: 24, 25, 26 → üç iş günü.
-    const carsamba = await sendOverdueAnswerReminders(
+    // Wednesday: 24, 25, 26 -> three business days
+    const wednesday = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-26T09:00:00.000Z"),
     );
-    expect(carsamba.overdueConversations).toBe(1);
+    expect(wednesday.overdueConversations).toBe(1);
   });
 
-  it("resmî tatil sayacı geciktirir", async () => {
-    await acikKonusma();
-    await addHoliday(testDb, { date: "2026-08-19", description: "Deneme tatili" });
+  it("official holidays delay the counter", async () => {
+    await setupOpenConversation();
+    await addHoliday(testDb, { date: "2026-08-19", description: "Test holiday" });
 
-    // 18, (19 tatil), 20 → iki iş günü.
-    const persembe = await sendOverdueAnswerReminders(
+    // 18, (19 holiday), 20 -> two business days
+    const thursday = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-20T09:00:00.000Z"),
     );
-    expect(persembe.overdueConversations).toBe(0);
+    expect(thursday.overdueConversations).toBe(0);
 
-    // 21 ile üçüncü iş günü dolar.
-    const cuma = await sendOverdueAnswerReminders(
+    // 21 completes the third business day
+    const friday = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-21T09:00:00.000Z"),
     );
-    expect(cuma.overdueConversations).toBe(1);
+    expect(friday.overdueConversations).toBe(1);
   });
 });
 
-describe("sayaç sorumluluk el değiştirince sıfırlanır", () => {
-  it("cevap gelince sayaç yeniden başlar", async () => {
-    const { kalipMudur, conversation } = await acikKonusma();
+describe("counter resets when responsibility changes", () => {
+  it("restarts counter when reply is received", async () => {
+    const { workshopManager, conversation } = await setupOpenConversation();
 
-    // İki gün sonra cevap yazılır: sıra sorana geçer.
-    const cevapAni = new Date("2026-08-19T09:00:00.000Z");
-    const cevap = await replyToConversation(
+    // Reply written after two days: turn passes to asker
+    const replyTime = new Date("2026-08-19T09:00:00.000Z");
+    const reply = await replyToConversation(
       testDb,
-      { id: kalipMudur.id, isSystemAdmin: false },
-      { conversationId: conversation.id, text: "Bakılıyor." },
-      cevapAni,
+      { id: workshopManager.id, isSystemAdmin: false },
+      { conversationId: conversation.id, text: "Under review." },
+      replyTime,
     );
-    expect(cevap.ok).toBe(true);
+    expect(reply.ok).toBe(true);
     await testDb.notificationQueue.deleteMany({});
 
-    // Açılıştan itibaren üç iş günü doldu ama cevaptan itibaren dolmadı.
-    const sonuc = await sendOverdueAnswerReminders(
+    // Three business days from open has passed, but not from reply
+    const result = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-20T09:00:00.000Z"),
     );
-    expect(sonuc.overdueConversations).toBe(0);
+    expect(result.overdueConversations).toBe(0);
 
-    // Cevaptan üç iş günü sonra hatırlatma gider — bu kez soran taraf bekliyor.
-    const sonraki = await sendOverdueAnswerReminders(
+    // Reminder sent three business days after reply: now waiting on asker
+    const nextResult = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-24T09:00:00.000Z"),
     );
-    expect(sonraki.overdueConversations).toBe(1);
+    expect(nextResult.overdueConversations).toBe(1);
   });
 });
 
-describe("kapalı konuşma ve tekrar", () => {
-  it("kapalı konuşma için hatırlatma gitmez", async () => {
-    await acikKonusma();
+describe("closed conversations and deduplication", () => {
+  it("does not send reminders for closed conversations", async () => {
+    await setupOpenConversation();
     await testDb.conversation.updateMany({
       data: {
         status: "CLOSED",
-        closedAt: ACILIS,
+        closedAt: OPENED_AT,
         closeType: "NORMAL",
       },
     });
 
-    const sonuc = await sendOverdueAnswerReminders(
+    const result = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-20T09:00:00.000Z"),
     );
 
-    expect(sonuc.overdueConversations).toBe(0);
+    expect(result.overdueConversations).toBe(0);
   });
 
-  it("aynı bekleyiş için ikinci kez hatırlatma yazılmaz", async () => {
-    await acikKonusma();
-    const an = new Date("2026-08-20T09:00:00.000Z");
+  it("does not queue duplicate reminder for same waiting period", async () => {
+    await setupOpenConversation();
+    const time = new Date("2026-08-20T09:00:00.000Z");
 
-    await sendOverdueAnswerReminders(testDb, an);
-    const ikinci = await sendOverdueAnswerReminders(
+    await sendOverdueAnswerReminders(testDb, time);
+    const secondResult = await sendOverdueAnswerReminders(
       testDb,
       new Date("2026-08-21T09:00:00.000Z"),
     );
 
-    expect(ikinci.queued).toBe(0);
-    expect(await hatirlatmalar()).toHaveLength(2);
+    expect(secondResult.queued).toBe(0);
+    expect(await getReminders()).toHaveLength(2);
   });
 });

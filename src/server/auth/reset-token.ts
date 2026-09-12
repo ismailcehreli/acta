@@ -1,15 +1,15 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-// Parola sıfırlama belirteci (§15.3): **tek kullanımlık ve süreli.**
-//
-// Belirteç ayrı bir tabloda tutulmuyor; kimlik kuşağına (`UserCredential.
-// version`) bağlanıyor. Parola her değiştiğinde kuşak artıyor (Görev 1.1), bu
-// yüzden kullanılmış bir belirteç ikinci kez doğrulanamıyor — "tek kullanımlık"
-// özelliği kuşak sayacından geliyor, ayrı bir "kullanıldı" alanından değil.
-// Kullanıcı parolasını başka bir yoldan değiştirdiyse de bekleyen belirteç
-// kendiliğinden geçersizleşiyor.
 
-/** Belirtecin ömrü: bir saat (§15.3 süre veriyor, sayı vermiyor). */
+//
+
+
+
+
+
+
+
+
 export const RESET_TOKEN_TTL_MS = 60 * 60_000;
 
 export type ResetTokenVerification =
@@ -43,8 +43,8 @@ export function issueResetToken(
     expiresAtMs: now.getTime() + ttlMs,
   };
 
-  const govde = Buffer.from(JSON.stringify(parts)).toString("base64url");
-  return `${govde}.${signature(payloadOf(parts), secret)}`;
+  const encodedPayload = Buffer.from(JSON.stringify(parts)).toString("base64url");
+  return `${encodedPayload}.${signature(payloadOf(parts), secret)}`;
 }
 
 export function verifyResetToken(
@@ -52,19 +52,19 @@ export function verifyResetToken(
   now: Date,
   secret: string,
 ): ResetTokenVerification {
-  const ayrac = token.lastIndexOf(".");
-  if (ayrac <= 0) return { ok: false, reason: "invalid" };
+  const separatorIndex = token.lastIndexOf(".");
+  if (separatorIndex <= 0) return { ok: false, reason: "invalid" };
 
   let parts: TokenParts;
   try {
-    const cozulmus: unknown = JSON.parse(
-      Buffer.from(token.slice(0, ayrac), "base64url").toString(),
+    const decoded: unknown = JSON.parse(
+      Buffer.from(token.slice(0, separatorIndex), "base64url").toString(),
     );
-    if (typeof cozulmus !== "object" || cozulmus === null) {
+    if (typeof decoded !== "object" || decoded === null) {
       return { ok: false, reason: "invalid" };
     }
 
-    const { userId, version, expiresAtMs } = cozulmus as Record<string, unknown>;
+    const { userId, version, expiresAtMs } = decoded as Record<string, unknown>;
     if (
       typeof userId !== "string" ||
       typeof version !== "number" ||
@@ -80,12 +80,12 @@ export function verifyResetToken(
     return { ok: false, reason: "invalid" };
   }
 
-  const beklenen = signature(payloadOf(parts), secret);
-  const verilen = token.slice(ayrac + 1);
+  const expectedSignature = signature(payloadOf(parts), secret);
+  const providedSignature = token.slice(separatorIndex + 1);
 
-  // Sabit zamanlı karşılaştırma; uzunluk farkı da imza uyuşmazlığıdır.
-  if (verilen.length !== beklenen.length) return { ok: false, reason: "invalid" };
-  if (!timingSafeEqual(Buffer.from(verilen), Buffer.from(beklenen))) {
+  // Compare in constant time; a length mismatch is also a signature mismatch.
+  if (providedSignature.length !== expectedSignature.length) return { ok: false, reason: "invalid" };
+  if (!timingSafeEqual(Buffer.from(providedSignature), Buffer.from(expectedSignature))) {
     return { ok: false, reason: "invalid" };
   }
 

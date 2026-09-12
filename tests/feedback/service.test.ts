@@ -25,52 +25,52 @@ afterAll(async () => {
 });
 
 async function users() {
-  const kok = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const a = await createOrgUnit({ name: "Kalıphane", parentId: kok.id });
-  const b = await createOrgUnit({ name: "Planlama", parentId: kok.id });
+  const root = await createOrgUnit({ name: "Company", type: "Root" });
+  const a = await createOrgUnit({ name: "Mold Shop", parentId: root.id });
+  const b = await createOrgUnit({ name: "Planning", parentId: root.id });
 
-  const admin = await createUser(kok.id, {
-    fullName: "Sistem Yöneticisi",
+  const admin = await createUser(root.id, {
+    fullName: "System Admin",
     isSystemAdmin: true,
   });
   const managerA = await createUser(a.id, {
-    fullName: "Kalıphane Müdürü",
+    fullName: "Mold Shop Manager",
     isUnitManager: true,
   });
-  const employeeA = await createUser(a.id, { fullName: "Kalıphane Çalışanı" });
+  const employeeA = await createUser(a.id, { fullName: "Mold Shop Employee" });
   const managerB = await createUser(b.id, {
-    fullName: "Planlama Müdürü",
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
-  const employeeB = await createUser(b.id, { fullName: "Planlama Çalışanı" });
+  const employeeB = await createUser(b.id, { fullName: "Planning Employee" });
 
   return { admin, managerA, employeeA, managerB, employeeB };
 }
 
 const feedback = {
   category: "SUGGESTION" as const,
-  title: "Arama daha kolay olsun",
-  description: "Arama kutusunda son kullanılan filtreleri görmek istiyorum.",
-  sourcePath: "Arama",
+  title: "Improve search filters",
+  description: "I would like to see recent filters in the search box.",
+  sourcePath: "Search",
   adminsOnly: false,
 };
 
-describe("geri bildirim", () => {
-  it("kullanıcı kayıt oluşturur ve yalnız kendi kayıtlarını görür", async () => {
+describe("feedback service", () => {
+  it("user creates feedback and sees only their own entries", async () => {
     const { employeeA, employeeB } = await users();
 
     const result = await createFeedback(testDb, employeeA.id, feedback, NOW);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.feedback.submittedByName).toBe("Kalıphane Çalışanı");
-    expect(result.feedback.submittedByUnitName).toBe("Kalıphane");
+    expect(result.feedback.submittedByName).toBe("Mold Shop Employee");
+    expect(result.feedback.submittedByUnitName).toBe("Mold Shop");
     expect(result.feedback.status).toBe("NEW");
     expect(await listOwnFeedback(testDb, employeeA.id)).toHaveLength(1);
     expect(await listOwnFeedback(testDb, employeeB.id)).toHaveLength(0);
   });
 
-  it("HTML içeren metinleri kabul etmez", async () => {
+  it("rejects text containing HTML", async () => {
     const { employeeA } = await users();
 
     const result = await createFeedback(
@@ -83,11 +83,11 @@ describe("geri bildirim", () => {
     expect(result).toEqual({
       ok: false,
       error: "invalid",
-      message: "Başlık ve açıklama geçerli uzunlukta olmalı; HTML kullanılamaz.",
+      message: "The title and description must have valid lengths; HTML is not allowed.",
     });
   });
 
-  it("yalnız sistem yöneticisi tüm açık kayıtları yönetir", async () => {
+  it("only system admin manages all open feedback entries", async () => {
     const { managerA, managerB, employeeA, employeeB, admin } = await users();
     await createFeedback(testDb, employeeA.id, feedback, NOW);
     await createFeedback(testDb, employeeB.id, feedback, NOW);
@@ -97,7 +97,7 @@ describe("geri bildirim", () => {
     expect(await listManageableFeedback(testDb, admin.id)).toHaveLength(2);
   });
 
-  it("yönetilebilir yeni geri bildirimleri yetki kapsamına göre sayar", async () => {
+  it("counts manageable new feedback entries according to authorization scope", async () => {
     const { managerA, employeeA, employeeB, admin } = await users();
     await createFeedback(testDb, employeeA.id, feedback, NOW);
     await createFeedback(testDb, employeeB.id, feedback, NOW);
@@ -106,7 +106,7 @@ describe("geri bildirim", () => {
     expect(await countManageableFeedback(testDb, admin.id)).toBe(2);
   });
 
-  it("yalnız sistem yöneticilerine özel kayıt birim yöneticisine görünmez", async () => {
+  it("admin-only feedback is hidden from unit managers", async () => {
     const { managerA, employeeA, admin } = await users();
     const result = await createFeedback(
       testDb,
@@ -120,10 +120,10 @@ describe("geri bildirim", () => {
     expect(await listManageableFeedback(testDb, admin.id)).toHaveLength(1);
   });
 
-  it("okuma, inceleme ve çözüm bilgilerini kaydeder; kullanıcıya bildirim bırakır", async () => {
+  it("records read, review, and resolution status; creates user notifications", async () => {
     const { admin, employeeA } = await users();
     const created = await createFeedback(testDb, employeeA.id, feedback, NOW);
-    if (!created.ok) throw new Error("Geri bildirim kurulamadı");
+    if (!created.ok) throw new Error("Failed to create feedback");
 
     expect(await markFeedbackRead(testDb, admin.id, created.feedback.id, NOW)).toEqual({
       ok: true,
@@ -133,16 +133,16 @@ describe("geri bildirim", () => {
       testDb,
       admin.id,
       created.feedback.id,
-      { status: "IN_REVIEW", response: "İncelemeye aldık." },
+      { status: "IN_REVIEW", response: "Under review." },
       NOW,
     );
     expect(inReview.ok).toBe(true);
     if (!inReview.ok) return;
     expect(inReview.feedback).toMatchObject({
       status: "IN_REVIEW",
-      response: "İncelemeye aldık.",
-      readByName: "Sistem Yöneticisi",
-      reviewedByName: "Sistem Yöneticisi",
+      response: "Under review.",
+      readByName: "System Admin",
+      reviewedByName: "System Admin",
     });
     expect(inReview.feedback.readAt).not.toBeNull();
     expect(inReview.feedback.reviewedAt).not.toBeNull();
@@ -151,15 +151,15 @@ describe("geri bildirim", () => {
       testDb,
       admin.id,
       created.feedback.id,
-      { status: "RESOLVED", response: "Düzenleme tamamlandı." },
+      { status: "RESOLVED", response: "Resolution completed." },
       new Date("2026-08-29T09:00:00.000Z"),
     );
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) return;
     expect(resolved.feedback).toMatchObject({
       status: "RESOLVED",
-      response: "Düzenleme tamamlandı.",
-      resolvedByName: "Sistem Yöneticisi",
+      response: "Resolution completed.",
+      resolvedByName: "System Admin",
     });
     expect(resolved.feedback.resolvedAt).not.toBeNull();
 
@@ -172,10 +172,10 @@ describe("geri bildirim", () => {
     expect(notices.length).toBe(2);
   });
 
-  it("birim yöneticisi güncelleyemez; sistem yöneticisi kayıt arşivleyebilir", async () => {
+  it("unit manager cannot update; system admin can archive feedback", async () => {
     const { admin, managerB, employeeA } = await users();
     const created = await createFeedback(testDb, employeeA.id, feedback, NOW);
-    if (!created.ok) throw new Error("Geri bildirim kurulamadı");
+    if (!created.ok) throw new Error("Failed to create feedback");
 
     const denied = await updateFeedback(
       testDb,

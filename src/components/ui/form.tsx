@@ -1,14 +1,14 @@
 import type { ComponentProps, ReactNode } from "react";
 
-// Form alanları.
+
 //
-// Etiket **her zaman görünür** — placeholder etiket yerine geçmez (§10).
-// Girdi köşeli, üstte ince bir iç gölge yerine düz yüzey ve net bir kural
-// çizgisi kullanır; odakta çizgi kalınlaşmaz, halka çıkar (yer sıçraması
-// olmasın diye).
+
+
+
+
 //
-// Mobilde girdi metni 16px'e sabitlenir (globals.css): iOS aksi hâlde odakta
-// sayfayı yakınlaştırır ve kullanıcı düzeni kaybeder.
+// Mobile input text is fixed at 16px in globals.css so iOS does not zoom on focus.
+
 
 const CONTROL =
   "w-full rounded-(--radius-sm) border border-line-strong bg-surface px-3 " +
@@ -37,16 +37,16 @@ export function Field({
   children: ReactNode;
   className?: string;
 }) {
-  const kontrolId = htmlFor;
-  const kontrol = children;
+  const controlId = htmlFor;
+  const control = children;
 
   return (
     <div className={`flex flex-col gap-1.5 ${className ?? ""}`}>
-      {/* Yıldız etiketin **dışındadır**: görsel bir işarettir ve alanın adına
-          karışmamalı — ad "Birim" olmalı, "Birim*" değil. Zorunluluğu
-          `required` özniteliği taşır ve ekran okuyucu onu oradan okur. */}
+      {/* The asterisk sits **outside** the label text: it is a visual marker and
+          must not become part of the field name. Requiredness is carried by the
+          `required` attribute and read by assistive technology. */}
       <span className="flex items-center gap-0.5">
-        <label htmlFor={kontrolId} className="text-[length:var(--text-sm)] font-medium text-ink">
+        <label htmlFor={controlId} className="text-[length:var(--text-sm)] font-medium text-ink">
           {label}
         </label>
         {required ? (
@@ -55,7 +55,7 @@ export function Field({
           </span>
         ) : null}
       </span>
-      {kontrol}
+      {control}
       {hint && !error ? (
         <span className="text-[length:var(--text-xs)] text-muted">{hint}</span>
       ) : null}

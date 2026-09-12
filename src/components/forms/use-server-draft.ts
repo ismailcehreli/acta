@@ -5,103 +5,103 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { saveDraftAction } from "@/app/drafts/actions";
 import { emptyDraftState } from "@/app/drafts/form-state";
 
-// Faaliyet taslağının **sunucuya** otomatik kaydedilmesi (21.08.2026).
-//
-// Tarayıcıdaki yarım kalan metin (`use-activity-draft`) yerini almaz, üstüne
-// biner. İkisi farklı sorunu çözüyor:
-//
-//   · Yerel depo — aynı sekmede, ağ olmasa bile, anında. Sayfa yenilenince
-//     "yarım kalan metniniz var" der.
-//   · Sunucu taslağı — kalıcı ve **her cihazdan görünür**. Bilgisayar kapansa,
-//     tarayıcı verisi silinse bile Taslaklar sayfasında durur.
-//
-// **Otomatik gönderim yok.** Taslak kaydedilir; faaliyet olarak gönderme
-// kararı her zaman kullanıcınındır.
-//
-// Yazma durdukça kaydedilir, her tuşta değil: her tuşta sunucuya gitmek hem
-// gereksiz hem de yazarken takılma hissi yaratır.
 
-const BEKLEME_MS = 2000;
+//
 
-export type ServerDraftDurum = "bos" | "kaydediliyor" | "kaydedildi" | "hata";
+
+//
+
+
+
+
+//
+
+
+//
+
+
+
+const SERVER_DRAFT_SAVE_DELAY_MS = 2000;
+
+export type ServerDraftStatus = "empty" | "saving" | "saved" | "error";
 
 export function useServerDraft(
   formRef: React.RefObject<HTMLFormElement | null>,
-  /** Var olan taslak düzenleniyorsa kimliği. */
+
   initialDraftId: string | null,
-  /** Kapalıysa hiç kaydedilmez (düzeltme ekranında taslak anlamsız). */
+
   enabled: boolean,
 ) {
   const [draftId, setDraftId] = useState<string | null>(initialDraftId);
-  const [durum, setDurum] = useState<ServerDraftDurum>("bos");
-  const [kayitAni, setKayitAni] = useState<Date | null>(null);
+  const [status, setStatus] = useState<ServerDraftStatus>("empty");
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
 
-  const zamanlayici = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sonGonderilen = useRef<string>("");
-  const durduruldu = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSubmittedSignature = useRef<string>("");
+  const cancelled = useRef(false);
   const draftIdRef = useRef<string | null>(initialDraftId);
 
   useEffect(() => {
     draftIdRef.current = draftId;
   }, [draftId]);
 
-  const kaydet = useCallback(async () => {
+  const save = useCallback(async () => {
     const form = formRef.current;
-    if (!form || durduruldu.current) return;
+    if (!form || cancelled.current) return;
 
     const data = new FormData(form);
-    const baslik = String(data.get("title") ?? "").trim();
-    const aciklama = String(data.get("description") ?? "").trim();
+    const title = String(data.get("title") ?? "").trim();
+    const description = String(data.get("description") ?? "").trim();
     const files = data
       .getAll("files")
       .filter((entry): entry is File => entry instanceof File && entry.size > 0);
 
-    // Bomboş form saklanmaz: Taslaklar listesi çöple dolar.
-    if (baslik === "" && aciklama === "") return;
 
-    // Değişmemiş metin ikinci kez gönderilmez.
-    const imza = JSON.stringify([
+    if (title === "" && description === "") return;
+
+
+    const signature = JSON.stringify([
       data.get("activityDate"),
-      baslik,
-      aciklama,
+      title,
+      description,
       data.getAll("targetDepartmentIds"),
       files.map((file) => [file.name, file.size, file.lastModified]),
     ]);
-    if (imza === sonGonderilen.current) return;
+    if (signature === lastSubmittedSignature.current) return;
 
-    const gonderilecek = new FormData();
-    gonderilecek.set("draftId", draftIdRef.current ?? "");
-    gonderilecek.set("activityDate", String(data.get("activityDate") ?? ""));
-    gonderilecek.set("title", String(data.get("title") ?? ""));
-    gonderilecek.set("description", String(data.get("description") ?? ""));
+    const outgoing = new FormData();
+    outgoing.set("draftId", draftIdRef.current ?? "");
+    outgoing.set("activityDate", String(data.get("activityDate") ?? ""));
+    outgoing.set("title", String(data.get("title") ?? ""));
+    outgoing.set("description", String(data.get("description") ?? ""));
     for (const id of data.getAll("targetDepartmentIds")) {
-      gonderilecek.append("targetDepartmentIds", String(id));
+      outgoing.append("targetDepartmentIds", String(id));
     }
-    if (data.get("openFollowUp") === "on") gonderilecek.set("openFollowUp", "on");
-    for (const file of files) gonderilecek.append("files", file);
-    // Otomatik kaydetme; kullanıcının bilinçli kararı değil.
-    gonderilecek.set("savedManually", "0");
+    if (data.get("openFollowUp") === "on") outgoing.set("openFollowUp", "on");
+    for (const file of files) outgoing.append("files", file);
 
-    setDurum("kaydediliyor");
+    outgoing.set("savedManually", "0");
+
+    setStatus("saving");
 
     try {
-      const sonuc = await saveDraftAction(emptyDraftState, gonderilecek);
+      const result = await saveDraftAction(emptyDraftState, outgoing);
 
-      if (durduruldu.current) return;
+      if (cancelled.current) return;
 
-      if (sonuc.error) {
-        // Sessiz başarısızlık yok: kullanıcı taslağının kaydedilmediğini
-        // bilmeli, yoksa güvendiği bir ağ olmadan yazmaya devam eder.
-        setDurum("hata");
+      if (result.error) {
+
+
+        setStatus("error");
         return;
       }
 
-      sonGonderilen.current = imza;
-      if (sonuc.draftId) setDraftId(sonuc.draftId);
-      setKayitAni(new Date());
-      setDurum("kaydedildi");
+      lastSubmittedSignature.current = signature;
+      if (result.draftId) setDraftId(result.draftId);
+      setSavedAt(new Date());
+      setStatus("saved");
     } catch {
-      if (!durduruldu.current) setDurum("hata");
+      if (!cancelled.current) setStatus("error");
     }
   }, [formRef]);
 
@@ -111,30 +111,26 @@ export function useServerDraft(
     const form = formRef.current;
     if (!form) return;
 
-    const zamanla = () => {
-      if (zamanlayici.current) clearTimeout(zamanlayici.current);
-      zamanlayici.current = setTimeout(() => void kaydet(), BEKLEME_MS);
+    const schedule = () => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => void save(), SERVER_DRAFT_SAVE_DELAY_MS);
     };
 
-    form.addEventListener("input", zamanla);
-    form.addEventListener("change", zamanla);
+    form.addEventListener("input", schedule);
+    form.addEventListener("change", schedule);
 
     return () => {
-      form.removeEventListener("input", zamanla);
-      form.removeEventListener("change", zamanla);
-      if (zamanlayici.current) clearTimeout(zamanlayici.current);
+      form.removeEventListener("input", schedule);
+      form.removeEventListener("change", schedule);
+      if (timer.current) clearTimeout(timer.current);
     };
-  }, [enabled, formRef, kaydet]);
+  }, [enabled, formRef, save]);
 
-  /**
-   * Faaliyet gönderiliyor: bekleyen otomatik kaydetme iptal edilir ve bir
-   * daha kaydedilmez. Gönderimden sonra kaydedilen bir taslak, gönderilmiş
-   * kaydın kopyası olarak listede kalırdı.
-   */
-  const gonderiliyor = useCallback(() => {
-    durduruldu.current = true;
-    if (zamanlayici.current) clearTimeout(zamanlayici.current);
+
+  const submitting = useCallback(() => {
+    cancelled.current = true;
+    if (timer.current) clearTimeout(timer.current);
   }, []);
 
-  return { draftId, durum, kayitAni, gonderiliyor };
+  return { draftId, status, savedAt, submitting: submitting };
 }

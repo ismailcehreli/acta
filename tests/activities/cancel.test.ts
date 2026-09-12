@@ -6,11 +6,12 @@ import { createActivity } from "@/server/activities/write";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// §5.5: iptal yazan kişiye veya üstündeki herhangi bir yöneticiye açıktır,
-// gerekçe zorunludur, kayıt silinmez ve iptal geri alınamaz.
+// Activity cancellation rules.
+// Cancellation is available to the author or any manager above them in hierarchy.
+// Reason is mandatory, rows are not physically deleted, and cancellations cannot be undone.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
-const REASON = "Yanlış vardiyaya yazıldı, doğrusu ayrıca girilecek.";
+const REASON = "Logged to incorrect shift, corrected entry will be filed.";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -21,25 +22,25 @@ afterAll(async () => {
 });
 
 /**
- * Üç kademeli ağaç: Genel Müdürlük → Direktörlük → Kalıphane.
- * Yazan Kalıphane'de; direktör ve genel müdür üst zincirde; akran ise
- * başka bir departmanın müdürü.
+ * Three-tier tree: General Management → Directorate → Tooling Department.
+ * Author is in Tooling; director and general manager are in upper chain; peer is
+ * manager of a sibling department.
  */
 async function setup() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
+  const root = await createOrgUnit({ name: "General Management", type: "ROOT" });
   const directorate = await createOrgUnit({
-    name: "Üretim Direktörlüğü",
-    type: "Direktörlük",
+    name: "Production Directorate",
+    type: "DIRECTORATE",
     parentId: root.id,
   });
   const department = await createOrgUnit({
-    name: "Kalıphane",
-    type: "Departman",
+    name: "Tooling Department",
+    type: "DEPARTMENT",
     parentId: directorate.id,
   });
   const peerDepartment = await createOrgUnit({
-    name: "Planlama",
-    type: "Departman",
+    name: "Planning Department",
+    type: "DEPARTMENT",
     parentId: directorate.id,
   });
 
@@ -54,16 +55,17 @@ async function setup() {
     { id: author.id, orgUnitId: department.id, requiresApproval: false },
     {
       activityDate: "2026-08-17",
-      title: "Kalıp bakımı",
-      description: "Çatlak onarıldı.",
+      title: "Tooling maintenance",
+      description: "Crack repaired.",
       targetDepartmentIds: [department.id],
     },
     NOW,
   );
-
-  if (!created.ok) throw new Error("kurulum başarısız");
+  if (!created.ok) throw new Error(`setup failed: ${created.error}`);
 
   return {
+    root,
+    directorate,
     department,
     generalManager,
     director,
@@ -74,8 +76,8 @@ async function setup() {
   };
 }
 
-describe("iptal yetkisi (§5.5)", () => {
-  it("yazan kişi kendi faaliyetini iptal edebilir", async () => {
+describe("cancellation authorization", () => {
+  it("allows author to cancel their own activity", async () => {
     const { author, activity } = await setup();
 
     const result = await cancelActivity(
@@ -89,7 +91,7 @@ describe("iptal yetkisi (§5.5)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("doğrudan üstü iptal edebilir", async () => {
+  it("allows direct manager to cancel activity", async () => {
     const { director, activity } = await setup();
 
     const result = await cancelActivity(
@@ -103,7 +105,7 @@ describe("iptal yetkisi (§5.5)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("zincirdeki üst kademe de iptal edebilir", async () => {
+  it("allows higher manager in chain to cancel activity", async () => {
     const { generalManager, activity } = await setup();
 
     const result = await cancelActivity(
@@ -117,25 +119,28 @@ describe("iptal yetkisi (§5.5)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("akran iptal edemez", async () => {
+  it("prevents peer manager from cancelling activity", async () => {
     const { peer, activity } = await setup();
 
     const result = await cancelActivity(
       testDb,
-      { id: peer.id, isSystemAdmin: false }, activity.id, REASON, NOW);
+      { id: peer.id, isSystemAdmin: false },
+      activity.id,
+      REASON,
+      NOW,
+    );
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toBe("not_allowed");
 
-    // Faaliyet gerçekten dokunulmamış olmalı.
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
     expect(stored.approvalStatus).toBe("APPROVED");
   });
 
-  it("aynı birimdeki ast iptal edemez", async () => {
+  it("prevents subordinate in same unit from cancelling activity", async () => {
     const { teammate, activity } = await setup();
 
     const result = await cancelActivity(
@@ -152,25 +157,33 @@ describe("iptal yetkisi (§5.5)", () => {
   });
 });
 
-describe("gerekçe zorunluluğu", () => {
-  it("boş gerekçeyle iptal reddedilir", async () => {
+describe("mandatory cancellation reason", () => {
+  it("rejects cancellation with empty reason", async () => {
     const { author, activity } = await setup();
 
     const result = await cancelActivity(
       testDb,
-      { id: author.id, isSystemAdmin: false }, activity.id, "   ", NOW);
+      { id: author.id, isSystemAdmin: false },
+      activity.id,
+      "   ",
+      NOW,
+    );
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toBe("reason_required");
   });
 
-  it("gerekçe kayıt altına alınır", async () => {
+  it("records cancellation reason in database", async () => {
     const { author, activity } = await setup();
 
     await cancelActivity(
       testDb,
-      { id: author.id, isSystemAdmin: false }, activity.id, REASON, NOW);
+      { id: author.id, isSystemAdmin: false },
+      activity.id,
+      REASON,
+      NOW,
+    );
 
     const record = await testDb.cancellationRecord.findUniqueOrThrow({
       where: { activityId: activity.id },
@@ -180,26 +193,34 @@ describe("gerekçe zorunluluğu", () => {
   });
 });
 
-describe("iptalin sonuçları", () => {
-  it("kayıt silinmez, iptal durumuna geçer", async () => {
+describe("cancellation consequences", () => {
+  it("transitions activity to cancelled state without deleting record", async () => {
     const { author, activity } = await setup();
 
     await cancelActivity(
       testDb,
-      { id: author.id, isSystemAdmin: false }, activity.id, REASON, NOW);
+      { id: author.id, isSystemAdmin: false },
+      activity.id,
+      REASON,
+      NOW,
+    );
 
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: activity.id },
     });
     expect(stored.approvalStatus).toBe("CANCELLED");
-    expect(stored.title).toBe("Kalıp bakımı");
+    expect(stored.title).toBe("Tooling maintenance");
   });
 
-  it("iptal geri alınamaz — veritabanı da izin vermez", async () => {
+  it("enforces immutable cancellation status at database level", async () => {
     const { author, activity } = await setup();
     await cancelActivity(
       testDb,
-      { id: author.id, isSystemAdmin: false }, activity.id, REASON, NOW);
+      { id: author.id, isSystemAdmin: false },
+      activity.id,
+      REASON,
+      NOW,
+    );
 
     await expect(
       testDb.activity.update({
@@ -209,11 +230,15 @@ describe("iptalin sonuçları", () => {
     ).rejects.toThrow(/ACTIVITY_INVALID_STATUS_TRANSITION/);
   });
 
-  it("ikinci kez iptal edilemez", async () => {
+  it("rejects duplicate cancellation attempts", async () => {
     const { author, activity } = await setup();
     await cancelActivity(
       testDb,
-      { id: author.id, isSystemAdmin: false }, activity.id, REASON, NOW);
+      { id: author.id, isSystemAdmin: false },
+      activity.id,
+      REASON,
+      NOW,
+    );
 
     const result = await cancelActivity(
       testDb,
@@ -228,7 +253,7 @@ describe("iptalin sonuçları", () => {
     expect(result.error).toBe("already_cancelled");
   });
 
-  it("olmayan faaliyet iptal edilemez", async () => {
+  it("returns not_found when attempting to cancel non-existent activity", async () => {
     const { author } = await setup();
 
     const result = await cancelActivity(
@@ -245,7 +270,7 @@ describe("iptalin sonuçları", () => {
   });
 });
 
-describe("açık konuşmaların kapanması", () => {
+describe("closing open conversations upon cancellation", () => {
   async function withOpenConversation() {
     const context = await setup();
     const conversation = await testDb.conversation.create({
@@ -258,7 +283,7 @@ describe("açık konuşmaların kapanması", () => {
     return { ...context, conversation };
   }
 
-  it("iptal edilince açık konuşmalar ayrı bir türle kapanır", async () => {
+  it("closes open conversations with CANCELLED_ACTIVITY close type", async () => {
     const { author, activity, conversation } = await withOpenConversation();
 
     const result = await cancelActivity(
@@ -277,29 +302,32 @@ describe("açık konuşmaların kapanması", () => {
       where: { id: conversation.id },
     });
     expect(stored.status).toBe("CLOSED");
-        // İptal kapanışı idari kapatmayla aynı türe karışmaz (açık soru 9).
     expect(stored.closeType).toBe("CANCELLED_ACTIVITY");
     expect(stored.closeReason).toBeNull();
     expect(stored.closedById).toBe(author.id);
   });
 
-  it("konuşmanın diğer tarafına bildirim kuyruğa yazılır", async () => {
+  it("enqueues notification to the other party of the conversation", async () => {
     const { author, director, activity } = await withOpenConversation();
 
     await cancelActivity(
       testDb,
-      { id: author.id, isSystemAdmin: false }, activity.id, REASON, NOW);
+      { id: author.id, isSystemAdmin: false },
+      activity.id,
+      REASON,
+      NOW,
+    );
 
     const notifications = await testDb.notificationQueue.findMany();
 
-    // İptali yapan kişiye kendi işleminin bildirimi gitmez.
+    // Actor does not receive notification for their own action.
     expect(notifications).toHaveLength(1);
     expect(notifications[0].userId).toBe(director.id);
     expect(notifications[0].eventType).toBe("activity_cancelled");
     expect(notifications[0].status).toBe("PENDING");
   });
 
-  it("kapalı konuşma yeniden kapatılmaz ve bildirim üretmez", async () => {
+  it("does not re-close already closed conversations or enqueue extra notifications", async () => {
     const { author, activity, conversation } = await withOpenConversation();
     await testDb.conversation.update({
       where: { id: conversation.id },
@@ -321,21 +349,16 @@ describe("açık konuşmaların kapanması", () => {
   });
 });
 
-// Denetim (18.08.2026, bulgu 6): arayüz onaylanmamış kayıtlarda da iptal
-// bağlantısı gösteriyordu; veritabanı yalnız APPROVED → CANCELLED geçişine izin
-// verdiği için istek yakalanmamış hatayla 500 veriyordu.
-describe("iptal yalnızca onaylanmış faaliyet için tanımlıdır", () => {
-  it("taslak kayıt iptal edilemez ve hata anlaşılır olur", async () => {
+describe("cancellation is only defined for approved activities", () => {
+  it("rejects cancelling draft activity with clear error", async () => {
     const { author, department } = await setup();
-    // Kayıt baştan taslak olarak oluşturulur: veritabanı APPROVED → DRAFT
-    // geçişine zaten izin vermiyor.
     const draft = await testDb.activity.create({
       data: {
         authorId: author.id,
         authorOrgUnitId: department.id,
         activityDate: new Date("2026-08-17T00:00:00.000Z"),
-        title: "Taslak kayıt",
-        description: "Açıklama",
+        title: "Draft activity",
+        description: "Description",
         approvalStatus: "DRAFT",
       },
     });
@@ -353,14 +376,14 @@ describe("iptal yalnızca onaylanmış faaliyet için tanımlıdır", () => {
     expect(result.error).toBe("not_cancellable");
   });
 
-  it("kısa gerekçe kabul edilir; tasarım asgari uzunluk istemiyor", async () => {
+  it("accepts short reason without minimum length constraint", async () => {
     const { author, activity } = await setup();
 
     const result = await cancelActivity(
       testDb,
       { id: author.id, isSystemAdmin: false },
       activity.id,
-      "Mükerrer",
+      "Duplicate",
       NOW,
     );
 
@@ -368,21 +391,18 @@ describe("iptal yalnızca onaylanmış faaliyet için tanımlıdır", () => {
   });
 });
 
-// Denetim (18.08.2026, bulgu 5): yetki, durum ve yan etkiler tek atomik
-// karara bağlı değildi.
-describe("eşzamanlı iptal", () => {
-  it("iki eşzamanlı iptalden yalnız biri yazar", async () => {
+describe("concurrent cancellations", () => {
+  it("only allows one of two concurrent cancellations to succeed", async () => {
     const { author, activity } = await setup();
     const actor = { id: author.id, isSystemAdmin: false };
 
-    const [birinci, ikinci] = await Promise.all([
-      cancelActivity(testDb, actor, activity.id, "Birinci gerekçe.", NOW),
-      cancelActivity(testDb, actor, activity.id, "İkinci gerekçe.", NOW),
+    const [first, second] = await Promise.all([
+      cancelActivity(testDb, actor, activity.id, "First reason.", NOW),
+      cancelActivity(testDb, actor, activity.id, "Second reason.", NOW),
     ]);
 
-    expect([birinci.ok, ikinci.ok].filter(Boolean)).toHaveLength(1);
+    expect([first.ok, second.ok].filter(Boolean)).toHaveLength(1);
 
-    // Tek bir iptal kaydı olmalı; çift kayıt birincil anahtarla da engellenir.
     expect(await testDb.cancellationRecord.count()).toBe(1);
   });
 });

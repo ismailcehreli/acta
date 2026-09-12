@@ -6,6 +6,8 @@ import {
   type DraftFilters,
 } from "@/server/activities/drafts";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getLocale } from "@/server/i18n/locale";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import { prisma } from "@/server/db";
 import { AppShell } from "@/components/shell/app-shell";
 import { toShellUser } from "@/components/shell/shell-user";
@@ -23,31 +25,28 @@ import { resolvePageSize } from "@/server/preferences/page-size";
 import { DeleteDraftButton } from "./delete-draft-button";
 import { formatDay, formatInstantShort } from "@/shared/format/date-time";
 
-// Taslaklar (ürün sahibi isteği, 21.08.2026).
-//
-// Gönderilmemiş metinlerin durduğu yer. İki yoldan dolar ve ikisi de aynı
-// listede görünür:
-//
-//   · **Bilerek bekletilen** — kullanıcı "Taslak olarak kaydet" dedi, son bir
-//     kontrolden sonra gönderecek.
-//   · **Kazara kalan** — sekme kapandı, tarayıcı çöktü, telefon kapandı.
-//     Yazarken arka planda kaydedilmişti.
-//
-// İkisi rozetle ayrılıyor: bilerek bekletilen bir taslakla kazara kalan bir
-// müsvedde aynı şey değil ve kullanıcı hangisini eline aldığını bilmeli.
-//
-// **Taslak kimseye görünmez.** Yöneticisi de, sistem yöneticisi de göremez;
-// kayıt gönderilene kadar ortada bir faaliyet yoktur.
 
-export const metadata = { title: "Taslaklar" };
+//
 
-const BILGI: Record<string, string> = {
-  taslak: "Taslak kaydedildi. Göndermediğiniz sürece kimse göremez.",
-  silindi: "Taslak silindi.",
-};
 
-/** Açıklamanın listede görünen ilk satırı. */
-function onizleme(text: string): string {
+//
+
+
+
+
+//
+
+
+//
+
+
+
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.drafts.pageTitle");
+}
+
+
+function preview(text: string): string {
   const tek = text.replace(/\s+/g, " ").trim();
   return tek.length > 160 ? `${tek.slice(0, 160)}…` : tek;
 }
@@ -56,78 +55,89 @@ export default async function DraftsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    kayit?: string;
-    tur?: string;
-    sayfa?: string;
-    boyut?: string;
+    record?: string;
+    type?: string;
+    page?: string;
+    pageSize?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const params = await searchParams;
-  const { kayit } = params;
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
 
-  // Kayıt türü: elle bırakılan mı, kazara kalan mı. Tanınmayan değer süzgeci
-  // sessizce düşürür — eski bir bağlantı bozuk sayfa açmasın.
+  const params = await searchParams;
+  const { record } = params;
+
+  // Unknown values are ignored so an old link cannot break the page.
   const filters: DraftFilters =
-    params.tur === "elle"
+    params.type === "manual"
       ? { savedManually: true }
-      : params.tur === "otomatik"
+      : params.type === "automatic"
         ? { savedManually: false }
         : {};
 
-  const SAYFA_BOYU = await resolvePageSize(params.boyut);
-  const istenen = Number.parseInt(params.sayfa ?? "1", 10);
-  const sayfa = Number.isFinite(istenen) && istenen > 0 ? istenen : 1;
+  const PAGE_SIZE = await resolvePageSize(params.pageSize);
+  const requested = Number.parseInt(params.page ?? "1", 10);
+  const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-  const [toplam, shellUser] = await Promise.all([
+  const [total, shellUser] = await Promise.all([
     countDrafts(prisma, user.id, filters),
     toShellUser(user),
   ]);
 
-  const sayfaSayisi = Math.max(1, Math.ceil(toplam / SAYFA_BOYU));
-  const gecerliSayfa = Math.min(sayfa, sayfaSayisi);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
 
   const drafts = await listDrafts(prisma, user.id, filters, {
-    limit: SAYFA_BOYU,
-    skip: (gecerliSayfa - 1) * SAYFA_BOYU,
+    limit: PAGE_SIZE,
+    skip: (currentPage - 1) * PAGE_SIZE,
   });
 
-  /** Süzgeci koruyan adres; sayfalama ve boy seçimi bunu kullanır. */
-  const adres = (ek: Record<string, string> = {}) =>
-    buildQueryAddress("/drafts", { tur: params.tur, boyut: String(SAYFA_BOYU) }, ek);
+  /** Preserve the filter while building pagination and page-size links. */
+  const address = (attachment: Record<string, string> = {}) =>
+    buildQueryAddress("/drafts", { type: params.type, pageSize: String(PAGE_SIZE) }, attachment);
 
-  const suzgecliMi = Boolean(params.tur);
+  const isFiltered = Boolean(params.type);
 
   return (
     <AppShell user={shellUser}>
-      <Page isaret="taslaklar">
+      <Page marker="drafts">
         <PageHeader
-          marker="Taslaklar"
-          title="Taslaklar"
-          description="Yazılmış ama gönderilmemiş kayıtlar. Göndermediğiniz sürece kimse göremez."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Taslaklar" }]}
+          marker={t("screens.drafts.pageTitle")}
+          title={t("screens.drafts.pageTitle")}
+          description={t("screens.drafts.pageDescription")}
+          breadcrumbs={[
+            { label: t("screens.drafts.dashboard"), href: "/" },
+            { label: t("screens.drafts.pageTitle") },
+          ]}
           action={
             <ButtonLink href="/activities/new" variant="primary">
-              Yeni faaliyet
+              {t("screens.drafts.newActivity")}
             </ButtonLink>
           }
         />
 
-        {kayit ? (
-          <div id="taslak-bilgi" role="status">
-            <Alert tone="success">{BILGI[kayit] ?? "İşlem tamamlandı."}</Alert>
+        {record ? (
+          <div id="draft-message" role="status">
+            <Alert tone="success">
+              {record === "draft"
+                ? t("screens.drafts.savedMessage")
+                : record === "deleted"
+                  ? t("screens.drafts.deletedMessage")
+                  : t("screens.drafts.completed")}
+            </Alert>
           </div>
         ) : null}
 
         <Card>
           <CardHeader
-            title="Gönderilmeyi bekleyenler"
-            description="Kaldığınız yerden devam etmek için taslağın başlığına tıklayın."
+            title={t("screens.drafts.pendingTitle")}
+            description={t("screens.drafts.pendingDescription")}
             action={
               <span className="mono text-[length:var(--text-sm)] text-muted">
-                {toplam} taslak
+                {t("screens.drafts.draftCount", { count: total })}
               </span>
             }
           />
@@ -135,41 +145,41 @@ export default async function DraftsPage({
           <FilterBar
             action="/drafts"
             clearHref="/drafts"
-            filtered={suzgecliMi}
-            pageSize={SAYFA_BOYU}
+            filtered={isFiltered}
+            pageSize={PAGE_SIZE}
             fields={[
               {
-                name: "tur",
-                label: "Kayıt türü",
-                value: params.tur ?? "",
+                name: "type",
+                label: t("screens.drafts.recordType"),
+                value: params.type ?? "",
                 width: "w-52",
                 options: [
-                  { value: "", label: "Hepsi" },
-                  { value: "elle", label: "Bilerek bırakılan" },
-                  { value: "otomatik", label: "Kazara kalan" },
+                  { value: "", label: t("screens.drafts.allTypes") },
+                  { value: "manual", label: t("screens.drafts.manuallySaved") },
+                  { value: "automatic", label: t("screens.drafts.automaticallySaved") },
                 ],
               },
             ]}
           />
 
           {drafts.length === 0 ? (
-            suzgecliMi ? (
+            isFiltered ? (
               <EmptyState
-                title="Süzgece uyan taslak yok."
-                description="Süzgeci temizleyerek bütün taslaklarınızı görebilirsiniz."
+                title={t("screens.drafts.noFilterMatch")}
+                description={t("screens.drafts.clearFilterDescription")}
                 action={
                   <ButtonLink href="/drafts" variant="secondary" size="sm">
-                    Süzgeci temizle
+                    {t("screens.drafts.clearFilter")}
                   </ButtonLink>
                 }
               />
             ) : (
             <EmptyState
-              title="Taslağınız yok."
-              description="Bir faaliyet yazarken tamamlayamazsanız metniniz otomatik olarak buraya düşer; dilerseniz “Taslak olarak kaydet” diyerek de bırakabilirsiniz."
+              title={t("screens.drafts.noDrafts")}
+              description={t("screens.drafts.noDraftsDescription")}
               action={
                 <ButtonLink href="/activities/new" variant="primary" size="sm">
-                  Faaliyet yazmaya başla
+                  {t("screens.drafts.startActivity")}
                 </ButtonLink>
               }
             />
@@ -179,7 +189,7 @@ export default async function DraftsPage({
               {drafts.map((draft) => (
                 <RecordItem
                   key={draft.id}
-                  data-test="taslak-satiri"
+                  data-test="draft-record"
                   className="transition-colors duration-(--duration-fast) hover:bg-surface-hover sm:px-5"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
@@ -192,41 +202,49 @@ export default async function DraftsPage({
                               : "text-[length:var(--text-base)] font-medium text-ink"
                           }
                         >
-                          {draft.title.trim() === "" ? "Başlıksız taslak" : draft.title}
+                          {draft.title.trim() === ""
+                            ? t("screens.drafts.untitled")
+                            : draft.title}
                         </span>
                         {draft.savedManually ? (
-                          <Badge tone="waiting">Bekletiliyor</Badge>
+                          <Badge tone="waiting">{t("screens.drafts.waiting")}</Badge>
                         ) : (
-                          <Badge tone="neutral">Otomatik kaydedildi</Badge>
+                          <Badge tone="neutral">{t("screens.drafts.automatic")}</Badge>
                         )}
                       </div>
 
                       {draft.description.trim() !== "" ? (
                         <p className="prose-measure mt-1 text-[length:var(--text-sm)] text-muted">
-                          {onizleme(draft.description)}
+                          {preview(draft.description)}
                         </p>
                       ) : null}
 
                       <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[length:var(--text-xs)] text-faint">
-                        <span>Faaliyet günü: {formatDay(draft.activityDate)}</span>
+                        <span>
+                          {t("screens.drafts.activityDate")}: {formatDay(draft.activityDate, locale)}
+                        </span>
                         <span aria-hidden className="text-line-strong">
                           ·
                         </span>
-                        <span>Son kaydetme: {formatInstantShort(draft.updatedAt)}</span>
+                        <span>
+                          {t("screens.drafts.lastSaved")}: {formatInstantShort(draft.updatedAt, locale)}
+                        </span>
                       </p>
                     </div>
 
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
                       <ButtonLink
-                        href={`/activities/new?taslak=${draft.id}`}
+                        href={`/activities/new?draft=${draft.id}`}
                         variant="primary"
                         size="sm"
                       >
-                        Devam et
+                        {t("screens.drafts.continue")}
                       </ButtonLink>
                       <DeleteDraftButton
                         id={draft.id}
-                        title={draft.title.trim() === "" ? "Başlıksız taslak" : draft.title}
+                        title={draft.title.trim() === ""
+                          ? t("screens.drafts.untitled")
+                          : draft.title}
                       />
                     </div>
                   </div>
@@ -236,10 +254,10 @@ export default async function DraftsPage({
           )}
 
           <Pagination
-            page={gecerliSayfa}
-            pageCount={sayfaSayisi}
-            hrefFor={(hedef) =>
-              hedef === 1 ? adres() : adres({ sayfa: String(hedef) })
+            page={currentPage}
+            pageCount={pageCount}
+            hrefFor={(targetPage) =>
+              targetPage === 1 ? address() : address({ page: String(targetPage) })
             }
           />
         </Card>

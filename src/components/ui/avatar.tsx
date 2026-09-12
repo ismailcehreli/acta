@@ -1,17 +1,19 @@
 import { avatarToneIndex } from "@/shared/format/avatar-tone";
 import { initials } from "@/shared/format/avatar-initials";
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n";
 
-// Profil resmi rozeti (Görev 11.5).
-//
-// **Tek bileşen, boyut bir özellik.** Dokuz ayrı yerde gösteriliyor; her biri
-// için ayrı bileşen yazmak, birinde düzeltilen bir hatanın diğer sekizinde
-// kalması demekti.
-//
-// Resim yoksa baş harfler düşer. Renk kişinin kimliğinden türetilir ve
-// değişmez: aynı kişi her ekranda aynı renkte görünür, göz onu bir işaret
-// olarak kullanabilir.
 
-const TONLAR = [
+//
+
+
+
+//
+
+
+// The same initials tone is stable for a person and can be rendered in any
+// supported locale.
+
+const AVATAR_TONES = [
   "bg-avatar-0",
   "bg-avatar-1",
   "bg-avatar-2",
@@ -23,7 +25,7 @@ const TONLAR = [
 export interface AvatarUser {
   id: string;
   fullName: string;
-  /** Doluysa resim gösterilir; boşsa baş harfler. */
+
   avatarExtension?: string | null;
 }
 
@@ -32,49 +34,47 @@ export function Avatar({
   size = 32,
   className = "",
   cacheKey,
+  locale = DEFAULT_LOCALE,
 }: {
   user: AvatarUser;
-  /** Kenar uzunluğu (px). Liste satırında 24–32, profilde 96. */
+
   size?: number;
   className?: string;
-  /**
-   * Adres değişmediği hâlde resmin değiştiği yerlerde (kendi profilinde
-   * yükleme yaptıktan hemen sonra) tarayıcının elindeki kopyayı bırakması
-   * için. Listelerde gerekmez; orada koşullu istek yeterli.
-   */
+
   cacheKey?: string;
+  locale?: Locale;
 }) {
-  const kenar = { width: size, height: size };
-  const ortak = `shrink-0 rounded-full object-cover ${className}`;
+  const dimensions = { width: size, height: size };
+  const sharedClassName = `shrink-0 rounded-full object-cover ${className}`;
 
   if (user.avatarExtension) {
     return (
-      // `next/image` kullanılmıyor: kaynak yetki kontrollü kendi uç
-      // noktamız ve boyutlar zaten sabit; araya bir görüntü iyileştirici
-      // koymak, özel önbellek başlığını da dolaşmak demekti.
+      // `next/image` is not used: the source is an authorization-controlled
+      // endpoint. The endpoint and dimensions are fixed, and an image optimizer
+      // would bypass its custom cache headers.
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src={`/api/users/${user.id}/avatar${cacheKey ? `?v=${cacheKey}` : ""}`}
         alt=""
         aria-hidden
-        style={kenar}
-        className={`${ortak} bg-inset`}
+        style={dimensions}
+        className={`${sharedClassName} bg-inset`}
         loading="lazy"
         decoding="async"
       />
     );
   }
 
-  const harfler = initials(user.fullName);
-  const ton = TONLAR[avatarToneIndex(user.id)] ?? TONLAR[0];
+  const initialsText = initials(user.fullName, locale);
+  const tone = AVATAR_TONES[avatarToneIndex(user.id)] ?? AVATAR_TONES[0];
 
   return (
     <span
       aria-hidden
-      style={{ ...kenar, fontSize: Math.max(10, Math.round(size * 0.38)) }}
-      className={`grid place-items-center font-semibold text-white ${ton} ${ortak}`}
+      style={{ ...dimensions, fontSize: Math.max(10, Math.round(size * 0.38)) }}
+      className={`grid place-items-center font-semibold text-white ${tone} ${sharedClassName}`}
     >
-      {harfler || "?"}
+      {initialsText || "?"}
     </span>
   );
 }

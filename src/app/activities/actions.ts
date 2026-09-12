@@ -9,7 +9,12 @@ import { createActivity, updateActivity } from "@/server/activities/write";
 import type { IncomingFile } from "@/server/attachments/service";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
 import { readActivityTextLimits } from "@/server/settings/system-settings";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   createActivitySchema,
   updateActivitySchema,
@@ -19,7 +24,7 @@ import { draftIdSchema } from "@/shared/schemas/draft";
 
 import type { ActivityFormState } from "./form-state";
 
-/** Yazarın kendisi ve biriminin onay bayrağı (§4.3, §5.4). */
+
 async function loadAuthor() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -36,7 +41,7 @@ async function loadAuthor() {
   };
 }
 
-/** FormData içindeki ekleri eylem katmanının ortak türüne çevirir. */
+
 async function readIncomingFiles(formData: FormData): Promise<IncomingFile[]> {
   const files = formData
     .getAll("files")
@@ -55,6 +60,7 @@ export async function createActivityAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const author = await loadAuthor();
+  const t = await getTranslations();
 
   const limits = await readActivityTextLimits(prisma);
   const parsed = createActivitySchema(limits).safeParse({
@@ -65,14 +71,14 @@ export async function createActivityAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz" };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
   const rawDraftId = String(formData.get("draftId") ?? "");
   let draftId: string | undefined;
   if (rawDraftId !== "") {
     const draft = draftIdSchema.safeParse({ id: rawDraftId });
-    if (!draft.success) return { error: "Taslak bulunamadı." };
+    if (!draft.success) return { error: t("screens.drafts.notFound") };
     draftId = draft.data.id;
   }
 
@@ -83,35 +89,36 @@ export async function createActivityAction(
     files,
   });
 
-  if (!result.ok) return { error: result.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "activity", result) };
 
-  // "Açık kalsın" işareti (§5.2): tek tık, takip maddesine dönüşür (§11).
-  // Faaliyet kaydedildikten **sonra** açılıyor; takip açılamazsa faaliyet yine
-  // kaydedilmiş olur ve kullanıcı sebebi görür — sessizce yutulmaz.
+
+
+
   if (formData.get("openFollowUp") === "on") {
-    const takip = await openFollowUp(
+    const followUp = await openFollowUp(
       prisma,
       { id: author.id, isSystemAdmin: false },
       { activityId: result.activity.id },
       now,
     );
 
-    if (!takip.ok) {
+    if (!followUp.ok) {
       return {
-        error: `Faaliyet kaydedildi ancak takip maddesi açılamadı: ${takip.message}`,
+        error: t("activities.followUpOpenFailed", {
+          reason: localizeServiceMessage(t, "followUp", followUp),
+        }),
       };
     }
   }
 
-  // Faaliyet gönderildi: kaynağı olan taslak artık gereksiz. Kalırsa
-  // kullanıcı gönderilmiş kaydın kopyasını taslaklarında görür ve ikinci kez
-  // gönderme riski doğar.
+  // Once submitted, the source draft is no longer needed. Keeping it would
+  // show a duplicate in the drafts list and invite a second submission.
   if (draftId) {
     revalidatePath("/drafts");
   }
 
   revalidatePath("/activities");
-  redirect("/activities?kayit=eklendi");
+  redirect("/activities?record=added");
 }
 
 export async function updateActivityAction(
@@ -119,6 +126,7 @@ export async function updateActivityAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const author = await loadAuthor();
+  const t = await getTranslations();
 
   const limits = await readActivityTextLimits(prisma);
   const parsed = updateActivitySchema(limits).safeParse({
@@ -130,7 +138,7 @@ export async function updateActivityAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz" };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
   const files = await readIncomingFiles(formData);
@@ -142,10 +150,10 @@ export async function updateActivityAction(
     { files },
   );
 
-  if (!result.ok) return { error: result.message };
+  if (!result.ok) return { error: localizeServiceMessage(t, "activity", result) };
 
   revalidatePath("/activities");
-  redirect("/activities?kayit=duzeltildi");
+  redirect("/activities?record=revised");
 }
 
 export async function cancelActivityAction(
@@ -153,6 +161,7 @@ export async function cancelActivityAction(
   formData: FormData,
 ): Promise<ActivityFormState> {
   const user = await getCurrentUser();
+  const t = await getTranslations();
   if (!user) redirect("/login");
 
   const parsed = cancelActivitySchema.safeParse({
@@ -161,7 +170,7 @@ export async function cancelActivityAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz" };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
   const result = await cancelActivity(
@@ -172,8 +181,10 @@ export async function cancelActivityAction(
     new Date(),
   );
 
-  if (!result.ok) return { error: result.message };
+  if (!result.ok) {
+    return { error: localizeServiceMessage(t, "cancellation", result) };
+  }
 
   revalidatePath("/activities");
-  redirect("/activities?kayit=iptal");
+  redirect("/activities?record=cancelled");
 }

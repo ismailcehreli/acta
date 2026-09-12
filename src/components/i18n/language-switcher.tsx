@@ -4,8 +4,8 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { setLocaleAction } from "@/app/actions/locale";
-import { useLocale } from "./provider";
-import { SUPPORTED_LOCALES, type Locale } from "@/shared/i18n";
+import { useLocale, useTranslations } from "./provider";
+import { LOCALE_LABELS, SUPPORTED_LOCALES, type Locale } from "@/shared/i18n";
 
 export function LanguageSwitcher({
   className = "",
@@ -13,6 +13,7 @@ export function LanguageSwitcher({
   className?: string;
 }) {
   const currentLocale = useLocale();
+  const t = useTranslations();
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -28,7 +29,7 @@ export function LanguageSwitcher({
   return (
     <div
       role="group"
-      aria-label="Language selection"
+      aria-label={t("nav.language")}
       className={`inline-flex items-center rounded-(--radius-sm) border border-border bg-surface-muted/50 p-0.5 text-xs ${className}`}
     >
       {SUPPORTED_LOCALES.map((locale) => {
@@ -45,7 +46,7 @@ export function LanguageSwitcher({
                 : "text-ink-muted hover:text-ink"
             }`}
           >
-            {locale.toUpperCase()}
+            {LOCALE_LABELS[locale]}
           </button>
         );
       })}

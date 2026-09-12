@@ -3,70 +3,67 @@ import type { PrismaClient } from "@prisma/client";
 import { listVisibleActivities } from "@/server/authz/activity-repository";
 import type { VisibilityDb } from "@/server/authz/visibility";
 
-// Bildirimin görünürlük süzgeci (denetim 21.08.2026, bulgu 3).
+// Notification visibility filter (audit 21.08.2026, finding 3).
 //
-// Bildirim, olduğu anda doğru olan bir haberdir — ama **okunduğu ya da
-// gönderildiği** anda hâlâ doğru olmayabilir. Kişi başka bir dala taşınmış,
-// vekâleti bitmiş ya da kararı başkası vermiş olabilir. O andan sonra
-// kaydın başlığını göstermek ya da e-postayla yollamak, görünürlük
-// kurallarının dışına çıkan bir okuma yoludur (§8, §18.4).
+// A notification is accurate news at the moment it happens — but may no longer
+// be accurate when read or sent. The user might have been transferred, their proxy
+// expired, or a decision made by someone else. Showing the title or emailing it
+// past that point violates visibility rules (§8, §18.4).
 //
-// Kural: faaliyete bağlı bildirim, ancak faaliyet **şu anda** görünüyorsa
-// gösterilir/gönderilir. Faaliyete bağlı olmayanlar (parola sıfırlama, hesap
-// açılışı, iş gecikmesi) her zaman geçer — onların görünürlük sorusu yok.
+// Rule: activity-linked notifications are displayed/sent only if the activity is
+// currently visible. Non-activity notifications (password reset, account created,
+// job lag) always pass through.
 
 export type VisibleRowsDb = Pick<PrismaClient, "activity"> & VisibilityDb;
 
 /**
- * Bu kişinin **şu anda** görebildiği faaliyetlere ait kimlikler.
- *
- * Boş küme dönerse hiçbiri görünmüyor demektir. Çağıran, faaliyete bağlı
- * olmayan satırları ayrıca geçirir.
+ * Returns activity IDs currently visible to this viewer.
  */
-export async function gorunurFaaliyetler(
+export async function getVisibleActivityIds(
   db: VisibleRowsDb,
   viewer: { id: string; isSystemAdmin: boolean },
   activityIds: string[],
   now: Date = new Date(),
 ): Promise<Set<string>> {
-  const benzersiz = [...new Set(activityIds)];
-  if (benzersiz.length === 0) return new Set();
+  const uniqueIds = [...new Set(activityIds)];
+  if (uniqueIds.length === 0) return new Set();
 
-  const satirlar = await listVisibleActivities(db, viewer, {
-    where: { id: { in: benzersiz } },
+  const rows = await listVisibleActivities(db, viewer, {
+    where: { id: { in: uniqueIds } },
     select: { id: true },
   }, undefined, now);
 
-  return new Set(satirlar.map((satir) => satir.id));
+  return new Set(rows.map((row) => row.id));
 }
 
 /**
- * Kuyruk satırlarını görünürlüğe göre ikiye ayırır.
+ * Partitions queue rows based on activity visibility.
  *
- * `gecenler` gösterilebilir/gönderilebilir olanlar; `dusenler` alıcının artık
- * göremediği faaliyete bağlı olanlar.
+ * `passed`: can be shown/sent; `dropped`: tied to an activity the recipient can no longer view.
  */
-export async function gorunurlugeGoreAyir<T extends { activityId: string | null }>(
+export async function partitionRowsByVisibility<T extends { activityId: string | null }>(
   db: VisibleRowsDb,
   viewer: { id: string; isSystemAdmin: boolean },
   rows: T[],
   now: Date = new Date(),
-): Promise<{ gecenler: T[]; dusenler: T[] }> {
-  const kimlikler = rows
+): Promise<{ passed: T[]; dropped: T[] }> {
+  const activityIds = rows
     .map((row) => row.activityId)
     .filter((id): id is string => id !== null);
 
-  if (kimlikler.length === 0) return { gecenler: rows, dusenler: [] };
-
-  const gorunur = await gorunurFaaliyetler(db, viewer, kimlikler, now);
-
-  const gecenler: T[] = [];
-  const dusenler: T[] = [];
-
-  for (const row of rows) {
-    if (row.activityId === null || gorunur.has(row.activityId)) gecenler.push(row);
-    else dusenler.push(row);
+  if (activityIds.length === 0) {
+    return { passed: rows, dropped: [] };
   }
 
-  return { gecenler, dusenler };
+  const visible = await getVisibleActivityIds(db, viewer, activityIds, now);
+
+  const passed: T[] = [];
+  const dropped: T[] = [];
+
+  for (const row of rows) {
+    if (row.activityId === null || visible.has(row.activityId)) passed.push(row);
+    else dropped.push(row);
+  }
+
+  return { passed, dropped };
 }

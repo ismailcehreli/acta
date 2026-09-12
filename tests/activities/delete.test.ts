@@ -11,18 +11,18 @@ import {
 import { createActivity, createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Root'un faaliyet silmesi (ürün sahibi kararı, 03.09.2026).
+// Root activity deletion (product owner decision, 2026-09-03).
 //
-// Silme dört katmandan geçer ve her katman ayrı ayrı sınanır: yetki (yalnız
-// root), dönem (kapanmış dönem silinemez), onay kodu, veritabanı kapısı.
+// Deletion passes through four layers and each layer is tested independently:
+// authorization (root only), period (closed periods cannot be deleted),
+// confirmation code, database gates.
 //
-// En kritik test **ikinci dönem kontrolü**: kod on dakika geçerli ve o sürede
-// kapanış işi koşabilir. Kontrol yalnız talep açılırken yapılsaydı kural kâğıt
-// üstünde kalırdı — kapanmış bir dönemin kaydı, talebi önce açılmış olduğu
-// için silinebilirdi.
+// The most critical test is the **second period check**: the code is valid for ten
+// minutes and during that time period closure may run. If checked only on request,
+// a closed period's activity could be deleted just because request opened prior.
 
 const NOW = new Date("2026-08-20T09:00:00.000Z");
-const GUN = new Date("2026-08-18T00:00:00.000Z");
+const DAY = new Date("2026-08-18T00:00:00.000Z");
 
 beforeEach(async () => {
   await resetDatabase();
@@ -32,40 +32,40 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function sahne() {
-  const birim = await createOrgUnit({ name: "Kalıphane" });
-  const root = await createUser(birim.id, {
-    fullName: "Ana Yönetici",
-    email: "root@ornek.test",
+async function setup() {
+  const unit = await createOrgUnit({ name: "Tooling Department" });
+  const root = await createUser(unit.id, {
+    fullName: "Root Admin",
+    email: "root@example.test",
     isSystemAdmin: true,
     isRoot: true,
   });
-  const yonetici = await createUser(birim.id, {
-    fullName: "Sistem Yöneticisi",
-    email: "admin@ornek.test",
+  const admin = await createUser(unit.id, {
+    fullName: "System Admin",
+    email: "admin@example.test",
     isSystemAdmin: true,
   });
-  const yazar = await createUser(birim.id, { fullName: "Kalıpçı" });
-  const activity = await createActivity(yazar, {
-    title: "Pres hattı kontrolü",
-    activityDate: GUN,
+  const author = await createUser(unit.id, { fullName: "Toolmaker" });
+  const activity = await createActivity(author, {
+    title: "Press line inspection",
+    activityDate: DAY,
   });
 
-  return { birim, root, yonetici, yazar, activity };
+  return { unit, root, admin, author, activity };
 }
 
-/** Kod yalnız e-postada durur; testte kuyruktan okunur. */
-async function kuyruktakiKod(): Promise<string> {
-  const satir = await testDb.notificationQueue.findFirstOrThrow({
+/** Code only arrives via email; read from queue in test. */
+async function getCodeFromQueue(): Promise<string> {
+  const row = await testDb.notificationQueue.findFirstOrThrow({
     where: { eventType: "activity_deletion_code" },
     orderBy: { createdAt: "desc" },
   });
 
-  const payload = satir.payload as { code?: unknown };
+  const payload = row.payload as { code?: unknown };
   return typeof payload.code === "string" ? payload.code : "";
 }
 
-async function donemiKapat(now: Date) {
+async function closePeriod(now: Date) {
   await testDb.scorePeriodLedger.create({
     data: {
       periodStart: new Date(Date.UTC(2026, 7, 1)),
@@ -76,227 +76,223 @@ async function donemiKapat(now: Date) {
   });
 }
 
-describe("silme yetkisi (§15.1, karar 03.09.2026)", () => {
-  it("root faaliyetin yalnız üst verisini görür, açıklamasını görmez", async () => {
-    const { root, activity } = await sahne();
+describe("deletion authorization (§15.1, decision 2026-09-03)", () => {
+  it("root only sees metadata, not body description", async () => {
+    const { root, activity } = await setup();
 
-    const sonuc = await describeActivityForDeletion(testDb, root, activity.id);
+    const result = await describeActivityForDeletion(testDb, root, activity.id);
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
-    expect(sonuc.value.title).toBe("Pres hattı kontrolü");
-    expect(sonuc.value.authorName).toBe("Kalıpçı");
-    expect(sonuc.value.periodClosed).toBe(false);
-    // Açıklama metni hiçbir alanda taşınmıyor: sistem yöneticisi içeriğe
-    // erişmiyor, yalnız hangi kaydı sildiğini biliyor.
-    expect(JSON.stringify(sonuc.value)).not.toContain("Açıklama");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.title).toBe("Press line inspection");
+    expect(result.value.authorName).toBe("Toolmaker");
+    expect(result.value.periodClosed).toBe(false);
+    // Description body is not carried in any field: admin knows which record
+    // is deleted without accessing content.
+    expect(JSON.stringify(result.value)).not.toContain("Description");
   });
 
-  it("root olmayan sistem yöneticisi ne görebilir ne silme talebi açabilir", async () => {
-    const { yonetici, activity } = await sahne();
+  it("non-root system admin can neither view nor request deletion", async () => {
+    const { admin, activity } = await setup();
 
-    const goruntule = await describeActivityForDeletion(
+    const described = await describeActivityForDeletion(
       testDb,
-      yonetici,
+      admin,
       activity.id,
     );
-    const talep = await requestActivityDeletion(testDb, yonetici, activity.id, NOW);
+    const request = await requestActivityDeletion(testDb, admin, activity.id, NOW);
 
-    expect(goruntule.ok).toBe(false);
-    expect(talep.ok).toBe(false);
-    if (talep.ok) return;
-    expect(talep.error).toBe("not_root");
+    expect(described.ok).toBe(false);
+    expect(request.ok).toBe(false);
+    if (request.ok) return;
+    expect(request.error).toBe("not_root");
   });
 
-  it("olmayan kayıt için ayrım yapılmaz", async () => {
-    const { root } = await sahne();
+  it("does not discriminate for non-existent record", async () => {
+    const { root } = await setup();
 
-    const sonuc = await describeActivityForDeletion(
+    const result = await describeActivityForDeletion(
       testDb,
       root,
       "00000000-0000-0000-0000-000000000000",
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("not_found");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("not_found");
   });
 });
 
-describe("kapanmış dönem sınırı", () => {
-  it("kapanmış döneme ait kayıt için talep açılamaz", async () => {
-    const { root, activity } = await sahne();
-    await donemiKapat(NOW);
+describe("closed period boundary", () => {
+  it("cannot request deletion for closed period activity", async () => {
+    const { root, activity } = await setup();
+    await closePeriod(NOW);
 
-    const goruntule = await describeActivityForDeletion(
+    const described = await describeActivityForDeletion(
       testDb,
       root,
       activity.id,
     );
-    const talep = await requestActivityDeletion(testDb, root, activity.id, NOW);
+    const request = await requestActivityDeletion(testDb, root, activity.id, NOW);
 
-    expect(goruntule.ok).toBe(true);
-    if (goruntule.ok) expect(goruntule.value.periodClosed).toBe(true);
+    expect(described.ok).toBe(true);
+    if (described.ok) expect(described.value.periodClosed).toBe(true);
 
-    expect(talep.ok).toBe(false);
-    if (talep.ok) return;
-    expect(talep.error).toBe("period_closed");
+    expect(request.ok).toBe(false);
+    if (request.ok) return;
+    expect(request.error).toBe("period_closed");
   });
 
-  it("talep açıldıktan SONRA dönem kapanırsa silme yine reddedilir", async () => {
-    // Kod on dakika geçerli; kapanış işi bu sürede koşabilir. Kontrol yalnız
-    // talep anında yapılsaydı kapanmış dönemin kaydı silinebilirdi.
-    const { root, activity } = await sahne();
+  it("rejects deletion if period closes AFTER request is opened", async () => {
+    // Code valid for ten minutes; closing job may run during this window.
+    // If only checked at request time, closed period activity could be deleted.
+    const { root, activity } = await setup();
 
-    const talep = await requestActivityDeletion(testDb, root, activity.id, NOW);
-    expect(talep.ok).toBe(true);
-    const kod = await kuyruktakiKod();
+    const request = await requestActivityDeletion(testDb, root, activity.id, NOW);
+    expect(request.ok).toBe(true);
+    const code = await getCodeFromQueue();
 
-    await donemiKapat(new Date(NOW.getTime() + 60_000));
+    await closePeriod(new Date(NOW.getTime() + 60_000));
 
-    const sonuc = await confirmActivityDeletion(
+    const result = await confirmActivityDeletion(
       testDb,
       root,
       activity.id,
-      kod,
+      code,
       new Date(NOW.getTime() + 120_000),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("period_closed");
-    // Kayıt yerinde durmalı.
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("period_closed");
+    // Activity must still exist.
     expect(await testDb.activity.count({ where: { id: activity.id } })).toBe(1);
   });
 });
 
-describe("onay kodu", () => {
-  it("doğru kod kaydı ve bağlı satırlarını siler, izini bırakır", async () => {
-    const { root, yazar, activity } = await sahne();
+describe("confirmation code", () => {
+  it("valid code deletes activity and related rows, leaves audit trace", async () => {
+    const { root, author, activity } = await setup();
 
-    // Bağlı kayıtlar: silme bunları da götürmeli.
+    // Related rows: deletion must cascade these as well.
     await testDb.readReceipt.create({
       data: { activityId: activity.id, userId: root.id, firstReadAt: NOW },
     });
     await testDb.activityTargetDept.create({
-      data: { activityId: activity.id, orgUnitId: yazar.orgUnitId },
+      data: { activityId: activity.id, orgUnitId: author.orgUnitId },
     });
 
-    const talep = await requestActivityDeletion(testDb, root, activity.id, NOW);
-    expect(talep.ok).toBe(true);
-    const kod = await kuyruktakiKod();
+    const request = await requestActivityDeletion(testDb, root, activity.id, NOW);
+    expect(request.ok).toBe(true);
+    const code = await getCodeFromQueue();
 
-    const sonuc = await confirmActivityDeletion(testDb, root, activity.id, kod, NOW);
+    const result = await confirmActivityDeletion(testDb, root, activity.id, code, NOW);
 
-    expect(sonuc.ok).toBe(true);
+    expect(result.ok).toBe(true);
     expect(await testDb.activity.count({ where: { id: activity.id } })).toBe(0);
     expect(
       await testDb.activityRevision.count({ where: { activityId: activity.id } }),
     ).toBe(0);
     expect(await testDb.readReceipt.count({ where: { activityId: activity.id } })).toBe(0);
 
-    // Kanıt kalır: denetim kaydı ve talep kaydı silinen kaydın üst verisini
-    // taşır.
-    const iz = await testDb.auditLog.findFirstOrThrow({
+    // Evidence remains: audit log and deletion request carry deleted record metadata.
+    const log = await testDb.auditLog.findFirstOrThrow({
       where: { action: "activity_deleted", objectId: activity.id },
     });
-    expect(iz.userId).toBe(root.id);
+    expect(log.userId).toBe(root.id);
 
-    const kalanTalep = await testDb.activityDeletionRequest.findFirstOrThrow({
+    const remainingRequest = await testDb.activityDeletionRequest.findFirstOrThrow({
       where: { activityId: activity.id },
     });
-    expect(kalanTalep.activityTitle).toBe("Pres hattı kontrolü");
-    expect(kalanTalep.consumedAt).not.toBeNull();
+    expect(remainingRequest.activityTitle).toBe("Press line inspection");
+    expect(remainingRequest.consumedAt).not.toBeNull();
 
-    // Skor için ayrı bir kuyruk **yazılmaz** ve bu doğrudur: yeniden
-    // hesaplama kuyruğu yalnız donmuş karneler içindir, kapanmış dönem ise
-    // zaten silinemiyor. Açık dönemin skoru her sorguda canlı hesaplandığı
-    // için silinen kayıt kendiliğinden düşer.
+    // No score recalculation queue entry is needed: recalculation is only for frozen cards.
     expect(
       await testDb.scoreRecalculationRequest.count({
-        where: { userId: yazar.id, sourceId: activity.id },
+        where: { userId: author.id, sourceId: activity.id },
       }),
     ).toBe(0);
   });
 
-  it("yanlış kod silmez ve deneme sayılır; eşikte talep kapanır", async () => {
-    const { root, activity } = await sahne();
+  it("wrong code does not delete and counts attempt; threshold closes request", async () => {
+    const { root, activity } = await setup();
     await requestActivityDeletion(testDb, root, activity.id, NOW);
 
-    for (let deneme = 0; deneme < MAX_DELETION_ATTEMPTS; deneme += 1) {
-      const sonuc = await confirmActivityDeletion(
+    for (let attempt = 0; attempt < MAX_DELETION_ATTEMPTS; attempt += 1) {
+      const result = await confirmActivityDeletion(
         testDb,
         root,
         activity.id,
         "000000",
         NOW,
       );
-      expect(sonuc.ok).toBe(false);
+      expect(result.ok).toBe(false);
     }
 
-    // Eşiğe varınca talep iptal: doğru kod bile artık çalışmaz.
-    const kod = await kuyruktakiKod();
-    const sonSonuc = await confirmActivityDeletion(
+    // Request canceled upon reaching threshold: even correct code fails.
+    const code = await getCodeFromQueue();
+    const finalResult = await confirmActivityDeletion(
       testDb,
       root,
       activity.id,
-      kod,
+      code,
       NOW,
     );
 
-    expect(sonSonuc.ok).toBe(false);
-    if (sonSonuc.ok) return;
-    expect(sonSonuc.error).toBe("no_request");
+    expect(finalResult.ok).toBe(false);
+    if (finalResult.ok) return;
+    expect(finalResult.error).toBe("no_request");
     expect(await testDb.activity.count({ where: { id: activity.id } })).toBe(1);
   });
 
-  it("süresi geçmiş kod çalışmaz", async () => {
-    const { root, activity } = await sahne();
+  it("expired code does not work", async () => {
+    const { root, activity } = await setup();
     await requestActivityDeletion(testDb, root, activity.id, NOW);
-    const kod = await kuyruktakiKod();
+    const code = await getCodeFromQueue();
 
-    const sonuc = await confirmActivityDeletion(
+    const result = await confirmActivityDeletion(
       testDb,
       root,
       activity.id,
-      kod,
+      code,
       new Date(NOW.getTime() + DELETION_CODE_TTL_MS + 1000),
     );
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("expired");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("expired");
     expect(await testDb.activity.count({ where: { id: activity.id } })).toBe(1);
   });
 
-  it("aynı kod ikinci kez çalışmaz", async () => {
-    const { root, activity } = await sahne();
+  it("same code cannot be reused", async () => {
+    const { root, activity } = await setup();
     await requestActivityDeletion(testDb, root, activity.id, NOW);
-    const kod = await kuyruktakiKod();
+    const code = await getCodeFromQueue();
 
-    expect((await confirmActivityDeletion(testDb, root, activity.id, kod, NOW)).ok).toBe(
+    expect((await confirmActivityDeletion(testDb, root, activity.id, code, NOW)).ok).toBe(
       true,
     );
 
-    const ikinci = await confirmActivityDeletion(testDb, root, activity.id, kod, NOW);
-    expect(ikinci.ok).toBe(false);
+    const second = await confirmActivityDeletion(testDb, root, activity.id, code, NOW);
+    expect(second.ok).toBe(false);
   });
 
-  it("kod e-postayla gider ve kuyrukta düz metin olarak saklanmaz", async () => {
-    const { root, activity } = await sahne();
+  it("code sent via email and stored as hash, not plaintext", async () => {
+    const { root, activity } = await setup();
     await requestActivityDeletion(testDb, root, activity.id, NOW);
 
-    const kuyruk = await testDb.notificationQueue.findFirstOrThrow({
+    const queueRow = await testDb.notificationQueue.findFirstOrThrow({
       where: { eventType: "activity_deletion_code" },
     });
-    expect(kuyruk.userId).toBe(root.id);
+    expect(queueRow.userId).toBe(root.id);
 
-    // Veritabanındaki talep kaydı kodun kendisini değil özetini taşır.
-    const talep = await testDb.activityDeletionRequest.findFirstOrThrow({
+    // Request record in DB stores hash of code, not plaintext code itself.
+    const requestRow = await testDb.activityDeletionRequest.findFirstOrThrow({
       where: { activityId: activity.id },
     });
-    const kod = await kuyruktakiKod();
-    expect(talep.codeHash).not.toBe(kod);
-    expect(talep.codeHash).toHaveLength(64);
+    const code = await getCodeFromQueue();
+    expect(requestRow.codeHash).not.toBe(code);
+    expect(requestRow.codeHash).toHaveLength(64);
   });
 });

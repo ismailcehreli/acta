@@ -4,20 +4,21 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/form";
 
 import { PageSizeSelect } from "./page-size-select";
+import { getTranslations } from "@/server/i18n/server";
 
-// Ortak süzgeç şeridi (Görev 11.3).
+
 //
-// Her listeleyen sayfa kendi daraltmalarını tanımlar; **görsel dil ve adres
-// çubuğu sözleşmesi ortaktır.** Sayfa başına ayrı süzgeç bileşeni yazmak iki
-// şeyi bozardı: kullanıcı her ekranda yeni bir düzen öğrenirdi ve biri
-// düzeltildiğinde diğerleri sessizce geride kalırdı.
+
+
+
+
 //
-// **Süzgeç yetki vermez.** Alanlar yalnız adres çubuğuna yazılır; daraltmayı
-// sunucu, görünürlük filtresinin *üstüne* uygular ve hiçbiri kapsamı
-// genişletemez (§8.4).
+
+
+
 //
-// Form `method="get"`: süzgeçli liste paylaşılabilir bir adrestir, geri
-// düğmesi çalışır ve sayfa yenilendiğinde seçim kaybolmaz.
+
+
 
 export interface FilterFieldOption {
   value: string;
@@ -25,17 +26,17 @@ export interface FilterFieldOption {
 }
 
 export interface FilterField {
-  /** Adres çubuğundaki parametre adı. */
+
   name: string;
   label: string;
-  /** Seçili değer; boş metin "hepsi" demektir. */
+
   value: string;
   options: FilterFieldOption[];
-  /** Tailwind genişlik sınıfı; alan içeriğine göre ayarlanır. */
+
   width?: string;
 }
 
-export function FilterBar({
+export async function FilterBar({
   action,
   fields,
   hidden,
@@ -43,53 +44,50 @@ export function FilterBar({
   pageSize,
   clearHref,
   filtered,
-  submitLabel = "Uygula",
+  submitLabel,
 }: {
-  /** Formun gideceği yol; boşsa aynı sayfa. */
+
   action?: string;
   fields: FilterField[];
-  /** Formla birlikte taşınması gereken alanlar (arama kelimesi gibi). */
+
   hidden?: { name: string; value: string }[];
-  /** Sayfaya özel ek alan; alanların önüne girer. */
+
   extra?: ReactNode;
-  /** Verilirse "sayfada kaç kayıt" seçicisi çizilir. */
+
   pageSize?: number;
   clearHref: string;
-  /** Varsayılandan sapan bir seçim var mı; "temizle" düğmesi buna bağlı. */
+
   filtered: boolean;
   submitLabel?: string;
 }) {
+  const t = await getTranslations();
   return (
     <div className="border-b border-line bg-inset/60 px-4 py-3 sm:px-5">
       <form method="get" action={action} className="flex flex-wrap items-end gap-3">
-        {/* Gizli alanlar olmadan süzgeç uygulandığında arama kelimesi
-            kayboluyor ve kullanıcı bomboş bir sonuç sayfasına düşüyordu. */}
-        {hidden?.map((alan) => (
-          <input key={alan.name} type="hidden" name={alan.name} value={alan.value} />
+
+        {hidden?.map((field) => (
+          <input key={field.name} type="hidden" name={field.name} value={field.value} />
         ))}
 
         {extra}
 
-        {fields.map((alan) => (
+        {fields.map((field) => (
           <Field
-            key={alan.name}
-            htmlFor={alan.name}
-            label={alan.label}
-            className={alan.width ?? "w-44"}
+            key={field.name}
+            htmlFor={field.name}
+            label={field.label}
+            className={field.width ?? "w-44"}
           >
-            {/* `key` seçili değerdir: `defaultValue` yalnız bağlanma anında
-                DOM'a yazılır ve yumuşak gezinmede React aynı `<select>`
-                düğümünü yeniden kullanıyor; kutu eski değerde kalıyor,
-                liste daralmışken süzgeç "Hepsi" görünüyordu. */}
+
             <Select
-              key={alan.value}
-              id={alan.name}
-              name={alan.name}
-              defaultValue={alan.value}
+              key={field.value}
+              id={field.name}
+              name={field.name}
+              defaultValue={field.value}
             >
-              {alan.options.map((secenek) => (
-                <option key={secenek.value} value={secenek.value}>
-                  {secenek.label}
+              {field.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </Select>
@@ -99,22 +97,15 @@ export function FilterBar({
         {pageSize !== undefined ? <PageSizeSelect value={pageSize} /> : null}
 
         <Button type="submit" size="sm">
-          {submitLabel}
+          {submitLabel ?? t("common.apply")}
         </Button>
 
         {filtered ? (
           <ButtonLink href={clearHref} variant="ghost" size="sm">
-            Süzgeci temizle
+            {t("common.clearFilter")}
           </ButtonLink>
         ) : null}
       </form>
     </div>
   );
 }
-
-/** Listelerde ortak kullanılan dönem seçenekleri. */
-export const DONEM_SECENEKLERI: FilterFieldOption[] = [
-  { value: "today", label: "Bugün" },
-  { value: "week", label: "Bu hafta" },
-  { value: "all", label: "Tümü" },
-];

@@ -1,22 +1,19 @@
-// Baş harf düşüşü (Görev 11.5).
-//
-// Sunucuya bağlı olmayan saf bir işlev; hem yükleme yolunda hem de ekranda
-// aynı harfleri üretsin diye paylaşılan katmanda duruyor.
+import { DEFAULT_LOCALE, LOCALE_LANGUAGE_TAGS } from "@/shared/i18n";
+
+// Extract initials without depending on the server or the rendering layer.
 
 /**
- * Resim yokken gösterilecek baş harfler: "Ahmet Yılmaz" → "AY".
- *
- * Büyütme **Türkçe kurallarıyla** yapılır: `toUpperCase()` varsayılan yerelde
- * "ışık" için "I" yerine "I" üretir ama "i" için "I" verir ve "İ" beklenirken
- * yanlış harf çıkar. Ad baş harfi ekranda kişiyi temsil ediyor; yanlış harf
- * doğrudan görünür bir hata olur.
+ * Returns the initials used when a profile image is unavailable.
  */
-export function initials(fullName: string): string {
-  const parcalar = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parcalar.length === 0) return "";
+export function initials(
+  fullName: string,
+  locale = LOCALE_LANGUAGE_TAGS[DEFAULT_LOCALE],
+): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "";
 
-  const ilk = parcalar[0] as string;
-  const son = parcalar.length > 1 ? (parcalar.at(-1) as string) : "";
+  const first = parts[0] as string;
+  const last = parts.length > 1 ? (parts.at(-1) as string) : "";
 
-  return `${ilk[0] ?? ""}${son[0] ?? ""}`.toLocaleUpperCase("tr-TR");
+  return `${first[0] ?? ""}${last[0] ?? ""}`.toLocaleUpperCase(locale);
 }

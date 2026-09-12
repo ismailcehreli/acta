@@ -14,13 +14,11 @@ import {
 } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Onay hatırlatması (§5.4). Müdür bakmazsa kayıt sessizce bekler: yazan
-// "gönderdim" sanır, üst kademe hiç görmez.
-//
-// 17.08.2026 Pazartesi; 19.08 Çarşamba = 2 iş günü sonra.
+// Overdue approval reminders test suite.
+// 2026-08-17 is Monday; 2026-08-19 is Wednesday = 2 business days later.
 
-const YAZIM = new Date("2026-08-17T09:00:00.000Z");
-const IKI_IS_GUNU_SONRA = new Date("2026-08-19T09:00:00.000Z");
+const WRITTEN_AT = new Date("2026-08-17T09:00:00.000Z");
+const TWO_BUSINESS_DAYS_LATER = new Date("2026-08-19T09:00:00.000Z");
 
 beforeEach(async () => {
   await resetDatabase();
@@ -30,189 +28,178 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function senaryo() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  const kaliphane = await createOrgUnit({
-    name: "Kalıphane",
+async function setupCompany() {
+  const root = await createOrgUnit({ name: "Company", type: "ROOT" });
+  const tooling = await createOrgUnit({
+    name: "Tooling Department",
     parentId: root.id,
     requiresApproval: true,
   });
 
-  const mudur = await createUser(kaliphane.id, {
-    fullName: "Kalıphane Müdürü",
+  const manager = await createUser(tooling.id, {
+    fullName: "Tooling Manager",
     isUnitManager: true,
   });
-  const calisan = await createUser(kaliphane.id, { fullName: "Kalıpçı" });
+  const employee = await createUser(tooling.id, { fullName: "Tooling Worker" });
 
-  return { mudur, calisan };
+  return { manager, employee };
 }
 
-/** Faaliyet tarihi yazım gününe eşit: geçmişe dönük giriş sınırına takılmasın. */
-function gun(now: Date): string {
+function formatDate(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
-async function yaz(
-  calisan: { id: string; orgUnitId: string },
-  now: Date = YAZIM,
+async function createPendingActivity(
+  user: { id: string; orgUnitId: string },
+  now: Date = WRITTEN_AT,
 ) {
-  const sonuc = await createActivity(
+  const result = await createActivity(
     testDb,
-    { id: calisan.id, orgUnitId: calisan.orgUnitId, requiresApproval: true },
+    { id: user.id, orgUnitId: user.orgUnitId, requiresApproval: true },
     {
-      activityDate: gun(now),
-      title: "Kalıp bakımı",
-      description: "Haftalık bakım yapıldı.",
+      activityDate: formatDate(now),
+      title: "Tooling maintenance",
+      description: "Weekly maintenance completed.",
       targetDepartmentIds: [],
     },
     now,
   );
-  if (!sonuc.ok) throw new Error(`kurulum: ${sonuc.message}`);
-  return sonuc.activity;
+  if (!result.ok) throw new Error(`setup failed: ${result.message}`);
+  return result.activity;
 }
 
-async function hatirlatmalar() {
+async function fetchReminders() {
   return testDb.notificationQueue.findMany({
     where: { eventType: NOTIFICATION_EVENTS.approvalOverdue },
   });
 }
 
-describe("geciken onay hatırlatması", () => {
-  it("eşiği aşan kayıt için onaylayıcıya gider", async () => {
-    const { calisan, mudur } = await senaryo();
-    await yaz(calisan);
+describe("overdue approval reminders", () => {
+  it("enqueues reminder to approver when activity exceeds threshold", async () => {
+    const { employee, manager } = await setupCompany();
+    await createPendingActivity(employee);
 
-    const sonuc = await sendOverdueApprovalReminders(testDb, IKI_IS_GUNU_SONRA);
+    const result = await sendOverdueApprovalReminders(testDb, TWO_BUSINESS_DAYS_LATER);
 
-    expect(sonuc).toEqual({ overdue: 1, queued: 1 });
-    const kuyruk = await hatirlatmalar();
-    expect(kuyruk).toHaveLength(1);
-    expect(kuyruk[0].userId).toBe(mudur.id);
+    expect(result).toEqual({ overdue: 1, queued: 1 });
+    const queue = await fetchReminders();
+    expect(queue).toHaveLength(1);
+    expect(queue[0].userId).toBe(manager.id);
   });
 
-  it("eşik dolmadan gitmez", async () => {
-    const { calisan } = await senaryo();
-    await yaz(calisan);
+  it("does not send reminder before threshold elapses", async () => {
+    const { employee } = await setupCompany();
+    await createPendingActivity(employee);
 
-    // Ertesi gün: 1 iş günü, eşik 2.
-    const sonuc = await sendOverdueApprovalReminders(
+    const result = await sendOverdueApprovalReminders(
       testDb,
       new Date("2026-08-18T09:00:00.000Z"),
     );
 
-    expect(sonuc).toEqual({ overdue: 0, queued: 0 });
-    expect(await hatirlatmalar()).toHaveLength(0);
+    expect(result).toEqual({ overdue: 0, queued: 0 });
+    expect(await fetchReminders()).toHaveLength(0);
   });
 
-  it("eşik ayardan değiştirilebilir", async () => {
-    const { calisan } = await senaryo();
-    await yaz(calisan);
+  it("respects threshold changes from system settings", async () => {
+    const { employee } = await setupCompany();
+    await createPendingActivity(employee);
     await saveSettings(testDb, {
       [SETTING_KEYS.pendingApprovalBusinessDays]: "1",
     });
 
-    // Aynı an, eşik 1: artık gecikmiş sayılır. "Bugün iki, yarın bir" kararı
-    // ekrandan verilebilmeli.
-    const sonuc = await sendOverdueApprovalReminders(
+    const result = await sendOverdueApprovalReminders(
       testDb,
       new Date("2026-08-18T09:00:00.000Z"),
     );
 
-    expect(sonuc.queued).toBe(1);
+    expect(result.queued).toBe(1);
   });
 
-  it("aynı bekleyiş için ikinci kez gitmez", async () => {
-    const { calisan } = await senaryo();
-    await yaz(calisan);
+  it("does not enqueue duplicate reminders for the same pending wait period", async () => {
+    const { employee } = await setupCompany();
+    await createPendingActivity(employee);
 
-    await sendOverdueApprovalReminders(testDb, IKI_IS_GUNU_SONRA);
-    const ikinci = await sendOverdueApprovalReminders(
+    await sendOverdueApprovalReminders(testDb, TWO_BUSINESS_DAYS_LATER);
+    const second = await sendOverdueApprovalReminders(
       testDb,
       new Date("2026-08-20T09:00:00.000Z"),
     );
 
-    // Gecikmiş sayılmaya devam eder ama bildirim tekrarlanmaz.
-    expect(ikinci.overdue).toBe(1);
-    expect(ikinci.queued).toBe(0);
-    expect(await hatirlatmalar()).toHaveLength(1);
+    expect(second.overdue).toBe(1);
+    expect(second.queued).toBe(0);
+    expect(await fetchReminders()).toHaveLength(1);
   });
 
-  it("onaylanan kayıt için gitmez", async () => {
-    const { calisan, mudur } = await senaryo();
-    const activity = await yaz(calisan);
-    await approveActivity(testDb, mudur.id, activity.id, YAZIM);
+  it("does not send reminders for approved activities", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
+    await approveActivity(testDb, manager.id, activity.id, WRITTEN_AT);
 
-    const sonuc = await sendOverdueApprovalReminders(testDb, IKI_IS_GUNU_SONRA);
+    const result = await sendOverdueApprovalReminders(testDb, TWO_BUSINESS_DAYS_LATER);
 
-    expect(sonuc).toEqual({ overdue: 0, queued: 0 });
+    expect(result).toEqual({ overdue: 0, queued: 0 });
   });
 
-  it("düzeltme istenen kayıt için gitmez: top yazana geçti", async () => {
-    const { calisan, mudur } = await senaryo();
-    const activity = await yaz(calisan);
+  it("does not send reminder when changes have been requested", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
     await requestChanges(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
       { reasonId: (await createApprovalReason("CHANGES_REQUESTED")).id },
-      YAZIM,
+      WRITTEN_AT,
     );
 
-    const sonuc = await sendOverdueApprovalReminders(testDb, IKI_IS_GUNU_SONRA);
+    const result = await sendOverdueApprovalReminders(testDb, TWO_BUSINESS_DAYS_LATER);
 
-    expect(sonuc).toEqual({ overdue: 0, queued: 0 });
+    expect(result).toEqual({ overdue: 0, queued: 0 });
   });
 
-  it("yeniden gönderilen kayıtta sayaç baştan başlar", async () => {
-    const { calisan, mudur } = await senaryo();
-    const activity = await yaz(calisan);
+  it("resets waiting counter when author resubmits corrected activity", async () => {
+    const { employee, manager } = await setupCompany();
+    const activity = await createPendingActivity(employee);
     await requestChanges(
       testDb,
-      mudur.id,
+      manager.id,
       activity.id,
       { reasonId: (await createApprovalReason("CHANGES_REQUESTED")).id },
-      YAZIM,
+      WRITTEN_AT,
     );
 
-    // Yazan iki iş günü sonra düzeltip gönderiyor.
     await updateActivity(
       testDb,
-      calisan.id,
+      employee.id,
       {
         id: activity.id,
-        // Düzeltme günü: geçmişe dönük giriş sınırı düzeltmede de işler.
-        activityDate: gun(IKI_IS_GUNU_SONRA),
-        title: "Kalıp bakımı",
-        description: "Üç numaralı kalıpta erken aşınma tespit edildi.",
+        activityDate: formatDate(TWO_BUSINESS_DAYS_LATER),
+        title: "Tooling maintenance",
+        description: "Early wear identified on mold #3.",
         targetDepartmentIds: [],
       },
-      IKI_IS_GUNU_SONRA,
+      TWO_BUSINESS_DAYS_LATER,
     );
 
-    // Aynı an: sayaç sıfırlandığı için henüz gecikme yok. Yazımdan itibaren
-    // ölçseydik kayıt zaten gecikmiş sayılırdı.
     expect(
-      await sendOverdueApprovalReminders(testDb, IKI_IS_GUNU_SONRA),
+      await sendOverdueApprovalReminders(testDb, TWO_BUSINESS_DAYS_LATER),
     ).toEqual({ overdue: 0, queued: 0 });
 
-    // İki iş günü daha geçince gider.
-    const sonra = await sendOverdueApprovalReminders(
+    const later = await sendOverdueApprovalReminders(
       testDb,
       new Date("2026-08-21T09:00:00.000Z"),
     );
-    expect(sonra.queued).toBe(1);
+    expect(later.queued).toBe(1);
   });
 
-  it("hafta sonu iş günü saymaz", async () => {
-    const { calisan } = await senaryo();
-    // Cuma yazılır; Pazartesi sabahı 1 iş günü geçmiş olur.
-    await yaz(calisan, new Date("2026-08-21T09:00:00.000Z"));
+  it("excludes weekends from business day calculations", async () => {
+    const { employee } = await setupCompany();
+    await createPendingActivity(employee, new Date("2026-08-21T09:00:00.000Z"));
 
-    const pazartesi = await sendOverdueApprovalReminders(
+    const monday = await sendOverdueApprovalReminders(
       testDb,
       new Date("2026-08-24T09:00:00.000Z"),
     );
 
-    expect(pazartesi.queued).toBe(0);
+    expect(monday.queued).toBe(0);
   });
 });

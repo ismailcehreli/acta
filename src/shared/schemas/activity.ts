@@ -2,25 +2,19 @@ import { z } from "zod";
 
 import { isoDaySchema } from "./iso-date";
 
-// Faaliyet girdisi (§5.2). Tasarımda olmayan alan eklenmez: "üst yönetim
-// görsün" kutusu v3'te kaldırıldı (§7.5), "açık kalsın" işareti Sürüm 2'ye ait
-// (§11) — ikisi de burada yoktur.
+// Activity input (§5.2). Do not add fields that are not part of the design.
 
-/** En fazla 5 muhatap departman seçilebilir (§5.2, §16.2). */
+/** At most five related departments can be selected (§5.2, §16.2). */
 export const MAX_TARGET_DEPARTMENTS = 5;
 
 export const activityDateSchema = isoDaySchema();
 
 /**
- * Metin uzunluk sınırları (Görev 11.6).
+ * Text-length limits are loaded from settings and supplied to this schema
+ * factory so client and server validation use the same values.
  *
- * Sınırlar artık **ayardan** geliyor ve şema bir fabrikadır: aynı sayılar hem
- * istemcide hem sunucuda kullanılıyor, ekran ile doğrulama ayrışamıyor.
- *
- * Varsayılan alt sınır **1**, yani "boş olmasın" demek. Koda sessizce girmiş
- * üç karakterlik bir alt sınır "İK" başlıklı geçerli bir kaydı reddediyordu
- * (denetim 21.08.2026, bulgu 16); §3 İlke 4 gereği zorunluluğu
- * kanıtlanmamış kısıt eklenmez. Sınırı yükseltmek artık şirketin kararı.
+ * The default minimum is one character: the field must not be empty. Higher
+ * minimums are a company decision and are not imposed silently in code.
  */
 export interface ActivityTextLimits {
   titleMin: number;
@@ -29,7 +23,7 @@ export interface ActivityTextLimits {
   descriptionMax: number;
 }
 
-/** Ayar okunamayan yerlerde (taslak gibi) kullanılan gevşek tavan. */
+/** Fallback ceiling used when settings cannot be loaded, such as for drafts. */
 export const DEFAULT_TEXT_LIMITS: ActivityTextLimits = {
   titleMin: 1,
   titleMax: 150,
@@ -44,10 +38,10 @@ export function activityTitleSchema(limits: ActivityTextLimits) {
     .min(
       limits.titleMin,
       limits.titleMin <= 1
-        ? "Başlık yazılmalı"
-        : `Başlık en az ${limits.titleMin} karakter olmalı`,
+        ? "Title is required"
+        : `Title must be at least ${limits.titleMin} characters`,
     )
-    .max(limits.titleMax, `Başlık en fazla ${limits.titleMax} karakter olabilir`);
+    .max(limits.titleMax, `Title must be ${limits.titleMax} characters or fewer`);
 }
 
 export function activityDescriptionSchema(limits: ActivityTextLimits) {
@@ -57,24 +51,24 @@ export function activityDescriptionSchema(limits: ActivityTextLimits) {
     .min(
       limits.descriptionMin,
       limits.descriptionMin <= 1
-        ? "Açıklama yazılmalı"
-        : `Açıklama en az ${limits.descriptionMin} karakter olmalı`,
+        ? "Description is required"
+        : `Description must be at least ${limits.descriptionMin} characters`,
     )
     .max(
       limits.descriptionMax,
-      `Açıklama en fazla ${limits.descriptionMax.toLocaleString("tr-TR")} karakter olabilir`,
+      `Description must be ${limits.descriptionMax.toLocaleString("en-US")} characters or fewer`,
     );
 }
 
 export const targetDepartmentsSchema = z
   .array(z.string().uuid())
-  .min(1, "En az bir ilgili departman seçilmeli")
+  .min(1, "Select at least one related department")
   .max(
     MAX_TARGET_DEPARTMENTS,
-    `En fazla ${MAX_TARGET_DEPARTMENTS} departman seçilebilir`,
+    `At most ${MAX_TARGET_DEPARTMENTS} related departments can be selected`,
   )
   .refine((ids) => new Set(ids).size === ids.length, {
-    message: "Aynı departman iki kez seçilemez",
+    message: "A department cannot be selected more than once",
   });
 
 export function createActivitySchema(limits: ActivityTextLimits) {

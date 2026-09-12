@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 
+import { useTranslations } from "@/components/i18n";
 import { Alert, FormMessage } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/form";
@@ -15,12 +16,12 @@ import {
 } from "./actions";
 import { emptyAbsenceFormState } from "./form-state";
 
-// Yalnız yöneticinin kendi departmanındaki yönetici olmayan çalışanlar seçilir.
+
 
 export function MarkAbsenceForm({
   people,
   deputyPeople = [],
-  personLabel = "Kişi",
+  personLabel,
   deputyRequired = false,
 }: {
   people: { id: string; fullName: string }[];
@@ -28,6 +29,7 @@ export function MarkAbsenceForm({
   personLabel?: string;
   deputyRequired?: boolean;
 }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     markAbsenceAction,
     emptyAbsenceFormState,
@@ -36,10 +38,10 @@ export function MarkAbsenceForm({
   return (
     <form action={formAction} className="flex flex-col gap-5">
       <FormGrid columns={3}>
-        <Field htmlFor="absence-kisi" label={personLabel} required>
-          <Select id="absence-kisi" name="userId" required defaultValue="">
+        <Field htmlFor="absence-person" label={personLabel ?? t("screens.teamAbsence.person")} required>
+          <Select id="absence-person" name="userId" required defaultValue="">
             <option value="" disabled>
-              Kişi seçin
+              {t("screens.teamAbsence.selectPerson")}
             </option>
             {people.map((person) => (
               <option key={person.id} value={person.id}>
@@ -49,41 +51,41 @@ export function MarkAbsenceForm({
           </Select>
         </Field>
 
-        <Field htmlFor="absence-baslangic" label="Başlangıç" required>
-          <Input id="absence-baslangic" type="date" name="startDate" required />
+        <Field htmlFor="absence-start" label={t("screens.absence.start")} required>
+          <Input id="absence-start" type="date" name="startDate" required />
         </Field>
 
-        <Field htmlFor="absence-bitis" label="Bitiş" required>
-          <Input id="absence-bitis" type="date" name="endDate" required />
+        <Field htmlFor="absence-end" label={t("screens.absence.end")} required>
+          <Input id="absence-end" type="date" name="endDate" required />
         </Field>
 
         <Field
-          htmlFor="absence-not"
-          label="Not (isteğe bağlı)"
+          htmlFor="absence-note"
+          label={t("screens.absence.noteOptional")}
           className="sm:col-span-2"
         >
-          <Input id="absence-not" type="text" name="note" maxLength={500} />
+          <Input id="absence-note" type="text" name="note" maxLength={500} />
         </Field>
 
         {deputyPeople.length > 0 ? (
           <Field
-            htmlFor="absence-vekil"
-            label="Vekil yönetici"
+            htmlFor="absence-deputy"
+            label={t("screens.absence.deputyManager")}
             hint={
               deputyRequired
-                ? "Bu kayıt bir yöneticinin yokluğunu ve onun yerine karar verecek yöneticiyi belirtir."
-                : "Yalnız yöneticiler için vekil seçilebilir."
+                ? t("screens.teamAbsence.personHint")
+                : t("screens.teamAbsence.managerOnlyDeputyHint")
             }
             required={deputyRequired}
           >
             <Select
-              id="absence-vekil"
+              id="absence-deputy"
               name="deputyId"
               defaultValue=""
               required={deputyRequired}
             >
               <option value="">
-                {deputyRequired ? "Vekil yönetici seçin" : "Yok"}
+                {deputyRequired ? t("screens.teamAbsence.selectDeputy") : t("screens.teamAbsence.noDeputy")}
               </option>
               {deputyPeople.map((person) => (
                 <option key={person.id} value={person.id}>
@@ -100,44 +102,45 @@ export function MarkAbsenceForm({
         message={<FormMessage error={state.error} success={state.success} />}
       >
         <Button type="submit" variant="primary" disabled={pending}>
-          {pending ? "Kaydediliyor…" : "Kaydet"}
+          {pending ? t("screens.absence.saving") : t("screens.absence.save")}
         </Button>
       </FormActions>
     </form>
   );
 }
 
-/** Bekleyen çalışan talebi için iki adımlı karar alanı. */
+
 export function AbsenceDecisionActions({ absence }: { absence: AbsenceView }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     decideAbsenceAction,
     emptyAbsenceFormState,
   );
-  const [reddetmeAcik, setReddetmeAcik] = useState(false);
+  const [rejectionOpen, setRejectionOpen] = useState(false);
 
-  if (reddetmeAcik) {
+  if (rejectionOpen) {
     return (
       <form action={formAction} className="flex flex-wrap items-start gap-2">
         <input type="hidden" name="id" value={absence.id} />
         <input type="hidden" name="decision" value="REJECTED" />
         <Input
           name="reason"
-          placeholder="Reddetme gerekçesi"
-          aria-label="Reddetme gerekçesi"
+          placeholder={t("screens.teamAbsence.rejectionPlaceholder")}
+          aria-label={t("screens.teamAbsence.rejectionPlaceholder")}
           maxLength={500}
           required
           className="w-56"
         />
         <Button type="submit" size="sm" variant="danger" disabled={pending}>
-          {pending ? "Kaydediliyor…" : "Reddet"}
+          {pending ? t("screens.absence.saving") : t("screens.teamAbsence.reject")}
         </Button>
         <Button
           type="button"
           size="sm"
           variant="ghost"
-          onClick={() => setReddetmeAcik(false)}
+          onClick={() => setRejectionOpen(false)}
         >
-          Vazgeç
+          {t("screens.absence.cancel")}
         </Button>
         {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
       </form>
@@ -150,47 +153,42 @@ export function AbsenceDecisionActions({ absence }: { absence: AbsenceView }) {
         <input type="hidden" name="id" value={absence.id} />
         <input type="hidden" name="decision" value="APPROVED" />
         <Button type="submit" size="sm" variant="primary" disabled={pending}>
-          {pending ? "Kaydediliyor…" : "Onayla"}
+          {pending ? t("screens.absence.saving") : t("screens.teamAbsence.approve")}
         </Button>
       </form>
       <Button
         type="button"
         size="sm"
         variant="danger"
-        onClick={() => setReddetmeAcik(true)}
+        onClick={() => setRejectionOpen(true)}
         disabled={pending}
       >
-        Reddet
+        {t("screens.teamAbsence.reject")}
       </Button>
       {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
     </div>
   );
 }
 
-/**
- * Kaydı iptal eder — silmez.
- *
- * Silme, vekilin o döneme ait görünürlüğünü de götürürdü (§4.5). Gerekçe
- * zorunlu: aylar sonra "bu dönem neden yok" sorusunun cevabı burada durur.
- * İki adımlı, çünkü tek tıkla geri alınamaz bir iş yapılmamalı.
- */
+
 export function CancelAbsenceButton({ absence }: { absence: AbsenceView }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     cancelAbsenceAction,
     emptyAbsenceFormState,
   );
-  const [aciliyor, setAciliyor] = useState(false);
+  const [open, setOpen] = useState(false);
 
-  if (!aciliyor) {
+  if (!open) {
     return (
       <Button
         type="button"
         size="sm"
         variant="danger"
-        onClick={() => setAciliyor(true)}
-        aria-label={`${absence.userName} kaydını iptal et`}
+        onClick={() => setOpen(true)}
+        aria-label={`${absence.userName} ${t("screens.teamAbsence.cancelButton")}`}
       >
-        İptal et
+        {t("screens.teamAbsence.cancelButton")}
       </Button>
     );
   }
@@ -200,22 +198,22 @@ export function CancelAbsenceButton({ absence }: { absence: AbsenceView }) {
       <input type="hidden" name="id" value={absence.id} />
       <Input
         name="reason"
-        placeholder="İptal gerekçesi"
-        aria-label="İptal gerekçesi"
+        placeholder={t("screens.teamAbsence.cancelPlaceholder")}
+        aria-label={t("screens.teamAbsence.cancelPlaceholder")}
         maxLength={500}
         required
         className="w-56"
       />
       <Button type="submit" size="sm" variant="danger" disabled={pending}>
-        {pending ? "İptal ediliyor…" : "Onayla"}
+        {pending ? t("screens.teamAbsence.cancelling") : t("screens.teamAbsence.cancelRecord")}
       </Button>
       <Button
         type="button"
         size="sm"
         variant="ghost"
-        onClick={() => setAciliyor(false)}
+        onClick={() => setOpen(false)}
       >
-        Vazgeç
+        {t("screens.absence.cancel")}
       </Button>
       {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
     </form>

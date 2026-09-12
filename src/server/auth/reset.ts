@@ -9,12 +9,12 @@ import { hashPassword } from "./password";
 import { issueResetToken, verifyResetToken } from "./reset-token";
 import { revokeAllUserSessions } from "./session";
 
-// Parola sıfırlama (§15.3). E-posta üzerinden, tek kullanımlık ve süreli
-// belirteçle; başarıda **tüm oturumlar iptal** edilir.
+
+
 //
-// İstek yolu kullanıcı numaralandırmasına izin vermez: kayıtsız e-posta, pasif
-// kullanıcı ve kayıtlı kullanıcı **aynı** cevabı alır. Aksi hâlde giriş
-// ekranından kimin çalıştığı öğrenilebilirdi (Görev 1.1'deki aynı kural).
+
+
+
 
 export type ResetDb = Pick<
   PrismaClient,
@@ -28,7 +28,7 @@ export type ResetDb = Pick<
 >;
 
 export type ResetRequestOutcome = {
-  /** Belirteç üretildi mi. Dışarıya **sızdırılmaz**; günlük ve test içindir. */
+
   issued: boolean;
 };
 
@@ -43,21 +43,21 @@ export async function requestPasswordReset(
     select: { id: true, isActive: true, credential: { select: { version: true } } },
   });
 
-  // Pasif kullanıcıya da belirteç gitmez: hesap kapalıysa parola değiştirmek
-  // onu geri açmaz, ama e-postanın gitmesi hesabın var olduğunu ele verirdi.
+
+
   if (!user || !user.isActive || !user.credential) return { issued: false };
 
   const token = issueResetToken(user.id, user.credential.version, now, secret);
 
-  // Belirteç kuyruk kaydının içinde durur. Kuyruğa erişebilen zaten
-  // veritabanına erişiyor ve `UserCredential`'ı doğrudan değiştirebilir;
-  // belirteç ek bir yetki vermiyor. Ömrü bir saatle sınırlı.
+
+
+
   await enqueueNotification(db, {
     userId: user.id,
     eventType: NOTIFICATION_EVENTS.passwordReset,
     payload: { token },
-    // Anahtar kuşağı taşır: aynı kuşak için ikinci bir istek yeni kayıt
-    // açmaz, yani "sıfırlama" düğmesine basmak posta yağmuruna dönmez.
+
+
     idempotencyKey: `password_reset:${user.id}:${user.credential.version}`,
     now,
   });
@@ -66,16 +66,15 @@ export async function requestPasswordReset(
 }
 
 /**
- * Yeni açılan hesaba "hoş geldiniz" e-postası kuyruğa yazar.
+ * Queues a welcome email for a newly created account.
  *
- * **Parola e-postaya konmaz** (§15.3). Kullanıcıya sistemin adresi ve kendi
- * giriş adresi bildirilir; parolayı kendisi belirlesin diye sıfırlama
- * belirteci gönderilir. Parolayı postayla göndermek onu posta kutusunda,
- * yedeklerde ve arama sonuçlarında süresiz bırakırdı — sistem yöneticisinin
- * belirlediği başlangıç parolası da böylece hiç dolaşıma girmez.
+ * **Never include a password in email** (§15.3). Tell the user the system
+ * address and login address, then send a reset token so they can set their own
+ * password. Mailing a password would leave it indefinitely in the mailbox,
+ * backups, and search results.
  *
- * Sessiz kalmaz: hesap açıldı ama e-posta kuyruğa yazılamadıysa çağıran
- * bunu görür ve kullanıcıya söyler.
+ * Failures are visible: if the account is created but the email cannot be
+ * queued, the caller receives that result and can tell the user.
  */
 export async function sendWelcomeEmail(
   db: ResetDb,
@@ -104,17 +103,16 @@ export async function sendWelcomeEmail(
 }
 
 /**
- * Kimliği bilinen bir kullanıcı için sıfırlama bağlantısı gönderir
- * (Görev 11.7).
+ * Sends a reset link for a known user (Task 11.7).
  *
- * Bölüm müdürü ve sistem yöneticisi bunu tetikler. **Parola değişmez**:
- * yalnız bağlantı gider ve şifreyi kişi kendisi belirler. Müdürün belirlediği
- * bir şifre, müdürün bildiği şifredir; o andan sonra "bu kaydı kim yazdı"
- * sorusunun cevabı kesin olmaktan çıkar ve denetim izinin değeri düşer.
+ * A unit manager or system administrator triggers this. **The password does
+ * not change**: only the link is sent and the user chooses the password. A
+ * password chosen by a manager is known to that manager, weakening the answer
+ * to "who performed this action" and reducing audit value.
  *
- * `requestPasswordReset`ten ayrı: orası **e-posta** alıyor ve kullanıcı
- * numaralandırmasına karşı her durumda aynı cevabı veriyor. Burada hedef
- * zaten biliniyor; gizlenecek bir şey yok, çağıran sonucu görmeli.
+ * This differs from `requestPasswordReset`, which accepts an **email** and
+ * always returns the same result to prevent account enumeration. Here the
+ * target is already known, so the caller should see the result.
  */
 export async function sendPasswordResetForUser(
   db: ResetDb,
@@ -127,7 +125,8 @@ export async function sendPasswordResetForUser(
     select: { isActive: true, credential: { select: { version: true } } },
   });
 
-  // Pasif hesaba bağlantı gitmez: parola değiştirmek hesabı geri açmaz.
+  // Do not send a link to an inactive account: changing its password does not
+  // reactivate it.
   if (!user || !user.isActive || !user.credential) return { ok: false };
 
   const token = issueResetToken(userId, user.credential.version, now, secret);
@@ -136,8 +135,9 @@ export async function sendPasswordResetForUser(
     userId,
     eventType: NOTIFICATION_EVENTS.passwordReset,
     payload: { token },
-    // Kuşak anahtarda: aynı kuşakta ikinci kez tetiklenirse yeni posta
-    // yazılmaz, ilk bağlantı hâlâ geçerlidir.
+    // The credential version is part of the idempotency key: a second request
+    // in the same version does not queue another email while the first link is
+    // still valid.
     idempotencyKey: `password_reset:${userId}:${user.credential.version}`,
     now,
   });
@@ -168,9 +168,10 @@ export async function resetPassword(
   const passwordHash = await hashPassword(newPassword);
 
   const revokedSessionCount = await db.$transaction(async (tx) => {
-    // Yazma **koşulludur**: kimlik satırı hâlâ belirtecin doğduğu kuşaktaysa
-    // güncellenir. Kuşak ilerlemişse belirteç kullanılmış (ya da parola başka
-    // bir yoldan değişmiş) demektir; ikinci kullanım buradan geri döner.
+    // The write is **conditional**: update only while the credential row still
+    // has the version in which the token was issued. A newer version means the
+    // token was used or the password changed through another path; reject the
+    // second use here.
     const written = await tx.userCredential.updateMany({
       where: { userId: verified.userId, version: verified.credentialVersion },
       data: {
@@ -178,8 +179,8 @@ export async function resetPassword(
         passwordChangedAt: now,
         mustChangePassword: false,
         version: { increment: 1 },
-        // Sıfırlama kilidi de açar: kilitli kullanıcı parolasını
-        // sıfırlayabilmeli, yoksa kilit süresi boyunca çaresiz kalır.
+        // Resetting also unlocks the account: a locked user must be able to
+        // reset their password instead of waiting out the lock.
         failedLoginCount: 0,
         lockedUntil: null,
       },
@@ -187,19 +188,19 @@ export async function resetPassword(
 
     if (written.count === 0) return null;
 
-    // Parola değiştiyse elde kalan oturum değişikliği anlamsız kılar (§15.3).
-    const iptalEdilen = await revokeAllUserSessions(tx, verified.userId, now);
+    // A password change invalidates all remaining sessions (§15.3).
+    const revokedSessionCount = await revokeAllUserSessions(tx, verified.userId, now);
 
     await recordAudit(tx, {
       userId: verified.userId,
       objectType: AUDIT_OBJECTS.user,
       objectId: verified.userId,
       action: AUDIT_ACTIONS.userPasswordReset,
-      detail: { revokedSessionCount: iptalEdilen },
+      detail: { revokedSessionCount },
       now,
     });
 
-    return iptalEdilen;
+    return revokedSessionCount;
   });
 
   if (revokedSessionCount === null) return { ok: false, reason: "used_token" };

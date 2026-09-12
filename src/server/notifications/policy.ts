@@ -29,7 +29,7 @@ function channelAllowsPush(channel: NotificationDeliveryChannel): boolean {
   return channel === "PUSH" || channel === "BOTH";
 }
 
-/** Bir olayın geçerli varsayılan ayarını döndürür. */
+
 export function defaultNotificationPolicy(
   event: NotificationEvent,
 ): NotificationPolicy {
@@ -42,10 +42,7 @@ export function defaultNotificationPolicy(
   };
 }
 
-/**
- * Sistem genelindeki olay ayarını okur. Kapatılamayan olaylar için veritabanı
- * yanlışlıkla `false` içerse bile bildirim açık kalır.
- */
+
 export async function readNotificationPolicy(
   db: NotificationPolicyDb,
   event: NotificationEvent,
@@ -58,9 +55,9 @@ export async function readNotificationPolicy(
       ? channelValue
       : fallback.channel
   ) as NotificationDeliveryChannel;
-  // Parola bağlantısı taşıyan olaylar tarayıcı bildirimiyle sınırlanamaz.
-  // Yönetim ekranı bunu zaten kaydetmez; bu ek koruma eski ya da elle yazılmış
-  // bir ayarın kullanıcıyı bağlantısız bırakmasını önler.
+
+
+
   const channel =
     !details.canDisable && parsedChannel === "PUSH"
       ? fallback.channel

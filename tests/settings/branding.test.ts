@@ -14,8 +14,8 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Marka metinleri (ürün sahibi kararı, 19.08.2026): üst çubukta yalnız logo
-// durur; ad yerine sekme başlığı ve alt şerit metni tanımlanır.
+// Branding texts: top navigation bar displays logo;
+// browser title and footer banner text are configured.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -25,14 +25,13 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-/** Ayar değişiklikleri iz bırakıyor (§15.2); iz bir aktör ister. */
-async function yonetici() {
-  const birim = await createOrgUnit({ name: "Şirket", type: "Kök" });
-  return createUser(birim.id, { email: "yonetici@ornek.test", isSystemAdmin: true });
+async function setupAdmin() {
+  const unit = await createOrgUnit({ name: "Company", type: "Root" });
+  return createUser(unit.id, { email: "admin@example.test", isSystemAdmin: true });
 }
 
-describe("marka metinleri", () => {
-  it("hiç ayar yokken varsayılanlar döner", async () => {
+describe("branding texts", () => {
+  it("returns defaults when no settings are persisted", async () => {
     const brand = await readBranding(testDb);
 
     expect(brand.pageTitle).toBe(DEFAULT_PAGE_TITLE);
@@ -40,15 +39,15 @@ describe("marka metinleri", () => {
     expect(brand.logoUrl).toBeNull();
   });
 
-  it("kaydedilen metinler okunur", async () => {
-    const aktor = await yonetici();
+  it("reads persisted texts", async () => {
+    const actor = await setupAdmin();
     await saveBrandingTexts(
       testDb,
       {
         pageTitle: "Acta Workspace",
         footerText: "Acta · Internal",
       },
-      aktor.id,
+      actor.id,
     );
 
     const brand = await readBranding(testDb);
@@ -56,118 +55,106 @@ describe("marka metinleri", () => {
     expect(brand.footerText).toBe("Acta · Internal");
   });
 
-  it("eski 'şirket adı' değeri sayfa başlığı olarak okunur", async () => {
-    // Alan adı değişti; güncelleme sonrası başlığın bir anda varsayılana
-    // düşmemesi için okuma tarafı eski anahtarı da kabul ediyor.
+  it("reads legacy 'company_name' setting as page title", async () => {
+    // Key name evolved; read path still recognizes legacy key.
     await testDb.systemSetting.create({
-      data: { key: "company_name", value: "Eski Ad", description: "eski" },
+      data: { key: "company_name", value: "Legacy Name", description: "legacy" },
     });
 
     const brand = await readBranding(testDb);
-    expect(brand.pageTitle).toBe("Eski Ad");
+    expect(brand.pageTitle).toBe("Legacy Name");
   });
 
-  it("yeni başlık eski değerin önüne geçer", async () => {
+  it("new page title takes precedence over legacy value", async () => {
     await testDb.systemSetting.create({
-      data: { key: "company_name", value: "Eski Ad", description: "eski" },
+      data: { key: "company_name", value: "Legacy Name", description: "legacy" },
     });
-    const aktor = await yonetici();
+    const actor = await setupAdmin();
     await saveBrandingTexts(
       testDb,
       {
-        pageTitle: "Yeni Başlık",
-        footerText: "Alt şerit",
+        pageTitle: "New Title",
+        footerText: "Footer Text",
       },
-      aktor.id,
+      actor.id,
     );
 
     const brand = await readBranding(testDb);
-    expect(brand.pageTitle).toBe("Yeni Başlık");
+    expect(brand.pageTitle).toBe("New Title");
   });
 });
 
-describe("logo dosyası ile ayar ayrıştığında", () => {
-  // Ayar satırı veritabanında, dosya diskte durur. Depolama dizini
-  // temizlenirse satır kalır, dosya gider — ve sayfa **kırık resim** çizerdi.
-  // 20.08.2026'da yerelde tam olarak bu görüldü: giriş ekranında kırık logo.
-  const logoDizini = path.join(process.cwd(), "storage", "branding");
+describe("when logo file diverges from setting", () => {
+  const logoDir = path.join(process.cwd(), "storage", "branding");
 
-  async function ayariKur() {
+  async function setupLogoSetting() {
     await testDb.systemSetting.create({
       data: {
         key: "company_logo_extension",
         value: "svg",
-        description: "logo türü",
+        description: "logo type",
       },
     });
   }
 
-  it("dosya yoksa logo gösterilmez ve tutarsızlık günlüğe yazılır", async () => {
-    await ayariKur();
-    await rm(path.join(logoDizini, "logo.svg"), { force: true });
+  it("logo is hidden if file is missing and discrepancy is logged", async () => {
+    await setupLogoSetting();
+    await rm(path.join(logoDir, "logo.svg"), { force: true });
 
-    // `mockRestore()` kaydedilen çağrıları da siler; bu yüzden önce okunur.
-    const gunluk = vi.spyOn(console, "error").mockImplementation(() => {});
-    let cagrilar: unknown[][];
+    const logger = vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls: unknown[][];
     let brand;
     try {
       brand = await readBranding(testDb);
-      cagrilar = gunluk.mock.calls.map((c) => [...c]);
+      calls = logger.mock.calls.map((c) => [...c]);
     } finally {
-      gunluk.mockRestore();
+      logger.mockRestore();
     }
 
     expect(brand.logoUrl).toBeNull();
-    // Sessizce gizlemek yetmez: sistem yöneticisi logoyu yeniden yükleyebilsin.
-    expect(cagrilar).toHaveLength(1);
-    expect(String(cagrilar[0]?.[0])).toContain("logo.svg");
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.[0])).toContain("logo.svg");
   });
 
-  it("dosya varsa logo adresi döner", async () => {
-    await ayariKur();
-    await mkdir(logoDizini, { recursive: true });
-    await writeFile(path.join(logoDizini, "logo.svg"), "<svg/>");
+  it("returns logo URL if file exists", async () => {
+    await setupLogoSetting();
+    await mkdir(logoDir, { recursive: true });
+    await writeFile(path.join(logoDir, "logo.svg"), "<svg/>");
 
     try {
       const brand = await readBranding(testDb);
       expect(brand.logoUrl).toBe("/api/branding/logo?v=svg");
     } finally {
-      await rm(path.join(logoDizini, "logo.svg"), { force: true });
+      await rm(path.join(logoDir, "logo.svg"), { force: true });
     }
   });
 });
 
-// AYAR DEĞİŞİKLİKLERİ İZ BIRAKIR (§15.2, denetim 21.08.2026, bulgu 14).
-//
-// Marka metinleri, logo ve SMTP parolasının silinmesi veriyi değiştiriyor ama
-// hiç `recordAudit` çağırmıyordu. Aynı ekrandaki normal SMTP kaydı ize
-// yazılırken bunlar yazılmıyordu; özellikle SMTP parolasının silinmesi bütün
-// bildirim kanalını durdurabildiği hâlde izsiz kalıyordu.
-describe("marka değişiklikleri denetim izine yazılır", () => {
-  it("metin kaydı iz bırakır", async () => {
-    const aktor = await yonetici();
+describe("branding modifications are written to audit log", () => {
+  it("text update creates audit log", async () => {
+    const actor = await setupAdmin();
 
     await saveBrandingTexts(
       testDb,
-      { pageTitle: "Yeni başlık", footerText: "Yeni şerit" },
-      aktor.id,
+      { pageTitle: "New title", footerText: "New footer" },
+      actor.id,
     );
 
-    const iz = await testDb.auditLog.findFirstOrThrow({
+    const log = await testDb.auditLog.findFirstOrThrow({
       where: { action: "branding_changed" },
     });
-    expect(iz.userId).toBe(aktor.id);
-    expect(iz.objectId).toBe("branding");
+    expect(log.userId).toBe(actor.id);
+    expect(log.objectId).toBe("branding");
   });
 
-  it("logo kaldırma iz bırakır", async () => {
-    const aktor = await yonetici();
+  it("logo removal creates audit log", async () => {
+    const actor = await setupAdmin();
 
-    await removeLogo(testDb, aktor.id);
+    await removeLogo(testDb, actor.id);
 
-    const iz = await testDb.auditLog.findFirstOrThrow({
+    const log = await testDb.auditLog.findFirstOrThrow({
       where: { action: "logo_removed" },
     });
-    expect(iz.userId).toBe(aktor.id);
+    expect(log.userId).toBe(actor.id);
   });
 });

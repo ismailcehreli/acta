@@ -1,29 +1,33 @@
 import { redirect } from "next/navigation";
 
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { canManageOrganization } from "@/server/authz/admin";
 import { prisma } from "@/server/db";
 import { readAllSettings } from "@/server/settings/system-settings";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import { SettingsChrome } from "../settings-chrome";
 import { SettingsForm } from "../settings-form";
 
-export const metadata = { title: "Skor ayarları" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.settingsPage.details.scoringTitle");
+}
 
 export default async function ScoringSettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
   if (!canManageOrganization(user)) {
-    return <YetkiUyarisi user={user} mesaj="Bu ayarları yalnızca sistem yöneticisi değiştirebilir." />;
+    return <PermissionWarning user={user} message={t("screens.settingsPage.permission")} />;
   }
 
   return (
     <SettingsChrome
       user={user}
       section="scoring"
-      title="Skor ayarları"
-      description="Skor sistemini açın, üç kalemin ağırlığını ve skor ekranındaki seçenekleri yönetin. Ağırlık değişikliği açık dönemi etkiler; kapanmış dönemler korunur."
+      title={t("screens.settingsPage.details.scoringTitle")}
+      description={t("screens.settingsPage.details.scoringDescription")}
     >
       <SettingsForm values={await readAllSettings(prisma)} section="scoring" />
     </SettingsChrome>

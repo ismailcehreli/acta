@@ -1,9 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Parola işini sahte fonksiyonla ölçüyoruz: amaç doğruluk değil, farklı hesap
-// durumlarının **aynı** maliyeti ödediğini kanıtlamak.
+// Measuring password work with a fake function: the goal is not correctness,
+// but to prove that different account states pay the **same** cost.
 vi.mock("@/server/auth/password", () => ({
-  hashPassword: vi.fn(async () => "sahte-ozet"),
+  hashPassword: vi.fn(async () => "fake-hash"),
   verifyPassword: vi.fn(async () => false),
 }));
 
@@ -15,9 +15,9 @@ import { resetRateLimits } from "@/server/auth/rate-limit";
 import { createOrgUnit, createUserWithPassword } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Denetim FAZ 2, bulgu 2: kilitli hesap hiç gecikme ve parola doğrulama
-// maliyeti ödemeden dönüyordu. Dışarıdaki metnin aynı olması yetmez — cevap
-// süresi de "bu e-posta kayıtlı ve aktif" bilgisini sızdırır.
+// Audit PHASE 2, finding 2: locked account was returning without paying any delay
+// or password verification cost. Matching user-facing text is not enough — response
+// time also leaks the "this email is registered and active" information.
 
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
@@ -49,17 +49,17 @@ async function measure(email: string, key: string): Promise<Cost> {
         sleepCalls.push(ms);
       },
     },
-    { email, password: "denenen-parola" },
+    { email, password: "tried-password" },
   );
 
   return { sleepCalls, verifyCalls: vi.mocked(verifyPassword).mock.calls.length };
 }
 
-describe("hesap durumları aynı maliyeti öder", () => {
-  it("kilitli hesap ile kayıtsız e-posta aynı gecikmeyi ve hash işini görür", async () => {
+describe("account statuses pay the same cost", () => {
+  it("locked account and unregistered email experience same delay and hash work", async () => {
     const unit = await createOrgUnit();
-    const user = await createUserWithPassword(unit.id, "parola", {
-      email: "kilitli@ornek.test",
+    const user = await createUserWithPassword(unit.id, "password", {
+      email: "locked@example.test",
     });
     await testDb.userCredential.update({
       where: { userId: user.id },
@@ -69,25 +69,25 @@ describe("hesap durumları aynı maliyeti öder", () => {
       },
     });
 
-    const kilitli = await measure("kilitli@ornek.test", "10.0.0.1");
-    const kayitsiz = await measure("yok@ornek.test", "10.0.0.2");
+    const locked = await measure("locked@example.test", "10.0.0.1");
+    const unregistered = await measure("nonexistent@example.test", "10.0.0.2");
 
-    expect(kilitli.sleepCalls).toEqual(kayitsiz.sleepCalls);
-    expect(kilitli.verifyCalls).toBe(kayitsiz.verifyCalls);
-    // Her iki yol da gerçekten bir parola doğrulaması çalıştırmalı.
-    expect(kilitli.verifyCalls).toBeGreaterThan(0);
+    expect(locked.sleepCalls).toEqual(unregistered.sleepCalls);
+    expect(locked.verifyCalls).toBe(unregistered.verifyCalls);
+    // Both paths must actually execute a password verification.
+    expect(locked.verifyCalls).toBeGreaterThan(0);
   });
 
-  it("yanlış parola yolu da aynı sayıda hash işi çalıştırır", async () => {
+  it("wrong password path also runs same number of hash jobs", async () => {
     const unit = await createOrgUnit();
-    await createUserWithPassword(unit.id, "parola", {
-      email: "aktif@ornek.test",
+    await createUserWithPassword(unit.id, "password", {
+      email: "active@example.test",
     });
 
-    const yanlisParola = await measure("aktif@ornek.test", "10.0.0.3");
-    const kayitsiz = await measure("yok2@ornek.test", "10.0.0.4");
+    const wrongPassword = await measure("active@example.test", "10.0.0.3");
+    const unregistered = await measure("nonexistent2@example.test", "10.0.0.4");
 
-    expect(yanlisParola.verifyCalls).toBe(kayitsiz.verifyCalls);
-    expect(yanlisParola.sleepCalls).toEqual(kayitsiz.sleepCalls);
+    expect(wrongPassword.verifyCalls).toBe(unregistered.verifyCalls);
+    expect(wrongPassword.sleepCalls).toEqual(unregistered.sleepCalls);
   });
 });

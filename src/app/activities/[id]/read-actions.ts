@@ -10,12 +10,7 @@ import {
 } from "@/server/reads/service";
 import { readTicketSubmissionSchema } from "@/shared/schemas/read";
 
-/**
- * Detay görünümü yeterince süre açık kaldığında istemci tarafından çağrılır
- * (§10.2). Süre **istemciden gelmez**: sayfa render edilirken sunucuda üretilen
- * imzalı bilet geri gönderilir ve geçen süreyi sunucu hesaplar. Görünürlük de
- * ayrıca doğrulanır — görülemeyen kayıt okunmuş sayılamaz.
- */
+
 export async function markReadAction(
   activityId: string,
   ticket: string,

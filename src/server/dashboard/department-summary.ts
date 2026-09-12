@@ -15,10 +15,12 @@ import {
 import { readBooleanSetting } from "@/server/settings/system-settings";
 import { SETTING_KEYS } from "@/server/settings/registry";
 import { rollupByOrgUnit } from "@/server/reports/rollup";
+import { compareLocalized } from "@/shared/format/locale";
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n";
 
-// Yönetici dashboard'undaki birim özeti. Satırlar artık düz bir liste değil,
-// yöneticinin bağlı olduğu birimden aşağı doğru gelen ağacın görünür dalıdır.
-// Sayaçların tamamı faaliyet akışındaki aynı görünürlük kapısından geçer.
+
+
+
 
 export type DepartmentSummaryDb = Pick<
   PrismaClient,
@@ -29,27 +31,27 @@ export interface DepartmentSummaryRow {
   orgUnitId: string;
   parentId: string | null;
   name: string;
-  /** Bu birimdeki ve alt birimlerdeki aktif kişi sayısı. */
+
   people: number;
-  /** Bu birimdeki ve alt birimlerdeki görünür faaliyet sayısı. */
+
   activityCount: number;
-  /** Yalnız bu birime bağlı aktif kişi sayısı. */
+
   directPeople: number;
-  /** Yalnız bu birimdeki görünür faaliyet sayısı. */
+
   directActivityCount: number;
-  /** Bu satırın altında başka görünür birimler var mı? */
+
   isRollup: boolean;
-  /** Yönetici biriminin altından itibaren girinti seviyesi. */
+
   depth: number;
-  /** Bu birim ve alt birimlerde görülebilen bekleyen onay sayısı. */
+
   pendingApproval: number;
-  /** Katılım özeti ayarı açıksa doğrudan/alt toplam. */
+
   participation: { wrote: number; expected: number } | null;
 }
 
 export interface DepartmentSummaryOptions {
-  /** Yönetilen alanın kök satırını da göster. */
   includeRoot?: boolean;
+  locale?: Locale;
 }
 
 type Unit = { id: string; name: string; parentId: string | null; sortOrder: number };
@@ -107,7 +109,9 @@ export async function departmentSummary(
   }
   for (const children of childrenByParent.values()) {
     children.sort(
-      (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "tr"),
+      (a, b) =>
+        a.sortOrder - b.sortOrder ||
+        compareLocalized(a.name, b.name, options.locale ?? DEFAULT_LOCALE),
     );
   }
 
@@ -128,9 +132,9 @@ export async function departmentSummary(
     AND: [
       managedAuthorsWhere(subordinates),
       { authorOrgUnitId: { in: visibleUnitIds } },
-      // Sayım tanımı tek yerde (karar 03.09.2026): iptal **ve** ret dışarıda.
-      // Aşağıdaki katılım okuması bilerek bu tanımı kullanmıyor — reddedilen
-      // kayıt, kişinin o gün çalışmadığı anlamına gelmez.
+
+
+
       countableActivityWhere(),
       ...(start ? [{ activityDate: { gte: start } }] : []),
     ],

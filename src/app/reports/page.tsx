@@ -1,9 +1,12 @@
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/shell/app-shell";
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { toShellUser } from "@/components/shell/shell-user";
 import { PageHeader } from "@/components/ui/page";
+import { getTranslations } from "@/server/i18n/server";
+import { getLocale } from "@/server/i18n/locale";
+import type { TranslateFunction } from "@/shared/i18n";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { visibleReportScope } from "@/server/authz/visibility";
 import { prisma } from "@/server/db";
@@ -17,36 +20,41 @@ import {
 
 import { ReportPageFrame, ReportsView, type ReportTabOption } from "./report-view";
 
-export const metadata = { title: "Raporlar" };
 export const dynamic = "force-dynamic";
 
-const REPORT_TABS: ReportTabOption[] = [
+export async function generateMetadata() {
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
+  return { title: t("screens.reports.title") };
+}
+
+const REPORT_TABS = [
   {
     value: "activities",
-    label: "Faaliyet özeti",
-    hint: "iş akışı",
+    labelKey: "screens.reports.activityTab",
+    hintKey: "screens.reports.activityHint",
   },
   {
     value: "absence",
-    label: "İzin özeti",
-    hint: "planlama",
+    labelKey: "screens.reports.absenceTab",
+    hintKey: "screens.reports.absenceHint",
   },
   {
     value: "notifications",
-    label: "Bildirim durumu",
-    hint: "iletişim",
+    labelKey: "screens.reports.notificationsTab",
+    hintKey: "screens.reports.notificationsHint",
   },
   {
     value: "scores",
-    label: "Skor ve takdir",
-    hint: "gelişim",
+    labelKey: "screens.reports.scoresTab",
+    hintKey: "screens.reports.scoresHint",
   },
   {
     value: "feedback",
-    label: "Geri bildirim özeti",
-    hint: "iyileştirme",
+    labelKey: "screens.reports.feedbackTab",
+    hintKey: "screens.reports.feedbackHint",
   },
-];
+] as const;
 
 function parsePeriod(value: string | undefined): ReportPeriod {
   return REPORT_PERIODS.some((item) => item.value === value)
@@ -67,44 +75,53 @@ function parseTab(value: string | undefined): ReportTab {
   }
 }
 
-function tabOptions(user: { isSystemAdmin: boolean; canViewScoreReports: boolean }): ReportTabOption[] {
+function tabOptions(
+  user: { isSystemAdmin: boolean; canViewScoreReports: boolean },
+  t: TranslateFunction,
+): ReportTabOption[] {
   return REPORT_TABS.filter(
     (tab) =>
       (tab.value !== "scores" || user.canViewScoreReports) &&
       (tab.value !== "feedback" || user.isSystemAdmin),
-  );
+  ).map((tab) => ({
+    value: tab.value,
+    label: t(tab.labelKey),
+    hint: t(tab.hintKey),
+  }));
 }
 
 export default async function ReportsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ sekme?: string; donem?: string; birim?: string }>;
+  searchParams: Promise<{ tab?: string; period?: string; unit?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
 
   const scope = await visibleReportScope(prisma, user.id);
   if (!scope) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Toplu raporları görmek için sistem yöneticisinin size raporlama yetkisi vermesi gerekir."
+        message={t("screens.reports.permissionReports")}
       />
     );
   }
 
   const params = await searchParams;
-  const period = parsePeriod(params.donem);
-  const tab = parseTab(params.sekme);
+  const period = parsePeriod(params.period);
+  const tab = parseTab(params.tab);
   const selectedUnitId =
-    tab === "feedback" ? undefined : params.birim?.trim() || undefined;
-  const tabs = tabOptions(user);
+    tab === "feedback" ? undefined : params.unit?.trim() || undefined;
+  const tabs = tabOptions(user, t);
 
   if (tab === "scores" && !scope.canViewScoreReports) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Skor ve takdir raporlarını görmek için ayrıca skor raporu yetkisi gerekir."
+        message={t("screens.reports.permissionScores")}
       />
     );
   }
@@ -115,9 +132,9 @@ export default async function ReportsPage({
 
   if (selectedUnitId && !narrowReportScope(scope, selectedUnitId)) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Seçtiğiniz birim sizin rapor kapsamınızda değil."
+        message={t("screens.reports.permissionScope")}
       />
     );
   }
@@ -128,13 +145,15 @@ export default async function ReportsPage({
     tab,
     period,
     selectedUnitId,
+    undefined,
+    locale,
   );
 
   if (!report) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Bu rapor için gerekli yetki bulunmuyor."
+        message={t("screens.reports.permissionTab")}
       />
     );
   }
@@ -143,16 +162,17 @@ export default async function ReportsPage({
     <AppShell user={await toShellUser(user)}>
       <ReportPageFrame report={report}>
         <PageHeader
-          marker="RAPORLAMA"
-          title="Raporlar"
-          description={`${report.selectedScope.rootOrgUnitName} ve alt birimleri için faaliyet, izin, bildirim ve gelişim göstergeleri. Bu sayılar yönetsel karar vermeyi kolaylaştırmak için hazırlanır.`}
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Raporlar" }]}
+          marker={t("screens.reports.marker")}
+          title={t("screens.reports.title")}
+          description={t("screens.reports.description", { unit: report.selectedScope.rootOrgUnitName })}
+          breadcrumbs={[{ label: t("screens.reports.dashboard"), href: "/" }, { label: t("screens.reports.title") }]}
         />
         <ReportsView
           report={report}
           tabs={tabs}
           tab={tab}
           period={period}
+          locale={locale}
           selectedUnitId={selectedUnitId}
         />
       </ReportPageFrame>

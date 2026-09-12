@@ -16,22 +16,7 @@ import { verifyReadTicket } from "./ticket";
 
 export { READ_DWELL_MS } from "@/shared/reads";
 
-// Okundu bilgisi (§10).
-//
-// İki ayrı ihtiyaca hizmet eder (§10.1): yazan kişi "boşluğa mı yazıyorum?"
-// diye sorar, yönetici "hangilerine baktım?" diye. İkincisi bir durum alanı
-// değil, kişisel görünümdür.
-//
-// Toplama **otomatiktir**; manuel "okudum" butonu yoktur (İlke 4). Saklanan
-// veri kullanıcı başına yalnız ilk ve son okumadır; ara okumalar tutulmaz.
-// Bu bir kolaylık göstergesidir, adli nitelikte kayıt değildir (§10.3) —
-// denetim izinin tam kayıt tuttuğu işlemler §15.2'de sayılıdır.
-
-/**
- * "Okundu" ne demektir (§10.2): faaliyetin **detay görünümü** açıldığında ve
- * sistem ayarındaki süre kadar ekranda kaldığında. Liste içinde kaydırmak okundu saymaz;
- * bildirim önizlemesi de saymaz.
- */
+// Read receipts (§10).
 export function countsAsRead(dwellMs: number, requiredMs = READ_DWELL_MS): boolean {
   return dwellMs >= requiredMs;
 }
@@ -45,10 +30,7 @@ export type MarkReadResult =
   | { ok: true; recorded: boolean }
   | { ok: false; reason: "not_visible" | "too_short" | "invalid_ticket" };
 
-/**
- * Okuma kaydının tek giriş noktası. Süreyi bilet belirler; istemcinin beyanı
- * hiçbir yerde kullanılmaz (denetim 18.08.2026, FAZ 4 bulgu 8).
- */
+
 export async function recordReadFromTicket(
   db: ReadsDb,
   viewer: { id: string; isSystemAdmin: boolean },
@@ -70,15 +52,15 @@ export async function markActivityAsRead(
   dwellMs: number,
   now: Date,
 ): Promise<MarkReadResult> {
-  const gerekenSaniye = await readNumericSetting(db, SETTING_KEYS.readDwellSeconds);
-  if (!countsAsRead(dwellMs, gerekenSaniye * 1_000)) {
+  const requiredSeconds = await readNumericSetting(db, SETTING_KEYS.readDwellSeconds);
+  if (!countsAsRead(dwellMs, requiredSeconds * 1_000)) {
     return { ok: false, reason: "too_short" };
   }
 
   return db.$transaction(async (tx) => {
-    // Okuma ve düzenleme aynı faaliyet satırı kilidinde buluşur. Bu kilit
-    // alınmadan yazmak, onaylayıcı okurken yazarın son anda içeriği
-    // değiştirmesine izin verirdi.
+
+
+
     await lockActivityForMaintenance(tx, activityId);
 
     const activity = await findVisibleActivity(tx, viewer, {
@@ -86,18 +68,17 @@ export async function markActivityAsRead(
       select: { id: true, authorId: true, approvalStatus: true },
     });
 
-    // Görülemeyen kayıt okunmuş sayılamaz; her okuma yolu görünürlükten geçer.
+
     if (!activity) return { ok: false, reason: "not_visible" };
 
-    // Yazarın kendi kaydını açması okuma sayılmaz: "okundu" bilgisi yazana
-    // başkasının baktığını gösterir. Kendi okuması, düzeltme penceresini de
-    // kapatmamalıdır (§5.5, Görev 3.1).
+
+
+
     if (activity.authorId === viewer.id) return { ok: true, recorded: false };
 
-    // Tek ifadelik atomik yazım. Prisma'nın `upsert` çağrısı okuma ile yazma
-    // arasında açık bırakıyordu: aynı anda gelen iki okumada ilk okuma zamanı
-    // ileri kayabiliyor, son okuma geri gidebiliyordu (denetim FAZ 4,
-    // bulgu 10). `LEAST`/`GREATEST` değişmezi veritabanında korur.
+
+
+    // Keep the first and latest read timestamps monotonic (audit phase 4).
     await tx.$executeRaw`
       INSERT INTO "ReadReceipt" ("activityId", "userId", "firstReadAt", "lastReadAt")
       VALUES (${activityId}, ${viewer.id}, ${now}, ${now})
@@ -118,10 +99,10 @@ export interface ReaderView {
 }
 
 /**
- * Okuma bilgisini kim görür (§10.3): **yazan ve okuyanın kendisi.** Yönetici,
- * ekibinin ne okuduğunu göremez — bu bilinçli bir karardır, gözetim aracı
- * değildir. Tasarımın v2'sindeki "YK Başkanı istisnası" v3'te kaldırıldı ve
- * burada da yoktur.
+ * Who can see read receipts (§10.3): **the author and the reader themselves.**
+ * A manager cannot see what their team read; this is deliberate and is not a
+ * surveillance tool. The v2 "board chair exception" was removed in v3 and is
+ * not implemented here.
  */
 export async function listActivityReaders(
   db: ReadsDb,
@@ -138,7 +119,7 @@ export async function listActivityReaders(
   const isAuthor = activity.authorId === viewer.id;
 
   const rows = await db.readReceipt.findMany({
-    // Yazan bütün okuyucuları görür; diğerleri yalnız kendi kaydını.
+    // The author sees every reader; everyone else sees only their own receipt.
     where: isAuthor ? { activityId } : { activityId, userId: viewer.id },
     orderBy: { firstReadAt: "asc" },
     select: {

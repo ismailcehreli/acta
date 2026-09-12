@@ -9,12 +9,12 @@ import {
   SETTING_KEYS,
 } from "@/server/settings/system-settings";
 
-// Gecikme alarmı (§12.4): bir iş beklenen aralığın iki katı süredir
-// çalışmadıysa sistem yöneticisine e-posta gider.
+
+
 //
-// Alarm **tekrarlanır ama yağmura dönmez**: idempotency anahtarı saat dilimini
-// taşır, yani aynı iş için saatte en fazla bir bildirim yazılır. Tek seferlik
-// olsaydı, arıza sürerken ikinci bir uyarı hiç gelmezdi.
+
+
+
 
 export type JobAlertDb = Pick<
   PrismaClient,
@@ -26,9 +26,9 @@ export interface JobAlertOutcome {
   queued: number;
 }
 
-/** Ayara göre tekrarlanan alarm için kararlı zaman dilimi. */
-function tekrarAnahtari(now: Date, saat: number): string {
-  return String(Math.floor(now.getTime() / (saat * 60 * 60 * 1_000)));
+
+function recurrenceKey(now: Date, hours: number): string {
+  return String(Math.floor(now.getTime() / (hours * 60 * 60 * 1_000)));
 }
 
 export async function alertOnDelayedJobs(
@@ -36,56 +36,56 @@ export async function alertOnDelayedJobs(
   now: Date,
 ): Promise<JobAlertOutcome> {
   const jobs = await listJobHealth(db, now);
-  const [alarmAcik, yedekIzleniyor, tekrarSaati] = await Promise.all([
+  const [alertOpen, backupMonitoring, repeatHours] = await Promise.all([
     readBooleanSetting(db, SETTING_KEYS.jobDelayAlertEnabled),
     readBooleanSetting(db, SETTING_KEYS.backupMonitoringEnabled),
     readNumericSetting(db, SETTING_KEYS.jobDelayAlertRepeatHours),
   ]);
-  const geciken = alarmAcik
+  const overdue = alertOpen
     ? jobs.filter(
         (job) =>
           job.delayed &&
-          (job.jobName !== JOB_NAMES.backup || yedekIzleniyor),
+          (job.jobName !== JOB_NAMES.backup || backupMonitoring),
       )
     : [];
 
   const outcome: JobAlertOutcome = {
-    delayedJobs: geciken.map((job) => job.jobName),
+    delayedJobs: overdue.map((job) => job.jobName),
     queued: 0,
   };
 
-  if (geciken.length === 0) return outcome;
+  if (overdue.length === 0) return outcome;
 
-  const yoneticiler = await db.user.findMany({
+  const administrators = await db.user.findMany({
     where: { isSystemAdmin: true, isActive: true },
     select: { id: true },
   });
 
-  // Sistem yöneticisi yoksa alarm gidecek kimse yok; bu da sessiz kalmamalı.
-  if (yoneticiler.length === 0) {
+
+  if (administrators.length === 0) {
     console.error(
-      "[iş izleme] Gecikmiş iş var ama aktif sistem yöneticisi yok; alarm gönderilemedi.",
+      "[job monitoring] A job is overdue, but no active system administrator exists; alert not queued.",
     );
     return outcome;
   }
 
-  const tekrar = tekrarAnahtari(now, tekrarSaati);
+  const recurrence = recurrenceKey(now, repeatHours);
 
-  for (const job of geciken) {
-    for (const yonetici of yoneticiler) {
-      const yazildi = await enqueueNotification(db, {
-        userId: yonetici.id,
+  for (const job of overdue) {
+    for (const manager of administrators) {
+      const queued = await enqueueNotification(db, {
+        userId: manager.id,
         eventType: NOTIFICATION_EVENTS.jobDelayed,
         payload: {
           jobName: job.jobName,
           lagMinutes:
             job.lagSeconds === null ? null : Math.floor(job.lagSeconds / 60),
         },
-        idempotencyKey: `job_delayed:${job.jobName}:${yonetici.id}:${tekrar}`,
+        idempotencyKey: `job_delayed:${job.jobName}:${manager.id}:${recurrence}`,
         now,
       });
 
-      if (yazildi) outcome.queued += 1;
+      if (queued) outcome.queued += 1;
     }
   }
 

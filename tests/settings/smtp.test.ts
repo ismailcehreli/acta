@@ -11,17 +11,15 @@ import {
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// SMTP ayarları ekrandan yönetilir (§12.3, §16.5). Parola **şifreli** saklanır:
-// düz yazılsaydı veritabanı yedeğini alan herkes şirketin posta hesabını ele
-// geçirirdi.
+// SMTP settings managed via UI (§12.3, §16.5). Password stored encrypted.
 
-const SECRET = "test-icin-en-az-otuz-iki-karakterlik-anahtar";
-const AYARLAR = {
-  host: "posta.ornek.test",
+const SECRET = "test-secret-at-least-thirty-two-chars-long";
+const SETTINGS = {
+  host: "mail.example.test",
   port: 587,
   secure: false,
-  user: "faaliyet",
-  from: "Faaliyet <faaliyet@ornek.test>",
+  user: "activity",
+  from: "Activity <activity@example.test>",
 };
 
 beforeEach(async () => {
@@ -34,141 +32,138 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-describe("sır kutusu", () => {
-  it("şifrelenen değer geri çözülür", () => {
-    const kapali = sealSecret("gizli-parola", SECRET, "smtp-password");
+describe("secret box", () => {
+  it("encrypted value decrypts back to original", () => {
+    const sealed = sealSecret("secret-password", SECRET, "smtp-password");
 
-    expect(kapali).not.toContain("gizli-parola");
-    expect(openSecret(kapali, SECRET, "smtp-password")).toBe("gizli-parola");
+    expect(sealed).not.toContain("secret-password");
+    expect(openSecret(sealed, SECRET, "smtp-password")).toBe("secret-password");
   });
 
-  it("her şifreleme farklı çıktı verir", () => {
-    const bir = sealSecret("aynı-değer", SECRET, "smtp-password");
-    const iki = sealSecret("aynı-değer", SECRET, "smtp-password");
+  it("each encryption yields distinct output", () => {
+    const first = sealSecret("same-value", SECRET, "smtp-password");
+    const second = sealSecret("same-value", SECRET, "smtp-password");
 
-    // Rastgele IV: aynı değerin iki kaydı birbirine benzemez.
-    expect(bir).not.toBe(iki);
+    // Random IV: two encryptions of same value never match.
+    expect(first).not.toBe(second);
   });
 
-  it("başka anahtar ya da başka amaçla çözülemez", () => {
-    const kapali = sealSecret("gizli", SECRET, "smtp-password");
+  it("cannot be decrypted with different key or different purpose", () => {
+    const sealed = sealSecret("secret", SECRET, "smtp-password");
 
-    expect(openSecret(kapali, "baska-anahtar-en-az-otuz-iki-karakterlik", "smtp-password")).toBeNull();
-    expect(openSecret(kapali, SECRET, "baska-amac")).toBeNull();
+    expect(openSecret(sealed, "other-key-at-least-thirty-two-characters-long", "smtp-password")).toBeNull();
+    expect(openSecret(sealed, SECRET, "other-purpose")).toBeNull();
   });
 
-  it("kurcalanmış değer çözülmez", () => {
-    const kapali = sealSecret("gizli", SECRET, "smtp-password");
-    const parcalar = kapali.split(".");
-    const bozuk = `${parcalar[0]}.${parcalar[1]}.${Buffer.from("sahte").toString("base64url")}`;
+  it("tampered value does not decrypt", () => {
+    const sealed = sealSecret("secret", SECRET, "smtp-password");
+    const parts = sealed.split(".");
+    const corrupt = `${parts[0]}.${parts[1]}.${Buffer.from("fake").toString("base64url")}`;
 
-    expect(openSecret(bozuk, SECRET, "smtp-password")).toBeNull();
-    expect(openSecret("bozuk-bicim", SECRET, "smtp-password")).toBeNull();
+    expect(openSecret(corrupt, SECRET, "smtp-password")).toBeNull();
+    expect(openSecret("corrupt-format", SECRET, "smtp-password")).toBeNull();
   });
 });
 
-describe("ayarların saklanması", () => {
-  it("parola veritabanında düz durmaz", async () => {
-    await saveSmtpSettings(testDb, { ...AYARLAR, password: "cok-gizli-parola" }, SECRET);
+describe("settings persistence", () => {
+  it("password is not stored in plaintext in database", async () => {
+    await saveSmtpSettings(testDb, { ...SETTINGS, password: "very-secret-password" }, SECRET);
 
-    const kayitlar = await testDb.systemSetting.findMany();
-    const hepsi = kayitlar.map((k) => k.value).join(" ");
+    const records = await testDb.systemSetting.findMany();
+    const concatenated = records.map((k) => k.value).join(" ");
 
-    expect(hepsi).not.toContain("cok-gizli-parola");
-    // Ama gönderim için çözülebilmeli.
-    const ayarlar = await readSmtpSettings(testDb, SECRET);
-    expect(ayarlar?.password).toBe("cok-gizli-parola");
+    expect(concatenated).not.toContain("very-secret-password");
+    // But decryptable for mail sending.
+    const settings = await readSmtpSettings(testDb, SECRET);
+    expect(settings?.password).toBe("very-secret-password");
   });
 
-  it("parola ekrana geri gönderilmez", async () => {
-    await saveSmtpSettings(testDb, { ...AYARLAR, password: "gizli" }, SECRET);
+  it("password is not exposed to client view", async () => {
+    await saveSmtpSettings(testDb, { ...SETTINGS, password: "secret" }, SECRET);
 
     const view = await readSmtpView(testDb);
 
     expect(view.hasPassword).toBe(true);
-    expect(JSON.stringify(view)).not.toContain("gizli");
-    expect(view.host).toBe(AYARLAR.host);
+    expect(JSON.stringify(view)).not.toContain("secret");
+    expect(view.host).toBe(SETTINGS.host);
     expect(view.source).toBe("database");
   });
 
-  it("boş parola mevcut olanı korur", async () => {
-    await saveSmtpSettings(testDb, { ...AYARLAR, password: "ilk-parola" }, SECRET);
-    await saveSmtpSettings(testDb, { ...AYARLAR, port: 465, secure: true }, SECRET);
+  it("empty password preserves existing password", async () => {
+    await saveSmtpSettings(testDb, { ...SETTINGS, password: "initial-password" }, SECRET);
+    await saveSmtpSettings(testDb, { ...SETTINGS, port: 465, secure: true }, SECRET);
 
-    const ayarlar = await readSmtpSettings(testDb, SECRET);
-    expect(ayarlar?.password).toBe("ilk-parola");
-    expect(ayarlar?.port).toBe(465);
-    expect(ayarlar?.secure).toBe(true);
+    const settings = await readSmtpSettings(testDb, SECRET);
+    expect(settings?.password).toBe("initial-password");
+    expect(settings?.port).toBe(465);
+    expect(settings?.secure).toBe(true);
   });
 
-  it("parola silinebilir", async () => {
-    const birim = await createOrgUnit({ name: "Şirket", type: "Kök" });
-    const aktor = await createUser(birim.id, {
-      email: "yonetici@ornek.test",
+  it("password can be cleared", async () => {
+    const unit = await createOrgUnit({ name: "Company", type: "Root" });
+    const actor = await createUser(unit.id, {
+      email: "admin@example.test",
       isSystemAdmin: true,
     });
 
-    await saveSmtpSettings(testDb, { ...AYARLAR, password: "silinecek" }, SECRET);
-    await clearSmtpPassword(testDb, aktor.id);
+    await saveSmtpSettings(testDb, { ...SETTINGS, password: "to-delete" }, SECRET);
+    await clearSmtpPassword(testDb, actor.id);
 
     const view = await readSmtpView(testDb);
     expect(view.hasPassword).toBe(false);
-    const ayarlar = await readSmtpSettings(testDb, SECRET);
-    expect(ayarlar?.password).toBe("");
+    const settings = await readSmtpSettings(testDb, SECRET);
+    expect(settings?.password).toBe("");
 
-    // İz bırakır (§15.2): parolanın silinmesi bildirim kanalını durdurabilir;
-    // izsiz kalmamalı (bulgu 14).
-    const iz = await testDb.auditLog.findFirstOrThrow({
+    // Audit logged (§15.2): clearing password can stop notification channel.
+    const log = await testDb.auditLog.findFirstOrThrow({
       where: { action: "smtp_password_cleared" },
     });
-    expect(iz.userId).toBe(aktor.id);
+    expect(log.userId).toBe(actor.id);
   });
 
-  it("çözülemeyen parola sessizce boş sayılmaz", async () => {
-    await saveSmtpSettings(testDb, { ...AYARLAR, password: "gizli" }, SECRET);
+  it("undecryptable password is not silently treated as empty", async () => {
+    await saveSmtpSettings(testDb, { ...SETTINGS, password: "secret" }, SECRET);
 
-    // Anahtar değişmiş gibi davranılır.
-    const ayarlar = await readSmtpSettings(
+    const settings = await readSmtpSettings(
       testDb,
-      "tamamen-baska-bir-anahtar-en-az-otuz-iki",
+      "completely-different-key-at-least-thirty-two",
     );
 
-    // Boş parolayla bağlanmayı denemek yerine ayar yok sayılır.
-    expect(ayarlar).toBeNull();
+    // Treat as missing rather than attempting connection with empty password.
+    expect(settings).toBeNull();
   });
 });
 
-describe("kaynak önceliği", () => {
-  it("kayıt yokken ortam değişkenleri kullanılır", async () => {
-    process.env.SMTP_HOST = "ortam.ornek.test";
-    process.env.SMTP_FROM = "ortam@ornek.test";
+describe("source precedence", () => {
+  it("environment variables used when no database records exist", async () => {
+    process.env.SMTP_HOST = "env.example.test";
+    process.env.SMTP_FROM = "env@example.test";
 
     const view = await readSmtpView(testDb);
     expect(view.source).toBe("environment");
-    expect(view.host).toBe("ortam.ornek.test");
+    expect(view.host).toBe("env.example.test");
 
-    const ayarlar = await readSmtpSettings(testDb, SECRET);
-    expect(ayarlar?.host).toBe("ortam.ornek.test");
+    const settings = await readSmtpSettings(testDb, SECRET);
+    expect(settings?.host).toBe("env.example.test");
   });
 
-  it("veritabanı kaydı ortamın yerini alır", async () => {
-    process.env.SMTP_HOST = "ortam.ornek.test";
-    process.env.SMTP_FROM = "ortam@ornek.test";
-    await saveSmtpSettings(testDb, AYARLAR, SECRET);
+  it("database record overrides environment variables", async () => {
+    process.env.SMTP_HOST = "env.example.test";
+    process.env.SMTP_FROM = "env@example.test";
+    await saveSmtpSettings(testDb, SETTINGS, SECRET);
 
-    const ayarlar = await readSmtpSettings(testDb, SECRET);
-    expect(ayarlar?.host).toBe(AYARLAR.host);
+    const settings = await readSmtpSettings(testDb, SECRET);
+    expect(settings?.host).toBe(SETTINGS.host);
   });
 
-  it("hiçbiri yoksa gönderim ayarı yoktur", async () => {
+  it("if neither exists, delivery settings are null", async () => {
     expect(await readSmtpSettings(testDb, SECRET)).toBeNull();
     expect((await readSmtpView(testDb)).source).toBe("none");
   });
 
-  it("gönderen adresi eksikse ayar geçersizdir", async () => {
-    await saveSmtpSettings(testDb, { ...AYARLAR, from: "" }, SECRET);
+  it("settings invalid if from address missing", async () => {
+    await saveSmtpSettings(testDb, { ...SETTINGS, from: "" }, SECRET);
 
-    // Adres var ama gönderen yok: posta gönderilemez, sessizce denenmemeli.
     expect(await readSmtpSettings(testDb, SECRET)).toBeNull();
   });
 });

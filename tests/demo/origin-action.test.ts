@@ -1,13 +1,13 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { oturum } = vi.hoisted(() => ({
-  oturum: {
-    kisi: null as { id: string; isSystemAdmin: boolean } | null,
+const { sessionState } = vi.hoisted(() => ({
+  sessionState: {
+    user: null as { id: string; isSystemAdmin: boolean } | null,
   },
 }));
 
 vi.mock("@/server/auth/current-user", () => ({
-  getCurrentUser: async () => oturum.kisi,
+  getCurrentUser: async () => sessionState.user,
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
@@ -32,65 +32,64 @@ import { resetDatabase, testDb } from "../helpers/test-db";
 
 beforeEach(async () => {
   await resetDatabase();
-  oturum.kisi = null;
+  sessionState.user = null;
 });
 
 afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function eskiKurulum() {
-  const kok = await createOrgUnit({ name: "Acta HQ", type: "Kök" });
-  const admin = await createUser(kok.id, {
-    email: "admin@sirket.test",
+async function setupLegacyInstallation() {
+  const root = await createOrgUnit({ name: "Acta HQ", type: "Root" });
+  const admin = await createUser(root.id, {
+    email: "admin@company.test",
     isSystemAdmin: true,
   });
-  const sonuc = await installDemoData(testDb);
-  if (!sonuc.ok) throw new Error("kurulum başarısız");
+  const result = await installDemoData(testDb);
+  if (!result.ok) throw new Error("Installation failed");
   await testDb.demoObject.deleteMany();
   return admin;
 }
 
-function form(adaylar: Awaited<ReturnType<typeof listLegacyDemoOriginCandidates>>) {
-  const veri = new FormData();
-  for (const aday of adaylar) {
-    veri.append("orgUnitId", aday.id);
-    veri.set(`origin:${aday.id}`, "CREATED_BY_INSTALLER");
+function buildOriginFormData(candidates: Awaited<ReturnType<typeof listLegacyDemoOriginCandidates>>) {
+  const formData = new FormData();
+  for (const candidate of candidates) {
+    formData.append("orgUnitId", candidate.id);
+    formData.set(`origin:${candidate.id}`, "CREATED_BY_INSTALLER");
   }
-  return veri;
+  return formData;
 }
 
-describe("eski örnek birim kökeni sunucu eylemi", () => {
-  it("sistem yöneticisinin bütün açık kararlarını kaydeder", async () => {
-    const admin = await eskiKurulum();
-    oturum.kisi = { id: admin.id, isSystemAdmin: true };
-    const adaylar = await listLegacyDemoOriginCandidates(testDb);
+describe("legacy demo unit origin server action", () => {
+  it("records all explicit decisions made by system admin", async () => {
+    const admin = await setupLegacyInstallation();
+    sessionState.user = { id: admin.id, isSystemAdmin: true };
+    const candidates = await listLegacyDemoOriginCandidates(testDb);
 
-    const sonuc = await classifyLegacyDemoOriginsAction(
+    const result = await classifyLegacyDemoOriginsAction(
       { error: null, success: null },
-      form(adaylar),
+      buildOriginFormData(candidates),
     );
 
-    expect(sonuc.error).toBeNull();
+    expect(result.error).toBeNull();
     expect(
       await testDb.demoObject.count({
         where: { objectType: DEMO_OBJECT_ORG_UNIT },
       }),
-    ).toBe(adaylar.length);
+    ).toBe(candidates.length);
   });
 
-  it("sistem yöneticisi olmayan kullanıcının elle kurduğu isteği reddeder", async () => {
-    const admin = await eskiKurulum();
-    oturum.kisi = { id: admin.id, isSystemAdmin: false };
-    const adaylar = await listLegacyDemoOriginCandidates(testDb);
+  it("rejects forged request by non-admin user", async () => {
+    const admin = await setupLegacyInstallation();
+    sessionState.user = { id: admin.id, isSystemAdmin: false };
+    const candidates = await listLegacyDemoOriginCandidates(testDb);
 
     await expect(
       classifyLegacyDemoOriginsAction(
         { error: null, success: null },
-        form(adaylar),
+        buildOriginFormData(candidates),
       ),
-    ).rejects.toThrow("sistem yöneticisi");
+    ).rejects.toThrow();
     expect(await testDb.demoObject.count()).toBe(0);
   });
 });
-

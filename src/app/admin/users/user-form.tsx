@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { useTranslations } from "@/components/i18n";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -11,8 +12,8 @@ import { FormActions, FormGrid } from "@/components/ui/page";
 import { createUserAction } from "./actions";
 import { emptyUserFormState } from "./form-state";
 
-// Kullanıcı ekleme (§4.6, §15.1). Dışarıdan kayıt kapalıdır: hesabı yalnızca
-// sistem yöneticisi açar ve başlangıç parolasını güvenli bir yoldan iletir.
+
+
 
 export interface UnitChoice {
   id: string;
@@ -21,19 +22,12 @@ export interface UnitChoice {
 
 export function UserForm({
   units,
-  sistemYoneticisi,
+  isSystemAdmin,
 }: {
   units: UnitChoice[];
-  /**
-   * Sistem yöneticisi mi bakıyor (Görev 11.7).
-   *
-   * Bölüm yöneticisi rol, bayrak ve parola belirleyemez. Kutuların
-   * gizlenmesi bir **kolaylık**: asıl kural sunucuda, müdürün kendi
-   * yolunda — o yol bu alanları istekten hiç okumuyor
-   * (`mudurEklemesi`, `updateUserByManager`).
-   */
-  sistemYoneticisi: boolean;
+  isSystemAdmin: boolean;
 }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     createUserAction,
     emptyUserFormState,
@@ -42,31 +36,31 @@ export function UserForm({
   return (
     <Card>
       <CardHeader
-        title="Yeni kullanıcı"
-        description="Başlangıç parolasını kullanıcıya güvenli bir yoldan iletin; ilk girişten sonra kendisi değiştirebilir."
+        title={t("screens.users.newUser")}
+        description={t("screens.users.createDescription")}
       />
       <CardBody>
         <form action={formAction} className="flex flex-col gap-5">
           <FormGrid>
-            <Field htmlFor="fullName" label="Ad soyad" required>
+            <Field htmlFor="fullName" label={t("screens.users.fullName")} required>
               <Input id="fullName" name="fullName" required autoComplete="off" />
             </Field>
 
             <Field
               htmlFor="title"
-              label="Unvan"
-              hint="İsteğe bağlı. Örn. “Kalıphane Müdürü”. Yalnızca kim olduğunu anlatır; yetki vermez — görünürlük ve onay birim ağacından gelir."
+              label={t("screens.users.jobTitle")}
+              hint={t("screens.users.jobTitleHint")}
             >
               <Input
                 id="title"
                 name="title"
                 autoComplete="off"
                 maxLength={100}
-                placeholder="Örn. Üretim Planlama Uzmanı"
+                placeholder={t("screens.users.jobTitlePlaceholder")}
               />
             </Field>
 
-            <Field htmlFor="email" label="E-posta" required>
+            <Field htmlFor="email" label={t("common.email")} required>
               <Input
                 id="email"
                 name="email"
@@ -76,10 +70,10 @@ export function UserForm({
               />
             </Field>
 
-            <Field htmlFor="orgUnitId" label="Birim" required>
+            <Field htmlFor="orgUnitId" label={t("screens.users.unit")} required>
               <Select id="orgUnitId" name="orgUnitId" required defaultValue="">
                 <option value="" disabled>
-                  Birim seçin
+                  {t("screens.users.selectUnit")}
                 </option>
                 {units.map((unit) => (
                   <option key={unit.id} value={unit.id}>
@@ -89,12 +83,9 @@ export function UserForm({
               </Select>
             </Field>
 
-            {/* **Müdür parola belirleyemez** (tasarım, Paket F): müdürün
-                bildiği parola, denetim izindeki "bu kaydı kim yazdı"
-                cevabını zayıflatır. Müdürün açtığı hesapta parolayı
-                kullanıcı, kendi e-postasına giden bağlantıyla kurar. */}
-            {sistemYoneticisi ? (
-              <Field htmlFor="initialPassword" label="Başlangıç parolası" required hint="En az 10 karakter">
+
+            {isSystemAdmin ? (
+              <Field htmlFor="initialPassword" label={t("screens.users.initialPassword")} required hint={t("screens.users.passwordHint")}>
                 <Input
                   id="initialPassword"
                   name="initialPassword"
@@ -107,81 +98,73 @@ export function UserForm({
           </FormGrid>
 
           <fieldset className="flex flex-col gap-3">
-            <legend className="text-sm font-medium text-ink">Roller</legend>
-            {sistemYoneticisi ? (
+            <legend className="text-sm font-medium text-ink">{t("screens.users.rolesSection")}</legend>
+            {isSystemAdmin ? (
               <>
                 <Checkbox
                   name="isUnitManager"
-                  label="Birim yöneticisi"
-                  description="Kendi biriminin ve altındaki tüm birimlerin faaliyetlerini görür, onaylar ve düzeltme ister. Bir birimde birden fazla yönetici olabilir: kayıt hepsinin onay kuyruğunda görünür ve ilk karar veren süreci kapatır."
+                  label={t("screens.users.unitManager")}
+                  description={t("screens.users.unitManagerDescription")}
                 />
                 <Checkbox
                   name="isSystemAdmin"
-                  label="Sistem yöneticisi"
-                  description="Birim ağacını, kullanıcıları, çalışma takvimini ve sistem ayarlarını yönetir. Bu yetki faaliyet içeriğini görmeye yaramaz: sistem yöneticisi, yöneticisi olmadığı bir kişinin ne yazdığını okuyamaz."
+                  label={t("screens.users.systemAdministrator")}
+                  description={t("screens.users.systemAdministratorDescription")}
                 />
               </>
             ) : (
               <p className="text-[length:var(--text-sm)] text-muted">
-                Birim yöneticisi ve sistem yöneticisi yetkilerini yalnız sistem
-                yöneticisi verebilir.
+                {t("screens.users.onlyAdministratorCanGrant")}
               </p>
             )}
-            {sistemYoneticisi ? (
+            {isSystemAdmin ? (
               <>
                 <Checkbox
                   name="isScored"
                   defaultChecked
-                  label="Skoru hesaplansın"
-                  description="Faaliyet yazan ama puanlanması anlamlı olmayan roller için kapatın: genel müdür, yeni başlayan ilk dönem, yarı zamanlı. Faaliyet yazmasını engellemez."
+                  label={t("screens.users.includeInScoring")}
+                  description={t("screens.users.scoringDescription")}
                 />
                 <Checkbox
                   name="canAppreciate"
-                  label="Faaliyetlere takdir verebilir"
-                  description="Bu kişi faaliyetlere takdir verebilir. Onaylanmış faaliyetlere verilen takdirler, skor ayarındaki puan kadar faaliyeti yazan kişinin genel puanına eklenir."
+                  label={t("screens.users.canAppreciate")}
+                  description={t("screens.users.recognitionDescription")}
                 />
                 <Checkbox
                   name="canViewReports"
-                  label="Yönetim raporlarını görebilir"
-                  description="Bağlı olduğu birim ve alt birimleri için faaliyet, izin ve bildirim özetlerini görür. Raporlarda ham faaliyet metni veya bildirim içeriği gösterilmez."
+                  label={t("screens.users.canViewReports")}
+                  description={t("screens.users.managementReportsDescription")}
                 />
                 <Checkbox
                   name="canViewScoreReports"
-                  label="Skor ve takdir raporlarını görebilir"
-                  description="Bağlı olduğu birim ve alt birimleri için skor ve takdir özetlerini görür. Bu seçenek tek başına genel rapor ekranını açmaz."
+                  label={t("screens.users.canViewScoreReports")}
+                  description={t("screens.users.scoreReportsDescription")}
                 />
               </>
             ) : null}
-            {sistemYoneticisi ? (
+            {isSystemAdmin ? (
             <Checkbox
               name="writesActivities"
               defaultChecked
-              label="Günlük faaliyet yazar"
-              description="İşaret kaldırılırsa bu kişiden faaliyet beklenmez: akşam hatırlatması gitmez ve katılım hesabına girmez. Yazmayı engellemez. Yönetim Kurulu üyeleri gibi roller için."
+              label={t("screens.users.writesActivities")}
+              description={t("screens.users.activityWriterDescription")}
             />
             ) : null}
           </fieldset>
 
-          {/* Hoş geldiniz e-postası. **Parola gönderilmez**: kullanıcıya
-              sistemin adresi ve kendi giriş adresi bildirilir, parolayı
-              kendisi belirlesin diye sıfırlama bağlantısı gider. Parolayı
-              postaya koymak onu posta kutusunda ve yedeklerde süresiz
-              bırakırdı. */}
+
           <fieldset className="flex flex-col gap-3 border-t border-line pt-4">
-            <legend className="text-sm font-medium text-ink">Bilgilendirme</legend>
-            {/* Müdürün açtığı hesapta posta **zorunlu**, seçenek değil:
-                parolayı kimse bilmiyor ve tek giriş yolu bu bağlantı. */}
-            {sistemYoneticisi ? (
+            <legend className="text-sm font-medium text-ink">{t("screens.users.notificationsSection")}</legend>
+
+            {isSystemAdmin ? (
               <Checkbox
                 name="sendWelcome"
-                label="Kullanıcıya hoş geldiniz e-postası gönder"
-                description="Sistemin adresini ve giriş adresini bildiren bir e-posta gider; parolasını kendisi belirlesin diye tek kullanımlık bağlantı içerir. Parola e-postayla gönderilmez. SMTP ayarlı değilse posta kuyrukta bekler."
+                label={t("screens.users.welcomeEmail")}
+                description={t("screens.users.welcomeEmailDescription")}
               />
             ) : (
               <p className="text-[length:var(--text-sm)] text-muted">
-                Kullanıcıya parola belirleme bağlantısı içeren bir e-posta
-                gönderilecek. Parolayı siz belirleyemezsiniz; kişi kendi
-                adresinden kendisi kurar.
+                {t("screens.users.passwordSetupDescription")}
               </p>
             )}
           </fieldset>
@@ -190,12 +173,12 @@ export function UserForm({
             message={
               <>
                 {state.error ? (
-                  <div id="kullanici-hatasi">
+                    <div id="user-error">
                     <Alert tone="danger">{state.error}</Alert>
                   </div>
                 ) : null}
                 {state.success ? (
-                  <div id="kullanici-basarili">
+                    <div id="user-success">
                     <Alert tone="success">{state.success}</Alert>
                   </div>
                 ) : null}
@@ -203,7 +186,7 @@ export function UserForm({
             }
           >
             <Button type="submit" variant="primary" disabled={pending}>
-              Kullanıcı ekle
+              {t("screens.users.add")}
             </Button>
           </FormActions>
         </form>

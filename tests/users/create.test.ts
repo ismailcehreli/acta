@@ -22,44 +22,43 @@ afterAll(async () => {
 });
 
 const baseInput = {
-  fullName: "Yeni Kullanıcı",
+  fullName: "New User",
   isUnitManager: false,
   isSystemAdmin: false,
   writesActivities: true,
-  initialPassword: "baslangic-parolasi-1",
+  initialPassword: "initial-password-1",
 };
 
-describe("kullanıcı ekleme", () => {
-  it("eklenen kullanıcı başlangıç parolasıyla giriş yapabilir", async () => {
+describe("user creation", () => {
+  it("created user can log in with initial password", async () => {
     const unit = await createOrgUnit();
 
     const result = await createUser(testDb, {
       ...baseInput,
-      email: "yeni@ornek.test",
+      email: "new@example.test",
       orgUnitId: unit.id,
     });
 
     expect(result.ok).toBe(true);
 
-    // Parolasız kullanıcı giriş yapamaz; kayıt ve parola birlikte oluşmalı.
     const attempt = await login(
       { db: testDb, now: NOW, rateLimitKey: "10.0.0.1", sleep: noWait },
-      { email: "yeni@ornek.test", password: baseInput.initialPassword },
+      { email: "new@example.test", password: baseInput.initialPassword },
     );
     expect(attempt.ok).toBe(true);
   });
 
-  it("aynı e-posta ikinci kez eklenemez", async () => {
+  it("cannot add the same email address twice", async () => {
     const unit = await createOrgUnit();
     await createUser(testDb, {
       ...baseInput,
-      email: "ayni@ornek.test",
+      email: "duplicate@example.test",
       orgUnitId: unit.id,
     });
 
     const result = await createUser(testDb, {
       ...baseInput,
-      email: "ayni@ornek.test",
+      email: "duplicate@example.test",
       orgUnitId: unit.id,
     });
 
@@ -68,15 +67,13 @@ describe("kullanıcı ekleme", () => {
     expect(result.error).toBe("duplicate_email");
   });
 
-  // 20.08.2026 kararı: bir birimde birden fazla müdür olabilir. Kayıt her
-  // ikisinin de onay kuyruğuna düşer, ilk karar veren kapatır.
-  it("bir birime ikinci yönetici atanabilir", async () => {
+  it("can assign a second unit manager to a unit", async () => {
     const unit = await createOrgUnit();
     await seedUser(unit.id, { isUnitManager: true });
 
     const result = await createUser(testDb, {
       ...baseInput,
-      email: "ikinci-yonetici@ornek.test",
+      email: "second-mgr@example.test",
       orgUnitId: unit.id,
       isUnitManager: true,
     });
@@ -89,13 +86,13 @@ describe("kullanıcı ekleme", () => {
     ).toBe(2);
   });
 
-  it("pasif birime kullanıcı eklenemez", async () => {
+  it("cannot create user in an inactive unit", async () => {
     const root = await createOrgUnit();
     const passive = await createOrgUnit({ parentId: root.id, isActive: false });
 
     const result = await createUser(testDb, {
       ...baseInput,
-      email: "pasif-birim@ornek.test",
+      email: "inactive-unit@example.test",
       orgUnitId: passive.id,
     });
 
@@ -104,10 +101,10 @@ describe("kullanıcı ekleme", () => {
     expect(result.error).toBe("inactive_unit");
   });
 
-  it("olmayan birime kullanıcı eklenemez", async () => {
+  it("cannot create user in non-existent unit", async () => {
     const result = await createUser(testDb, {
       ...baseInput,
-      email: "birimsiz@ornek.test",
+      email: "nonexistent@example.test",
       orgUnitId: "00000000-0000-0000-0000-000000000000",
     });
 
@@ -116,30 +113,28 @@ describe("kullanıcı ekleme", () => {
     expect(result.error).toBe("unit_not_found");
   });
 
-  it("başarısız eklemede yarım kayıt kalmaz", async () => {
+  it("failed creation leaves no orphaned records", async () => {
     const unit = await createOrgUnit();
     const passive = await createOrgUnit({ parentId: unit.id, isActive: false });
 
-    // Kullanıcı ve parolası tek işlemde yazılır; pasif birim reddedilince
-    // ortada parolasız bir kullanıcı kalmamalı.
     await createUser(testDb, {
       ...baseInput,
-      email: "yarim@ornek.test",
+      email: "half-record@example.test",
       orgUnitId: passive.id,
     });
 
     const stored = await testDb.user.findUnique({
-      where: { email: "yarim@ornek.test" },
+      where: { email: "half-record@example.test" },
     });
     expect(stored).toBeNull();
   });
 
-  it("rapor yetkilerini kullanıcı hesabında ayrı saklar", async () => {
+  it("stores report permissions on user account", async () => {
     const unit = await createOrgUnit();
 
     const result = await createUser(testDb, {
       ...baseInput,
-      email: "rapor-yetkili@ornek.test",
+      email: "reports@example.test",
       orgUnitId: unit.id,
       canViewReports: true,
       canViewScoreReports: true,
@@ -159,27 +154,21 @@ describe("kullanıcı ekleme", () => {
   });
 });
 
-// Bu blok yalnızca **projeksiyonun dar olduğunu** kanıtlar: `listUsers` çağıranın
-// rolünü hiç almaz, dolayısıyla "sistem yöneticisi içerik göremez" yetkisini
-// sınamaz (denetim FAZ 2, bulgu 7). O yetkinin gerçek testi, içerik okuma
-// yolu Görev 3.3'te oluştuğunda yazılacak: ağaç kapsamı olmayan bir sistem
-// yöneticisiyle liste, detay, arama ve ek indirme denemelerinin tamamı
-// reddedilmelidir.
-describe("kullanıcı yönetim listesi dar projeksiyon döndürür", () => {
-  it("yalnızca yönetim alanları döner, faaliyet içeriği taşınmaz", async () => {
-    const unit = await createOrgUnit({ name: "Kalıphane" });
+describe("user management list returns narrow projection", () => {
+  it("returns administrative fields only without activity content", async () => {
+    const unit = await createOrgUnit({ name: "Workshop" });
     const user = await seedUser(unit.id, {
-      fullName: "Departman Müdürü",
+      fullName: "Department Manager",
       isUnitManager: true,
     });
-    // Kişinin faaliyeti olsun; listede içeriğinden hiçbir iz olmamalı.
+
     await testDb.activity.create({
       data: {
         authorId: user.id,
         authorOrgUnitId: unit.id,
         activityDate: new Date("2026-08-17T00:00:00.000Z"),
-        title: "GIZLI FAALIYET BASLIGI",
-        description: "GIZLI FAALIYET ACIKLAMASI",
+        title: "CONFIDENTIAL TITLE",
+        description: "CONFIDENTIAL DESCRIPTION",
       },
     });
 
@@ -187,10 +176,7 @@ describe("kullanıcı yönetim listesi dar projeksiyon döndürür", () => {
 
     expect(users).toHaveLength(1);
     expect(Object.keys(users[0]).sort()).toEqual([
-      // Profil resmi uzantısı yönetim alanıdır: resmin kendisi değil, yalnız
-      // hangi türde olduğu taşınıyor (Görev 11.5).
       "avatarExtension",
-      // Skorlama alanları da yönetim alanıdır (Görev 11.10, 11.11).
       "canAppreciate",
       "canViewReports",
       "canViewScoreReports",
@@ -210,101 +196,92 @@ describe("kullanıcı yönetim listesi dar projeksiyon döndürür", () => {
     ]);
 
     const serialized = JSON.stringify(users);
-    expect(serialized).not.toContain("GIZLI FAALIYET BASLIGI");
-    expect(serialized).not.toContain("GIZLI FAALIYET ACIKLAMASI");
+    expect(serialized).not.toContain("CONFIDENTIAL TITLE");
+    expect(serialized).not.toContain("CONFIDENTIAL DESCRIPTION");
   });
 });
 
-// Hoş geldiniz e-postası (21.08.2026, ürün sahibi isteği).
-//
-// Sınanan asıl kural: **parola e-postaya girmez.** Kullanıcıya parolayı
-// kendisi belirlesin diye tek kullanımlık bağlantı gider; sistem
-// yöneticisinin belirlediği başlangıç parolası hiç dolaşıma girmez.
-describe("hoş geldiniz e-postası", () => {
-  it("kuyruğa yazılır ve parola taşımaz", async () => {
+describe("welcome email", () => {
+  it("enqueues notification without exposing plaintext password", async () => {
     const unit = await createOrgUnit();
-    const sonuc = await createUser(testDb, {
+    const result = await createUser(testDb, {
       ...baseInput,
-      email: "yeni-kullanici@ornek.test",
+      email: "welcome-user@example.test",
       orgUnitId: unit.id,
-      initialPassword: "cok-gizli-parola-9876",
+      initialPassword: "very-secret-password-9876",
     });
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
-    const posta = await sendWelcomeEmail(testDb, sonuc.user.id, new Date());
-    expect(posta.ok).toBe(true);
+    const emailResult = await sendWelcomeEmail(testDb, result.user.id, new Date());
+    expect(emailResult.ok).toBe(true);
 
-    const satirlar = await testDb.notificationQueue.findMany({
-      where: { userId: sonuc.user.id, eventType: "account_created" },
+    const rows = await testDb.notificationQueue.findMany({
+      where: { userId: result.user.id, eventType: "account_created" },
     });
 
-    expect(satirlar).toHaveLength(1);
+    expect(rows).toHaveLength(1);
 
-    // Kuyruk satırının tamamında parola geçmemeli.
-    const ham = JSON.stringify(satirlar[0]);
-    expect(ham).not.toContain("cok-gizli-parola-9876");
-    // Ama parola belirleme belirteci olmalı; olmazsa e-posta işe yaramaz.
-    expect(satirlar[0]?.payload).toHaveProperty("token");
+    const raw = JSON.stringify(rows[0]);
+    expect(raw).not.toContain("very-secret-password-9876");
+    expect(rows[0]?.payload).toHaveProperty("token");
   });
 
-  it("pasif hesaba gönderilmez", async () => {
+  it("does not send welcome email to inactive accounts", async () => {
     const unit = await createOrgUnit();
-    const sonuc = await createUser(testDb, {
+    const result = await createUser(testDb, {
       ...baseInput,
-      email: "pasif-yeni@ornek.test",
+      email: "inactive-welcome@example.test",
       orgUnitId: unit.id,
     });
-    if (!sonuc.ok) throw new Error("kullanıcı açılamadı");
+    if (!result.ok) throw new Error("failed to create user");
 
     await testDb.user.update({
-      where: { id: sonuc.user.id },
+      where: { id: result.user.id },
       data: { isActive: false },
     });
 
-    const posta = await sendWelcomeEmail(testDb, sonuc.user.id, new Date());
-    expect(posta.ok).toBe(false);
+    const emailResult = await sendWelcomeEmail(testDb, result.user.id, new Date());
+    expect(emailResult.ok).toBe(false);
     expect(
       await testDb.notificationQueue.count({
-        where: { userId: sonuc.user.id, eventType: "account_created" },
+        where: { userId: result.user.id, eventType: "account_created" },
       }),
     ).toBe(0);
   });
 });
 
-describe("hoş geldiniz bildirimi hesapla aynı işlemde", () => {
-  it("kuyruk yazılamazsa hesap da oluşmaz", async () => {
+describe("welcome notification transaction rollback", () => {
+  it("rolls back user creation if notification queue insert fails", async () => {
     const unit = await createOrgUnit();
 
-    // Gerçek işlem, gerçek veritabanı; yalnız **kuyruk yazımı** patlıyor.
-    // Sınanan şey bir sahte nesnenin davranışı değil, işlemin geri alınması.
-    const kuyrugu_patlayan = {
+    const failingQueueDb = {
       ...testDb,
       $transaction: ((fn: (tx: unknown) => Promise<unknown>) =>
         testDb.$transaction((tx) =>
           fn(
             new Proxy(tx, {
-              get(hedef, alan) {
-                if (alan === "notificationQueue") {
+              get(target, prop) {
+                if (prop === "notificationQueue") {
                   return {
                     createMany: async () => {
-                      throw new Error("kuyruk yazılamadı");
+                      throw new Error("queue insert failed");
                     },
                   };
                 }
-                return Reflect.get(hedef, alan);
+                return Reflect.get(target, prop);
               },
             }),
           ),
         )) as typeof testDb.$transaction,
     } as unknown as typeof testDb;
 
-    const sonuc = await createUser(
-      kuyrugu_patlayan,
+    const result = await createUser(
+      failingQueueDb,
       {
         ...baseInput,
-        email: "yarim-kalmasin@ornek.test",
+        email: "rollback-test@example.test",
         orgUnitId: unit.id,
       },
       null,
@@ -312,34 +289,31 @@ describe("hoş geldiniz bildirimi hesapla aynı işlemde", () => {
       { welcomeEmail: true },
     );
 
-    expect(sonuc.ok).toBe(false);
+    expect(result.ok).toBe(false);
 
-    // Müdürün açtığı hesapta parolayı kimse bilmez ve tek giriş yolu bu
-    // bağlantıdır. Bildirim yazılamadıysa hesabın kalması, kimsenin
-    // giremediği bir kullanıcı bırakırdı.
-    const kalan = await testDb.user.findUnique({
-      where: { email: "yarim-kalmasin@ornek.test" },
+    const remaining = await testDb.user.findUnique({
+      where: { email: "rollback-test@example.test" },
     });
-    expect(kalan).toBeNull();
+    expect(remaining).toBeNull();
   });
 
-  it("kuyruk yazılabilirse hesap ve bildirim birlikte oluşur", async () => {
+  it("commits user and notification atomically on success", async () => {
     const unit = await createOrgUnit();
 
-    const sonuc = await createUser(
+    const result = await createUser(
       testDb,
-      { ...baseInput, email: "birlikte@ornek.test", orgUnitId: unit.id },
+      { ...baseInput, email: "atomic@example.test", orgUnitId: unit.id },
       null,
       NOW,
       { welcomeEmail: true },
     );
 
-    expect(sonuc.ok).toBe(true);
-    if (!sonuc.ok) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
 
-    const bildirim = await testDb.notificationQueue.findFirst({
-      where: { userId: sonuc.user.id },
+    const notification = await testDb.notificationQueue.findFirst({
+      where: { userId: result.user.id },
     });
-    expect(bildirim).not.toBeNull();
+    expect(notification).not.toBeNull();
   });
 });

@@ -10,34 +10,28 @@ import {
 } from "@/server/activities/drafts";
 import { saveDraftAttachments } from "@/server/activities/draft-attachments";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { getTranslations } from "@/server/i18n/server";
 import { prisma } from "@/server/db";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import { draftIdSchema, saveDraftSchema } from "@/shared/schemas/draft";
 
 import type { DraftActionState } from "./form-state";
 
-// Taslak eylemleri (21.08.2026).
-//
-// Taslak **kimseye gönderilmez, kimseye görünmez.** Bu yüzden burada
-// görünürlük denetimi yok; onun yerine her işlemde "bu taslak bu kullanıcının
-// mı" sorusu var ve cevabı sorgunun `where` koşulunda duruyor.
 
-/**
- * Formdan taslak kaydeder.
- *
- * Hem "Taslak olarak kaydet" düğmesi hem otomatik kaydetme aynı yolu kullanır;
- * fark tek bir bayrakta (`savedManually`). İki ayrı yol yazmak, birinin
- * diğerinden sessizce ayrışması demekti.
- */
 export async function saveDraftAction(
   _previous: DraftActionState,
   formData: FormData,
 ): Promise<DraftActionState> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
 
-  const ham = String(formData.get("draftId") ?? "");
+  const rawDraftId = String(formData.get("draftId") ?? "");
   const parsed = saveDraftSchema.safeParse({
-    id: ham === "" ? undefined : ham,
+    id: rawDraftId === "" ? undefined : rawDraftId,
     activityDate: formData.get("activityDate"),
     title: formData.get("title") ?? "",
     description: formData.get("description") ?? "",
@@ -47,27 +41,27 @@ export async function saveDraftAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz", success: null };
-  }
-
-  // Bomboş bir form taslak olarak saklanmaz: liste çöple dolar ve kullanıcı
-  // kendi yazdığını bulamaz hâle gelir.
-  if (!hasDraftContent(parsed.data)) {
     return {
-      error: "Taslak kaydetmek için en az başlık ya da açıklama yazın.",
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
       success: null,
     };
   }
 
-  const now = new Date();
-  const sonuc = await saveDraft(prisma, user.id, parsed.data, now);
 
-  if (!sonuc.ok) {
+
+  if (!hasDraftContent(parsed.data)) {
+    return { error: t("screens.drafts.contentRequired"), success: null };
+  }
+
+  const now = new Date();
+  const result = await saveDraft(prisma, user.id, parsed.data, now);
+
+  if (!result.ok) {
     return {
       error:
-        sonuc.error === "too_many"
-          ? "Taslak sayısı sınıra ulaştı. Göndermeyeceğiniz taslakları silin."
-          : "Taslak bulunamadı; başkasına ait olabilir.",
+        result.error === "too_many"
+          ? t("screens.drafts.limitReached")
+          : t("screens.drafts.notFound"),
       success: null,
     };
   }
@@ -87,7 +81,7 @@ export async function saveDraftAction(
     const attachments = await saveDraftAttachments(
       prisma,
       user.id,
-      sonuc.draft.id,
+      result.draft.id,
       incoming,
       now,
     );
@@ -96,20 +90,20 @@ export async function saveDraftAction(
       return {
         error:
           attachments.error === "draft_not_found"
-            ? "Taslak bulunamadı; başkasına ait olabilir."
-            : attachments.message,
+            ? t("screens.drafts.notFound")
+            : localizeServiceMessage(t, "draftAttachment", attachments),
         success: null,
-        draftId: sonuc.draft.id,
+        draftId: result.draft.id,
       };
     }
   }
 
   revalidatePath("/drafts");
 
-  // **Yönlendirme burada yapılmaz.** Bu eylem iki yerden çağrılıyor: düğmeden
-  // (kullanıcı Taslaklar sayfasına gitmeli) ve otomatik kaydetmeden (kullanıcı
-  // yazmaya devam ediyor, hiçbir yere gitmemeli). Kararı çağıran verir.
-  return { error: null, success: null, draftId: sonuc.draft.id };
+
+
+
+  return { error: null, success: null, draftId: result.draft.id };
 }
 
 export async function deleteDraftAction(
@@ -118,13 +112,14 @@ export async function deleteDraftAction(
 ): Promise<DraftActionState> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
 
   const parsed = draftIdSchema.safeParse({ id: formData.get("id") });
-  if (!parsed.success) return { error: "Taslak bulunamadı.", success: null };
+  if (!parsed.success) return { error: t("screens.drafts.notFound"), success: null };
 
-  const silindi = await deleteDraft(prisma, user.id, parsed.data.id);
-  if (!silindi) return { error: "Taslak bulunamadı.", success: null };
+  const deleted = await deleteDraft(prisma, user.id, parsed.data.id);
+  if (!deleted) return { error: t("screens.drafts.notFound"), success: null };
 
   revalidatePath("/drafts");
-  redirect("/drafts?kayit=silindi");
+  redirect("/drafts?record=deleted");
 }

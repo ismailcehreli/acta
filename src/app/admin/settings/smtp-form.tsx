@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { useTranslations } from "@/components/i18n/provider";
 import type { SmtpView } from "@/server/settings/smtp";
 import { Alert, FormMessage } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -16,15 +17,16 @@ import {
 } from "./actions";
 import { emptySettingsFormState } from "./form-state";
 
-// SMTP ayarları (§12.3). Parola ekranda **hiç gösterilmez**; boş bırakılırsa
-// kayıtlı olan korunur.
+
+
 
 export function SmtpForm({ view }: { view: SmtpView }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     saveSmtpAction,
     emptySettingsFormState,
   );
-  const [silState, silAction, silPending] = useActionState(
+  const [deletionState, deleteAction, deletePending] = useActionState(
     async () => clearSmtpPasswordAction(),
     emptySettingsFormState,
   );
@@ -36,28 +38,27 @@ export function SmtpForm({ view }: { view: SmtpView }) {
   return (
     <Card>
       <CardHeader
-        title="E-posta gönderimi (SMTP)"
-        description="Bildirimler bu sunucu üzerinden gider. Ayar yoksa kuyrukta birikir."
+        title={t("screens.settingsForms.smtp.title")}
+        description={t("screens.settingsForms.smtp.description")}
       />
       <CardBody className="flex flex-col gap-5">
         {view.source === "environment" ? (
           <Alert tone="info">
-            Ayarlar şu anda ortam değişkenlerinden geliyor. Buradan
-            kaydettiğinizde veritabanındaki değerler geçerli olur.
+            {t("screens.settingsForms.smtp.environmentNotice")}
           </Alert>
         ) : view.source === "none" ? (
           <Alert tone="correction">
-            SMTP ayarlı değil: bildirimler kuyrukta birikir ve gönderilmez.
+            {t("screens.settingsForms.smtp.notConfiguredNotice")}
           </Alert>
         ) : null}
 
         <form action={formAction} className="flex flex-col gap-5">
           <FormGrid>
-            <Field htmlFor="host" label="Sunucu adresi" required>
+            <Field htmlFor="host" label={t("screens.settingsForms.smtp.host")} required>
               <Input id="host" name="host" defaultValue={view.host} required />
             </Field>
 
-            <Field htmlFor="port" label="Port">
+            <Field htmlFor="port" label={t("screens.settingsForms.smtp.port")}>
               <Input id="port"
                 name="port"
                 type="number"
@@ -68,16 +69,16 @@ export function SmtpForm({ view }: { view: SmtpView }) {
               />
             </Field>
 
-            <Field htmlFor="user" label="Kullanıcı adı">
+            <Field htmlFor="user" label={t("screens.settingsForms.smtp.username")}>
               <Input id="user" name="user" defaultValue={view.user} autoComplete="off" />
             </Field>
 
             <Field htmlFor="password"
-              label="Parola"
+              label={t("screens.settingsForms.smtp.password")}
               hint={
                 view.hasPassword
-                  ? "Kayıtlı. Değiştirmiyorsanız boş bırakın."
-                  : "Kayıtlı değil."
+                  ? t("screens.settingsForms.smtp.passwordSetHint")
+                  : t("screens.settingsForms.smtp.passwordUnsetHint")
               }
             >
               <Input id="password"
@@ -90,9 +91,9 @@ export function SmtpForm({ view }: { view: SmtpView }) {
           </FormGrid>
 
           <Field htmlFor="from"
-            label="Gönderen adresi"
+            label={t("screens.settingsForms.smtp.fromAddress")}
             required
-            hint="Örnek: Faaliyet Raporlama <faaliyet@sirket.test>"
+            hint={t("screens.settingsForms.smtp.fromHint")}
           >
             <Input id="from" name="from" defaultValue={view.from} required />
           </Field>
@@ -100,13 +101,13 @@ export function SmtpForm({ view }: { view: SmtpView }) {
           <Checkbox
             name="secure"
             defaultChecked={view.secure}
-            label="Bağlantı TLS ile şifreli"
-            description="Genellikle 465 portu için işaretlenir."
+            label={t("screens.settingsForms.smtp.tls")}
+            description={t("screens.settingsForms.smtp.tlsHint")}
           />
 
           <FormActions message={<FormMessage error={state.error} success={state.success} />}>
             <Button type="submit" variant="primary" disabled={pending}>
-              SMTP ayarlarını kaydet
+              {t("screens.settingsForms.smtp.save")}
             </Button>
 
             {view.hasPassword ? null : null}
@@ -114,29 +115,34 @@ export function SmtpForm({ view }: { view: SmtpView }) {
         </form>
 
         {view.hasPassword ? (
-          <form action={silAction}>
-            <Button type="submit" size="sm" disabled={silPending}>
-              Kayıtlı parolayı sil
+          <form action={deleteAction}>
+            <Button type="submit" size="sm" disabled={deletePending}>
+              {t("screens.settingsForms.smtp.removePassword")}
             </Button>
             <div className="mt-2">
-              <FormMessage error={silState.error} success={silState.success} />
+              <FormMessage error={deletionState.error} success={deletionState.success} />
             </div>
           </form>
         ) : null}
 
         <div className="border-t border-line pt-5">
-          <p className="text-sm font-medium text-ink">Sınama e-postası</p>
+          <p className="text-sm font-medium text-ink">
+            {t("screens.settingsForms.smtp.testTitle")}
+          </p>
           <p className="mt-0.5 text-sm text-muted">
-            Yanlış bir sunucu adresi yüzünden bildirimlerin sessizce birikmesi,
-            fark edilmesi en zor arızalardan biridir. Kaydettikten sonra deneyin.
+            {t("screens.settingsForms.smtp.testDescription")}
           </p>
 
           <form action={testAction} className="mt-3 flex flex-wrap items-end gap-3">
-            <Field htmlFor="to" label="Alıcı adresi" className="min-w-64 flex-1">
-              <Input id="to" name="to" type="email" required placeholder="deneme@sirket.test" />
+            <Field
+              htmlFor="to"
+              label={t("screens.settingsForms.smtp.recipient")}
+              className="min-w-64 flex-1"
+            >
+              <Input id="to" name="to" type="email" required placeholder="test@company.test" />
             </Field>
             <Button type="submit" disabled={testPending}>
-              Gönder
+              {t("screens.settingsForms.smtp.sendTest")}
             </Button>
             <div className="w-full">
               <FormMessage error={testState.error} success={testState.success} />

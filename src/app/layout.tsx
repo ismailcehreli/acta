@@ -3,43 +3,42 @@ import type { Metadata } from "next";
 import { prisma } from "@/server/db";
 import { DEFAULT_PAGE_TITLE, readBranding } from "@/server/settings/branding";
 import { getLocale } from "@/server/i18n/locale";
+import { LOCALE_LANGUAGE_TAGS } from "@/shared/i18n";
 import { getTranslations } from "@/server/i18n/server";
 import { I18nProvider } from "@/components/i18n/provider";
 
 import "./globals.css";
 
 /**
- * Sekme başlığı **ayardan** gelir (ürün sahibi kararı, 19.08.2026). Sabit
- * yazılı olduğu sürece marka ayarı yarım kalıyordu: logo değişiyor, sekmede
- * hâlâ varsayılan ad duruyordu.
+ * The tab title comes from settings. A hard-coded title left branding
+ * half-finished: the logo changed while the tab kept the default name.
  *
- * **Veritabanına ulaşılamazsa varsayılan başlıkla devam edilir.** İki gerçek
- * durum var:
+ * If the database is unavailable, the default title is used. This happens in
+ * two real situations:
  *
- * 1. **Derleme anı.** Next `/_not-found` sayfasını statik üretmeye çalışıyor
- *    ve o sırada `DATABASE_URL` yok. Docker imajı bu yüzden derlenemiyordu
- *    (19.08.2026'da sunucu kurulumunda yakalandı).
- * 2. **Veritabanı düştüğünde.** Sekme başlığı yüzünden hata sayfasının kendisi
- *    de çizilememeliydi; kullanıcı boş ekran görürdü.
+ * 1. Next may statically generate `/_not-found` without `DATABASE_URL` during
+ *    the image build.
+ * 2. The error page must remain renderable when the database is down.
  *
- * Hata **yutulmuyor**, günlüğe yazılıyor: sessiz kalmak, yanlış başlığın
- * sebebini görünmez kılardı.
+ * The error is logged rather than swallowed so an unexpected default title is
+ * diagnosable.
  */
 export async function generateMetadata(): Promise<Metadata> {
   let pageTitle = DEFAULT_PAGE_TITLE;
+  const t = await getTranslations();
 
   try {
     pageTitle = (await readBranding(prisma)).pageTitle;
   } catch (error) {
     console.error(
-      "[marka] Sayfa başlığı okunamadı, varsayılan kullanılıyor:",
+      "[branding] Could not read page title; using default:",
       error instanceof Error ? error.message : error,
     );
   }
 
   return {
     title: { default: pageTitle, template: `%s · ${pageTitle}` },
-    description: "Günlük faaliyet raporlama ve takip sistemi",
+    description: t("common.appSubtitle"),
   };
 }
 
@@ -50,12 +49,12 @@ export default async function RootLayout({
   const t = await getTranslations(locale);
 
   return (
-    <html lang={locale}>
+    <html lang={LOCALE_LANGUAGE_TAGS[locale]}>
       <body>
         <I18nProvider locale={locale}>
           {/* Keyboard navigation skip link */}
           <a
-            href="#icerik"
+            href="#content"
             className="sr-only-focusable absolute start-3 top-3 z-[var(--z-toast)] rounded-(--radius-sm) bg-ink px-3 py-2 text-[length:var(--text-sm)] font-medium text-surface"
           >
             {t("common.skipToContent")}

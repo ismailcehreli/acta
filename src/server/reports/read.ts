@@ -2,6 +2,7 @@ import {
   visibleReportScope,
   type ReportScope,
 } from "@/server/authz/visibility";
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n";
 
 import { readAbsenceReport } from "./absence";
 import { readActivityReport } from "./activities";
@@ -13,7 +14,7 @@ import { narrowReportScope } from "./scope";
 import { readScoresReport } from "./scores";
 import type { ReportData, ReportTab, ReportView } from "./types";
 
-/** Rapor sekmelerini ortak kapsam ve dönem aralığı üzerinden orkestre eder. */
+
 export async function readReportForScope(
   db: ReportDb,
   scope: ReportScope,
@@ -21,9 +22,10 @@ export async function readReportForScope(
   period: ReportPeriod,
   selectedUnitId: string | undefined,
   now: Date = new Date(),
+  locale: Locale = DEFAULT_LOCALE,
 ): Promise<ReportView | null> {
-  // Feedback özeti sistem yöneticisine sistem genelini gösterir; bu sekmede
-  // birim süzgeci kullanılmaz. Diğer raporlar seçilen alt ağaca daralır.
+
+
   const selectedScope =
     tab === "feedback" ? scope : narrowReportScope(scope, selectedUnitId);
   if (!selectedScope) return null;
@@ -32,20 +34,20 @@ export async function readReportForScope(
   let data: ReportData | null;
   switch (tab) {
     case "absence":
-      data = await readAbsenceReport(db, selectedScope, range);
+      data = await readAbsenceReport(db, selectedScope, range, locale);
       break;
     case "notifications":
-      data = await readNotificationsReport(db, selectedScope, range);
+      data = await readNotificationsReport(db, selectedScope, range, locale);
       break;
     case "scores":
-      data = await readScoresReport(db, selectedScope, range);
+      data = await readScoresReport(db, selectedScope, range, locale);
       break;
     case "feedback":
       data = await readFeedbackReport(db, scope.isSystemAdmin, range);
       break;
     case "activities":
     default:
-      data = await readActivityReport(db, selectedScope, range, now);
+      data = await readActivityReport(db, selectedScope, range, now, locale);
       break;
   }
 
@@ -53,13 +55,7 @@ export async function readReportForScope(
   return { range, scope, selectedScope, data };
 }
 
-/**
- * Rapor okumasının yetki kapısı.
- *
- * Sayfa zaten aynı istek içinde kapsamı hesapladıysa
- * `readReportForScope` kullanır. Doğrudan çağıran diğer yollar ise bu
- * sarmalayıcıyı kullanarak görünürlük kapsamını kendileri hesaplatır.
- */
+
 export async function readReport(
   db: ReportDb,
   viewer: { id: string },
@@ -67,10 +63,11 @@ export async function readReport(
   period: ReportPeriod,
   selectedUnitId: string | undefined,
   now: Date = new Date(),
+  locale: Locale = DEFAULT_LOCALE,
 ): Promise<ReportView | null> {
   const scope = await visibleReportScope(db, viewer.id);
   if (!scope) return null;
-  return readReportForScope(db, scope, tab, period, selectedUnitId, now);
+  return readReportForScope(db, scope, tab, period, selectedUnitId, now, locale);
 }
 
 export type { ReportDb } from "./db";

@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
 
-// Bölüm yüzeyi.
+
 //
-// **Kart değil bölüm.** Bu sistemde paneller yuvarlak köşeli gölgeli kutular
-// değil; kural çizgisiyle çevrelenmiş, köşeli, düz yüzeylerdir. Gölge yalnız
-// gerçekten üstte duran katmanlara (menü, dialog, sheet) ayrılmıştır.
+
+
+
 //
-// Ad `Card` olarak korundu: kırk dosya bu adı kullanıyor ve adlandırma
-// değişikliği tasarım işine görünmez bir göç riski eklerdi.
+
+
 
 export function Card({
   children,
@@ -28,8 +28,8 @@ export function Card({
 }
 
 /**
- * Bölüm başlığı. Sol tarafta bölüm numarası/etiketi yerini alan ince bir
- * dikey işaret, sonra başlık; sağda tek eylem.
+ * Section header. A thin vertical mark replaces a section number/label on the
+ * left, followed by the title and one action on the right.
  */
 export function CardHeader({
   title,
@@ -68,8 +68,8 @@ export function CardBody({
 }
 
 /**
- * Boş durum. Dev bir illüstrasyon ya da kutu değil: sakin bir metin bloğu ve
- * varsa tek bir yönlendirici eylem (§3 — dekoratif illüstrasyon yok).
+ * Empty state. A calm text block and, when needed, one guiding action instead of
+ * a large illustration or decorative box (§3 — no decorative illustrations).
  */
 export function EmptyState({
   title,

@@ -9,17 +9,14 @@ import {
 
 import { SESSION_HOURS } from "./config";
 
-// Oturumlar sunucu tarafında saklanır, süre sonu ve iptal edilebilirlik taşır
-// (§15.3). Veritabanında belirtecin kendisi değil, özeti durur: yedek dosyası
-// veya veritabanı okuması ele geçse bile oturum çalınamaz.
 
-/**
- * Yalnızca ihtiyaç duyulan tablolar. İşlem (transaction) içindeki istemci de bu
- * tipe uyar, böylece aynı fonksiyonlar hem tek başına hem işlem içinde çalışır.
- */
+
+
+
+
 export type SessionDb = Pick<PrismaClient, "session" | "systemSetting">;
 
-/** Oturum açarken kimlik kuşağının doğrulanması için gereken erişim. */
+
 export type SessionWriteDb = Pick<
   PrismaClient,
   "session" | "userCredential" | "$queryRaw" | "$transaction"
@@ -33,7 +30,7 @@ export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/** Sabit süreli karşılaştırma; özet eşleşmesi zamanlama bilgisi sızdırmasın. */
+
 export function tokenHashEquals(a: string, b: string): boolean {
   const bufferA = Buffer.from(a, "utf8");
   const bufferB = Buffer.from(b, "utf8");
@@ -41,17 +38,13 @@ export function tokenHashEquals(a: string, b: string): boolean {
   return timingSafeEqual(bufferA, bufferB);
 }
 
-/**
- * Oturumun sona erme anı. Süre sistem ayarlarından gelir (§16.5); parametre
- * verilmezse koddaki varsayılan kullanılır — saf fonksiyon veritabanına
- * dokunmaz, sahte saatle sınanabilir kalır.
- */
+
 export function sessionExpiry(now: Date, hours = SESSION_HOURS): Date {
   return new Date(now.getTime() + hours * 3_600_000);
 }
 
 export interface CreatedSession {
-  /** Yalnızca burada görülür; çağıran bunu çereze yazar, veritabanına değil. */
+
   token: string;
   sessionId: string;
   expiresAt: Date;
@@ -62,13 +55,13 @@ export async function createSession(
   userId: string,
   now: Date,
   credentialVersion = 0,
-  /** Oturum ömrü (saat); verilmezse sistem ayarından okunur (§16.5). */
+
   sessionHours?: number,
 ): Promise<CreatedSession> {
   const token = generateSessionToken();
-  const saat =
+  const effectiveSessionHours =
     sessionHours ?? (await readNumericSetting(db, SETTING_KEYS.sessionHours));
-  const expiresAt = sessionExpiry(now, saat);
+  const expiresAt = sessionExpiry(now, effectiveSessionHours);
 
   const session = await db.session.create({
     data: {
@@ -84,20 +77,13 @@ export async function createSession(
   return { token, sessionId: session.id, expiresAt };
 }
 
-/**
- * Oturumu yalnızca kimlik kuşağı beklenen değerdeyse açar.
- *
- * Kimlik satırı önce `FOR UPDATE` ile kilitlenir: parola değiştiren işlem aynı
- * satırı güncellediği için ikisi sıraya girer. Böylece "eski parolayı doğrula →
- * parola değişti → yine de oturum aç" yarışı kapanır; giriş ya değişimden önce
- * biter (ve değişim onu iptal eder) ya da değişimi görüp reddedilir.
- */
+
 export async function createSessionIfCredentialUnchanged(
   db: SessionWriteDb,
   userId: string,
   expectedVersion: number,
   now: Date,
-  /** Oturum ömrü (saat); verilmezse sistem ayarından okunur. */
+
   sessionHours?: number,
 ): Promise<CreatedSession | null> {
   return db.$transaction(async (tx) => {
@@ -118,13 +104,13 @@ export interface ActiveSession {
 }
 
 /**
- * Belirteci doğrular. İptal edilmiş, süresi geçmiş veya kullanıcısı
- * pasifleştirilmiş oturum geçersizdir — pasifleştirilen kişi elindeki açık
- * oturumla sistemde kalamaz.
+ * Validates a session token. A revoked, expired, or inactive user's session is
+ * invalid; a deactivated user cannot remain in the system through an open
+ * session.
  *
- * Eski kimlik kuşağında doğmuş oturumlar da geçersizdir. Toplu iptal tek başına
- * yetmez: iptal edildiği anda var olmayan, hemen sonra yazılan bir oturum
- * ondan kaçardı. Kuşak karşılaştırması bu boşluğu kapatır.
+ * Sessions created under an older credential version are also invalid. Bulk
+ * revocation alone is insufficient: a session created immediately after the
+ * revocation could escape it. Comparing credential versions closes that gap.
  */
 export async function findActiveSession(
   db: SessionDb,
@@ -149,7 +135,8 @@ export async function findActiveSession(
   if (session.expiresAt <= now) return null;
   if (!session.user.isActive) return null;
 
-  // Parola değişmişse kuşak ilerlemiştir; eski kuşakta doğan oturum ölüdür.
+  // A password change increments the version; sessions from the old version
+  // are invalid.
   const currentVersion = session.user.credential?.version;
   if (currentVersion !== undefined && session.credentialVersion !== currentVersion) {
     return null;
@@ -158,7 +145,7 @@ export async function findActiveSession(
   return { sessionId: session.id, userId: session.userId };
 }
 
-/** Son kullanım zamanını taşır; oturumun canlılığını izlemeye yarar. */
+/** Updates last-used time so session activity can be tracked. */
 export async function touchSession(
   db: SessionDb,
   sessionId: string,
@@ -181,7 +168,7 @@ export async function revokeSession(
   });
 }
 
-/** Parola değişiminde ve kullanıcı pasifleştirildiğinde çağrılır (§15.3). */
+/** Called when a password changes or a user is deactivated (§15.3). */
 export async function revokeAllUserSessions(
   db: SessionDb,
   userId: string,

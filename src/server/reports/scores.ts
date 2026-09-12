@@ -4,6 +4,8 @@ import type { ReportDb } from "./db";
 import { dateOnlyString, type ReportPeriodRange } from "./range";
 import { rollupByOrgUnit } from "./rollup";
 import type { ScoresReport, ScoreSummary } from "./types";
+import { compareLocalized } from "@/shared/format/locale";
+import { DEFAULT_LOCALE, type Locale } from "@/shared/i18n";
 
 interface ScoreRow {
   userId: string;
@@ -86,6 +88,7 @@ export async function readScoresReport(
   db: ReportDb,
   scope: ReportScope,
   range: ReportPeriodRange,
+  locale: Locale = DEFAULT_LOCALE,
 ): Promise<ScoresReport | null> {
   if (!scope.canViewScoreReports || scope.userIds.length === 0) return null;
 
@@ -181,7 +184,7 @@ export async function readScoresReport(
     ...scoreSummary(all),
     units: scope.units
       .filter((unit) => (totals.get(unit.id)?.periods ?? 0) > 0)
-      .sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name, "tr"))
+      .sort((a, b) => a.depth - b.depth || compareLocalized(a.name, b.name, locale))
       .map((unit) => ({
         id: unit.id,
         name: unit.name,

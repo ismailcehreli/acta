@@ -9,18 +9,23 @@ import { getManagedUser } from "@/server/users/list";
 import { AppShell } from "@/components/shell/app-shell";
 import { AdminNav } from "@/components/shell/admin-nav";
 import { toShellUser } from "@/components/shell/shell-user";
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { ButtonLink } from "@/components/ui/button";
+import { Card, CardBody } from "@/components/ui/card";
 import { Page, PageHeader } from "@/components/ui/page";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import {
   UserEditForm,
   UserIdentityCard,
   UserSecurityPanel,
 } from "../user-admin-forms";
+import { AvatarForm } from "../../../users/[id]/avatar-form";
 import type { UnitChoice } from "../user-form";
 
-export const metadata = { title: "Kullanıcı detayı — Yönetim" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.users.userInformation");
+}
 
 function toChoices(nodes: OrgUnitNode[], depth = 0): UnitChoice[] {
   return nodes.flatMap((node) => [
@@ -40,10 +45,11 @@ export default async function UserAdminDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ donus?: string }>;
+  searchParams: Promise<{ returnTo?: string }>;
 }) {
   const viewer = await getCurrentUser();
   if (!viewer) redirect("/login");
+  const t = await getTranslations();
 
   const { id } = await params;
   const rootSelf = viewer.isRoot && viewer.id === id;
@@ -51,9 +57,9 @@ export default async function UserAdminDetailPage({
 
   if (!canManage) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={viewer}
-        mesaj="Bu kullanıcı üzerinde işlem yapma yetkiniz yok. Ana sistem yöneticisi hesabı korunur."
+        message={t("screens.users.permissionManage")}
       />
     );
   }
@@ -80,26 +86,41 @@ export default async function UserAdminDetailPage({
       : allUnits.filter((unit) => manageable.includes(unit.id));
   }
 
-  const { donus } = await searchParams;
-  const returnTo = safeReturnTo(donus);
+  const { returnTo: requestedReturnTo } = await searchParams;
+  const returnTo = safeReturnTo(requestedReturnTo);
 
   return (
     <AppShell user={await toShellUser(viewer)}>
-      <Page isaret="kullanici-detayi">
+      <Page marker="user-profile">
         <PageHeader
           title={target.fullName}
-          description="Bu ekran yalnızca tek bir hesabı yönetmek içindir. Listeye döndüğünüzde arama ve filtreler korunur."
+          description={t("screens.users.detailDescription")}
           breadcrumbs={[
-            { label: "Yönetim" },
-            { label: "Kullanıcılar", href: returnTo },
+            { label: t("screens.users.administration") },
+            { label: t("screens.users.pageTitle"), href: returnTo },
             { label: target.fullName },
           ]}
-          action={<ButtonLink href={returnTo}>Listeye dön</ButtonLink>}
+          action={<ButtonLink href={returnTo}>{t("screens.users.backToList")}</ButtonLink>}
         />
 
         <AdminNav isRoot={viewer.isRoot} />
 
         <UserIdentityCard user={target} />
+
+        {fullAccess ? (
+          <Card>
+            <CardBody>
+              <AvatarForm
+                user={{
+                  id: target.id,
+                  fullName: target.fullName,
+                  avatarExtension: target.avatarExtension,
+                }}
+                canEdit
+              />
+            </CardBody>
+          </Card>
+        ) : null}
 
         <UserEditForm user={target} units={units} mode={mode} />
 

@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { useTranslations } from "@/components/i18n";
 import { FormMessage } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,8 +18,8 @@ import {
 } from "./actions";
 import { emptyReasonFormState } from "./form-state";
 
-// Gerekçe kataloğu ekranı. Silme yok, pasifleştirme var (§16.6): geçmiş
-// kararlar gerekçesini korur.
+
+
 
 export interface ReasonRow {
   id: string;
@@ -28,35 +29,36 @@ export interface ReasonRow {
   isActive: boolean;
 }
 
-const KIND_LABEL: Record<ReasonRow["kind"], string> = {
-  CHANGES_REQUESTED: "Düzeltme iste",
-  REJECTED: "Reddet",
+const KIND_LABEL_KEYS: Record<ReasonRow["kind"], string> = {
+  CHANGES_REQUESTED: "screens.approvalReasons.requestChanges",
+  REJECTED: "screens.approvalReasons.reject",
 };
 
 function ReasonRowForm({ reason }: { reason: ReasonRow }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     updateReasonAction,
     emptyReasonFormState,
   );
-  const [aktiflikDurumu, aktiflikAction, aktiflikPending] = useActionState(
+  const [statusState, statusAction, statusPending] = useActionState(
     setReasonActiveAction,
     emptyReasonFormState,
   );
 
   return (
-    <TR data-gerekce={reason.label}>
+    <TR data-reason={reason.label}>
       <TD>
         <form
           action={formAction}
           className="flex flex-wrap items-center gap-2"
-          data-test="gerekce-duzenle"
+          data-test="reason-edit"
         >
           <input type="hidden" name="id" value={reason.id} />
           <Input
             name="label"
             defaultValue={reason.label}
             maxLength={120}
-            aria-label="Gerekçe adı"
+            aria-label={t("screens.approvalReasons.reasonName")}
             className="w-64"
           />
           <Input
@@ -65,31 +67,33 @@ function ReasonRowForm({ reason }: { reason: ReasonRow }) {
             defaultValue={reason.sortOrder}
             min={0}
             max={999}
-            aria-label="Sıra"
+            aria-label={t("screens.approvalReasons.order")}
             className="w-20 text-right tabular"
           />
           <Button type="submit" size="sm" disabled={pending}>
-            {pending ? "Kaydediliyor…" : "Kaydet"}
+            {pending
+              ? t("screens.approvalReasons.saving")
+              : t("screens.approvalReasons.save")}
           </Button>
         </form>
         {state.error ? (
           <span className="mt-1 block text-xs text-danger">{state.error}</span>
         ) : null}
-        {aktiflikDurumu.error ? (
-          <span className="mt-1 block text-xs text-danger">{aktiflikDurumu.error}</span>
+        {statusState.error ? (
+          <span className="mt-1 block text-xs text-danger">{statusState.error}</span>
         ) : null}
       </TD>
 
       <TD>
         {reason.isActive ? (
-          <Badge tone="success">kullanımda</Badge>
+          <Badge tone="success">{t("screens.approvalReasons.active")}</Badge>
         ) : (
-          <Badge tone="neutral">pasif</Badge>
+          <Badge tone="neutral">{t("screens.approvalReasons.inactive")}</Badge>
         )}
       </TD>
 
       <TD align="right">
-        <form action={aktiflikAction}>
+        <form action={statusAction}>
           <input type="hidden" name="id" value={reason.id} />
           <input
             type="hidden"
@@ -100,9 +104,11 @@ function ReasonRowForm({ reason }: { reason: ReasonRow }) {
             type="submit"
             size="sm"
             variant={reason.isActive ? "danger" : "primary"}
-            disabled={aktiflikPending}
+            disabled={statusPending}
           >
-            {reason.isActive ? "Pasifleştir" : "Kullanıma aç"}
+            {reason.isActive
+              ? t("screens.approvalReasons.deactivate")
+              : t("screens.approvalReasons.activate")}
           </Button>
         </form>
       </TD>
@@ -111,29 +117,30 @@ function ReasonRowForm({ reason }: { reason: ReasonRow }) {
 }
 
 function KindCard({ kind, reasons }: { kind: ReasonRow["kind"]; reasons: ReasonRow[] }) {
+  const t = useTranslations();
   return (
     <Card>
       <CardHeader
-        title={KIND_LABEL[kind]}
+        title={t(KIND_LABEL_KEYS[kind])}
         description={
           kind === "REJECTED"
-            ? "Kayıt kapanır ve yukarı akmaz."
-            : "Kayıt yazana geri döner, düzeltilip yeniden gönderilir."
+            ? t("screens.approvalReasons.rejectDescription")
+            : t("screens.approvalReasons.requestChangesDescription")
         }
       />
 
       {reasons.length === 0 ? (
         <EmptyState
-          title="Tanımlı gerekçe yok."
-          description="En az bir gerekçe olmadan bu karar verilemez."
+          title={t("screens.approvalReasons.noReason")}
+          description={t("screens.approvalReasons.noReasonDescription")}
         />
       ) : (
-        <Table label="Gerekçe listesi tablosu">
+        <Table label={t("screens.approvalReasons.reasonTable")}>
           <THead>
             <TR>
-              <TH>Gerekçe</TH>
-              <TH>Durum</TH>
-              <TH align="right">İşlem</TH>
+              <TH>{t("screens.approvalReasons.reason")}</TH>
+              <TH>{t("screens.approvalReasons.status")}</TH>
+              <TH align="right">{t("screens.approvalReasons.operation")}</TH>
             </TR>
           </THead>
           <TBody>
@@ -148,6 +155,7 @@ function KindCard({ kind, reasons }: { kind: ReasonRow["kind"]; reasons: ReasonR
 }
 
 export function ReasonAdmin({ reasons }: { reasons: ReasonRow[] }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     createReasonAction,
     emptyReasonFormState,
@@ -157,28 +165,30 @@ export function ReasonAdmin({ reasons }: { reasons: ReasonRow[] }) {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader
-          title="Yeni gerekçe"
-          description="Sıra numarası küçük olan listede üstte çıkar."
+          title={t("screens.approvalReasons.newReason")}
+          description={t("screens.approvalReasons.newReasonDescription")}
         />
         <CardBody>
           <form
             action={formAction}
             className="flex flex-col gap-4"
-            data-test="gerekce-ekle"
+            data-test="reason-add"
           >
             <FormGrid columns={3}>
-              <Field htmlFor="kind" label="Karar" required>
+              <Field htmlFor="kind" label={t("screens.approvalReasons.decision")} required>
                 <Select id="kind" name="kind" defaultValue="CHANGES_REQUESTED">
-                  <option value="CHANGES_REQUESTED">Düzeltme iste</option>
-                  <option value="REJECTED">Reddet</option>
+                  <option value="CHANGES_REQUESTED">
+                    {t("screens.approvalReasons.requestChanges")}
+                  </option>
+                  <option value="REJECTED">{t("screens.approvalReasons.reject")}</option>
                 </Select>
               </Field>
 
-              <Field htmlFor="label" label="Gerekçe adı" required>
+              <Field htmlFor="label" label={t("screens.approvalReasons.reasonName")} required>
                 <Input id="label" name="label" maxLength={120} required />
               </Field>
 
-              <Field htmlFor="sortOrder" label="Sıra">
+              <Field htmlFor="sortOrder" label={t("screens.approvalReasons.order")}>
                 <Input
                   id="sortOrder"
                   type="number"
@@ -195,7 +205,9 @@ export function ReasonAdmin({ reasons }: { reasons: ReasonRow[] }) {
 
             <div>
               <Button type="submit" variant="primary" disabled={pending}>
-                {pending ? "Ekleniyor…" : "Gerekçe ekle"}
+                {pending
+                  ? t("screens.approvalReasons.adding")
+                  : t("screens.approvalReasons.addReason")}
               </Button>
             </div>
           </form>

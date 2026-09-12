@@ -31,31 +31,30 @@ import {
 } from "./compute";
 import { readScoreWeights } from "./weights";
 
-// Skorun okunması ve **görünürlüğü** (Görev 11.10).
+
 //
-// **Skor bir toplamdır ve toplam, görülmeyen kaydı ele verir.** Tasarım
-// belgesi satır 1748'de bu ilke zaten yazılı: "aynı kişinin profilinde müdür
-// 2 kayıt, genel müdür 1 kayıt sayar — sayaç, listede gizlenen kaydı sayıyla
-// ele vermez."
+
+
+
 //
-// Bu yüzden:
+
 //
-//   · Skor **bakan kişinin kapsamına göre** okunuyor; kapsam dışı kişinin
-//     skoru `null` dönüyor ("var ama göremezsin" demek kişinin varlığını ve
-//     çalışma düzenini ele verirdi).
-//   · **Genel sıralama yok.** Sıralama kapsam içidir.
-//   · Sistem yöneticisi başkasının skorunu **göremez**: §15.1'e göre o yetki
-//     işlevseldir ve içerik erişimi vermez; skor kişinin çalışma verisinden
-//     türüyor ve içeriktir.
-//   · Kapanmış dönemin **ham** satırı (`UserScorePeriod`) yalnız kişinin
-//     kendisine doğrudan verilir; başka bakan için her dönem onun kapsamıyla
-//     yeniden hesaplanır (bkz. `donemToplamlari`).
+
+
+
+
+
+
+
+
+
+
 //
-// Yeniden hesaplama **pahalıdır**: her dönem için takvim, izin, faaliyet,
-// karar ve takip sorguları koşuyor ve ekip listesinde bu kişi başına
-// tekrarlanıyor. Sorgu sayısı denetimin 9. bulgusunda ayrıca ele
-// alınıyor (Paket 6); doğruluk orada da bu kuralın üstüne kurulmalı —
-// önbellek kapsam anahtarlı olmadan yazılamaz.
+
+
+
+
+
 
 export type ScoreReadDb = ScoreCollectDb &
   VisibilityDb &
@@ -76,15 +75,15 @@ export interface UserScore extends ScoreResult {
   followUpTotal: number;
   followUpHandled: number;
   profile: ScoreProfile;
-  /** Bu kişinin profiline göre puan tavanları. */
+
   weights: ScoreWeights;
-  /** Takdir katkısı eklenmeden önceki üç temel bölümün toplamı. */
+
   baseTotal: number;
-  /** Bu dönemde skora katkı sağlayan takdir sayısı. */
+
   appreciationCount: number;
-  /** Takdirlerin genel puana toplam katkısı. */
+
   appreciationPoints: number;
-  /** Bir takdirin bu dönemdeki puan karşılığı. */
+
   appreciationPointsPer: number;
 }
 
@@ -114,65 +113,56 @@ function scoreDetails(
   };
 }
 
-/**
- * Canlı dönemin sınırları: payda **bugüne kadar** sayılır (denetim
- * 23.08.2026, bulgu 7).
- *
- * Payda ay sonuna kadar alınıyordu ve ayın 3'ünde kullanıcı, henüz
- * yaşanmamış 20 iş gününde kayıt girmemiş sayılıyordu: skor ay boyunca
- * sistematik olarak düşük görünüyor, ay sonuna doğru kendiliğinden
- * "düzeliyordu". Kapanmış dönemde tam ay kullanılmaya devam ediyor — orada
- * bütün günler yaşandı.
- */
+
 export function livePeriodBounds(now: Date): { from: Date; to: Date } {
   const { from, to } = periodBounds(now);
-  const bugun = new Date(`${companyDay(now)}T00:00:00.000Z`);
+  const today = new Date(`${companyDay(now)}T00:00:00.000Z`);
 
-  return { from, to: bugun < to ? bugun : to };
+  return { from, to: today < to ? today : to };
 }
 
 /**
- * Dönemin ilk ve son günü.
+ * First and last date of the period.
  *
- * **Dönem aylıktır ve ayar değildir** (ürün sahibi kararı, 23.08.2026; açık
- * soru 20, tasarım "Ayarlar" bölümü). Uzunluğu değiştirilebilir yapmak panele
- * bir alan eklemek değildir: kapanmış `UserScorePeriod` satırları yazıldıkları
- * uzunlukla durur, kapanış işçisinin "bir önceki ay" semantiği ve "kaç dönem
- * düşüş" eşiğinin anlamı birlikte değişir.
+ * **The period is monthly and is not a setting** (product decision,
+ * 23.08.2026; open question 20, design "Settings"). Making its length
+ * configurable would not be a simple panel field: closed `UserScorePeriod`
+ * rows retain their original length, while the closure worker's "next month"
+ * semantics and decline threshold would change together.
  */
 export function periodBounds(now: Date): { from: Date; to: Date } {
-  const gun = companyDay(now);
-  const [yil, ay] = gun.split("-").map(Number);
+  const day = companyDay(now);
+  const [year, month] = day.split("-").map(Number);
 
   return {
-    from: new Date(Date.UTC(yil as number, (ay as number) - 1, 1)),
-    to: new Date(Date.UTC(yil as number, ay as number, 0)),
+    from: new Date(Date.UTC(year as number, (month as number) - 1, 1)),
+    to: new Date(Date.UTC(year as number, month as number, 0)),
   };
 }
 
-/** Bu kişi skorlanıyor mu: ayar açık, `isScored` ve `writesActivities`. */
-async function skorlanirMi(db: ScoreReadDb, userId: string): Promise<boolean> {
+/** Whether this person is scored: setting enabled, `isScored`, and `writesActivities`. */
+async function isScored(db: ScoreReadDb, userId: string): Promise<boolean> {
   if (!(await readBooleanSetting(db, SETTING_KEYS.scoringEnabled)))
     return false;
 
-  const kisi = await db.user.findUnique({
+  const person = await db.user.findUnique({
     where: { id: userId },
     select: { isScored: true, writesActivities: true, isActive: true },
   });
 
-  return Boolean(kisi?.isActive && kisi.isScored && kisi.writesActivities);
+  return Boolean(person?.isActive && person.isScored && person.writesActivities);
 }
 
-/** Bakan kişi hedefin skorunu görebilir mi. */
-async function gorebilirMi(
+/** Whether the viewer can see the target's score. */
+async function canViewScore(
   db: ScoreReadDb,
   viewer: Viewer,
   targetId: string,
 ): Promise<boolean> {
   if (viewer.id === targetId) return true;
 
-  const astlar = await subordinateUserIds(db, viewer.id);
-  return astlar.includes(targetId);
+  const subordinates = await subordinateUserIds(db, viewer.id);
+  return subordinates.includes(targetId);
 }
 
 export async function readUserScore(
@@ -181,12 +171,12 @@ export async function readUserScore(
   userId: string,
   now: Date,
 ): Promise<UserScore | null> {
-  if (!(await gorebilirMi(db, viewer, userId))) return null;
-  if (!(await skorlanirMi(db, userId))) return null;
+  if (!(await canViewScore(db, viewer, userId))) return null;
+  if (!(await isScored(db, userId))) return null;
 
   const { from, to } = livePeriodBounds(now);
 
-  const [kisi, girdi, agirliklar] = await Promise.all([
+  const [person, input, weights] = await Promise.all([
     db.user.findUnique({
       where: { id: userId },
       select: {
@@ -194,41 +184,41 @@ export async function readUserScore(
         orgUnit: { select: { requiresApproval: true } },
       },
     }),
-    // Canlı dönemde zaman damgalı olayların üst sınırı **gerçek an**: bugün
-    // gün içinde verilen karar ve yazılan cevap da görünmeli (P3-3).
+    // In a live period the upper bound for timestamped events is **now**, so
+    // decisions and answers from today are visible (P3-3).
     collectScoreInput(db, viewer, userId, from, to, now),
     readScoreWeights(db),
   ]);
 
-  if (!kisi) return null;
+  if (!person) return null;
 
-  const profil = resolveScoreProfile({
-    isUnitManager: kisi.isUnitManager,
-    requiresApproval: kisi.orgUnit.requiresApproval,
+  const profile = resolveScoreProfile({
+    isUnitManager: person.isUnitManager,
+    requiresApproval: person.orgUnit.requiresApproval,
   });
 
-  const sonuc = computeScore(profil, girdi, agirliklar);
-  const ayrinti = scoreDetails(sonuc, girdi);
+  const result = computeScore(profile, input, weights);
+  const details = scoreDetails(result, input);
 
   return {
     userId,
     periodStart: from.toISOString().slice(0, 10),
-    expectedDays: girdi.expectedDays,
-    writtenDays: girdi.writtenDays,
-    writtenCount: girdi.writtenCount,
-    approvedCount: girdi.approvedCount,
-    decidedCount: girdi.decidedCount,
-    decidedOnTimeCount: girdi.decidedOnTimeCount,
-    followUpTotal: girdi.followUpTotal,
-    followUpHandled: girdi.followUpHandled,
-    profile: profil,
-    weights: profileWeights(profil, agirliklar),
-    ...sonuc,
-    ...ayrinti,
+    expectedDays: input.expectedDays,
+    writtenDays: input.writtenDays,
+    writtenCount: input.writtenCount,
+    approvedCount: input.approvedCount,
+    decidedCount: input.decidedCount,
+    decidedOnTimeCount: input.decidedOnTimeCount,
+    followUpTotal: input.followUpTotal,
+    followUpHandled: input.followUpHandled,
+    profile,
+    weights: profileWeights(profile, weights),
+    ...result,
+    ...details,
   };
 }
 
-/** Yöneticinin ekibindeki skorlar; kapsam dışı kimse listede yok. */
+/** Scores for the manager's team; nobody outside the scope is listed. */
 export async function readTeamScores(
   db: ScoreReadDb,
   viewer: Viewer,
@@ -236,12 +226,12 @@ export async function readTeamScores(
 ): Promise<(UserScore & { fullName: string })[]> {
   if (!(await readBooleanSetting(db, SETTING_KEYS.scoringEnabled))) return [];
 
-  const astlar = await subordinateUserIds(db, viewer.id);
-  if (astlar.length === 0) return [];
+  const subordinateIds = await subordinateUserIds(db, viewer.id);
+  if (subordinateIds.length === 0) return [];
 
-  const kisiler = await db.user.findMany({
+  const people = await db.user.findMany({
     where: {
-      id: { in: astlar },
+      id: { in: subordinateIds },
       isActive: true,
       isScored: true,
       writesActivities: true,
@@ -252,105 +242,103 @@ export async function readTeamScores(
       isUnitManager: true,
       orgUnit: { select: { requiresApproval: true } },
     },
-    // Varsayılan sıralama **alfabetik**, skora göre değil: varsayılan
-    // sıralama ekranın ne hakkında olduğunu söyler ve skora göre açılan bir
-    // liste "bu bir yarışma" der.
+    // Default ordering is **alphabetical**, not by score: it explains what
+    // the screen contains instead of turning the list into a competition.
     orderBy: { fullName: "asc" },
   });
 
-  if (kisiler.length === 0) return [];
+  if (people.length === 0) return [];
 
-  // **Kişi başına hesap yok** (denetim 23.08.2026, bulgu 9).
+  // **There is no calculation per person** (audit finding 9, 23.08.2026).
   //
-  // Önceki hâli listeyi dolaşıp her kişi için `readUserScore` çağırıyordu;
-  // her çağrı takvim, izin, faaliyet, karar ve takip sorguları koşturuyordu.
-  // Ölçüldü: 20 kişide 985, 40 kişide 1955 sorgu — tam doğrusal. Tasarım
-  // 40 kişilik ekipte 40 ayrı canlı hesabı açıkça yasaklıyor.
+  // The previous implementation called `readUserScore` for every person;
+  // each call queried calendars, absences, activities, decisions, and items.
+  // Measurements were 985 queries for 20 people and 1,955 for 40: fully
+  // linear. The design explicitly forbids 40 live calculations for a team.
   //
-  // Görünürlük kuralı değişmedi: kapsam **bakanın** kapsamı ve bir kez
-  // çözülüyor, bütün kişilere aynı süzgeç uygulanıyor.
+  // Visibility is unchanged: the viewer's scope is resolved once and the
+  // same predicate is applied to every person.
   const { from, to } = livePeriodBounds(now);
 
-  const [ctx, agirliklar] = await Promise.all([
+  const [ctx, weights] = await Promise.all([
     loadScoreContext(db, viewer),
     readScoreWeights(db),
   ]);
 
-  const girdiler = await collectScoreInputs(
+  const inputs = await collectScoreInputs(
     db,
     ctx,
-    kisiler.map((k) => k.id),
+    people.map((person) => person.id),
     from,
     to,
-    // Canlı dönemde zaman damgalı olayların üst sınırı **gerçek an**: bugün
-    // gün içinde verilen karar ve yazılan cevap da görünmeli (P3-3).
+    // In a live period the upper bound for timestamped events is **now**, so
+    // decisions and answers from today are visible (P3-3).
     now,
   );
 
   const periodStart = from.toISOString().slice(0, 10);
 
-  return kisiler.flatMap((kisi) => {
-    const girdi = girdiler.get(kisi.id);
-    if (!girdi) return [];
+  return people.flatMap((person) => {
+    const input = inputs.get(person.id);
+    if (!input) return [];
 
-    const profil = resolveScoreProfile({
-      isUnitManager: kisi.isUnitManager,
-      requiresApproval: kisi.orgUnit.requiresApproval,
+    const profile = resolveScoreProfile({
+      isUnitManager: person.isUnitManager,
+      requiresApproval: person.orgUnit.requiresApproval,
     });
-    const sonuc = computeScore(profil, girdi, agirliklar);
-    const ayrinti = scoreDetails(sonuc, girdi);
+    const result = computeScore(profile, input, weights);
+    const details = scoreDetails(result, input);
 
     return [
       {
-        userId: kisi.id,
-        fullName: kisi.fullName,
+        userId: person.id,
+        fullName: person.fullName,
         periodStart,
-        expectedDays: girdi.expectedDays,
-        writtenDays: girdi.writtenDays,
-        writtenCount: girdi.writtenCount,
-        approvedCount: girdi.approvedCount,
-        decidedCount: girdi.decidedCount,
-        decidedOnTimeCount: girdi.decidedOnTimeCount,
-        followUpTotal: girdi.followUpTotal,
-        followUpHandled: girdi.followUpHandled,
-        profile: profil,
-        weights: profileWeights(profil, agirliklar),
-        ...sonuc,
-        ...ayrinti,
+        expectedDays: input.expectedDays,
+        writtenDays: input.writtenDays,
+        writtenCount: input.writtenCount,
+        approvedCount: input.approvedCount,
+        decidedCount: input.decidedCount,
+        decidedOnTimeCount: input.decidedOnTimeCount,
+        followUpTotal: input.followUpTotal,
+        followUpHandled: input.followUpHandled,
+        profile,
+        weights: profileWeights(profile, weights),
+        ...result,
+        ...details,
       },
     ];
   });
 }
 
-/** Düşüş işareti eşiği; metinde geçsin diye taşınır. */
+/** Decline threshold, exposed so the UI can describe it. */
 export async function readDeclineThreshold(db: ScoreReadDb): Promise<number> {
   return readNumericSetting(db, SETTING_KEYS.scoringDeclinePeriods);
 }
 
-/** Grafikte gösterilen dönem sayısı; hesap eşiğe göre daha derine bakar. */
-const GRAFIK_DONEMI = 6;
+/** Number of periods shown in the chart; calculation may look deeper. */
+const GRAPH_PERIODS = 6;
 
 export interface ScoreTrend {
-  /** Yeniden eskiye, en fazla altı dönem. */
+  /** Newest to oldest, up to six periods. */
   periods: { periodStart: string; total: number }[];
   /**
-   * Ayarda yazan sayı kadar dönem **üst üste** düşüş var mı.
+   * Whether the score declines for the configured number of **consecutive** periods.
    *
-   * Skorun en değerli kullanımı sıralamak değil düşüşü yakalamaktır:
-   * "7. sırada" bir şey söylemez — 40 kişilik listede biri zaten 7. olacaktır
-   * — "üç dönemdir düşüyor" söyler.
+   * The most useful purpose of a score is detecting decline, not ranking:
+   * "ranked seventh" says little, while "declining for three periods" does.
    */
   declining: boolean;
 }
 
-/** Kaç dönem geriye bakılacağı; hesap eşiğe göre daha derine iner. */
-async function donemDerinligi(db: ScoreReadDb): Promise<number> {
-  const esik = await readNumericSetting(db, SETTING_KEYS.scoringDeclinePeriods);
-  return Math.max(GRAFIK_DONEMI, esik);
+/** How many periods to inspect; calculation may look deeper than the chart. */
+async function periodDepth(db: ScoreReadDb): Promise<number> {
+  const threshold = await readNumericSetting(db, SETTING_KEYS.scoringDeclinePeriods);
+  return Math.max(GRAPH_PERIODS, threshold);
 }
 
-/** Pencere sorgusunun döndürdüğü dönem satırı. */
-interface DonemSatiri {
+/** Period row returned by the window query. */
+interface PeriodRow {
   userId: string;
   periodStart: Date;
   revisionNo: number;
@@ -365,9 +353,9 @@ interface DonemSatiri {
   appreciationPointsPer: number | null;
 }
 
-/** Katkı satırlarından dönemin girdisini kurar. */
-function girdiyiKur(
-  satir: {
+/** Builds a period input from fact rows. */
+function buildScoreInput(
+  row: {
     expectedDays: number;
     formulaVersion: number | null;
     profile: string | null;
@@ -377,188 +365,184 @@ function girdiyiKur(
     weightFollowUp: number | null;
     appreciationPointsPer: number | null;
   },
-  olgular: { kind: string; happenedOn: Date; onTime: boolean }[],
+  facts: { kind: string; happenedOn: Date; onTime: boolean }[],
 ): {
-  hesapla: (typeof SCORE_CALCULATORS)[number];
-  profil: ScoreProfile;
-  agirliklar: ScoreWeights;
-  girdi: ScoreInput;
+  calculate: (typeof SCORE_CALCULATORS)[number];
+  profile: ScoreProfile;
+  weights: ScoreWeights;
+  input: ScoreInput;
 } | null {
-  // **Formül sürümü dönemin kendisinden gelir** (P8-5). Tanınmayan sürüm
-  // okunmaz: bugünkü algoritmaya düşmek, geçmişi sessizce yeniden
-  // yorumlamak olurdu.
-  const hesapla =
-    satir.formulaVersion === null
+  // **The formula version comes from the period itself** (P8-5). Unknown
+  // versions are not read; falling back to today's algorithm would silently
+  // reinterpret history.
+  const calculate =
+    row.formulaVersion === null
       ? undefined
-      : SCORE_CALCULATORS[satir.formulaVersion];
-  if (!hesapla) return null;
+      : SCORE_CALCULATORS[row.formulaVersion];
+  if (!calculate) return null;
 
   if (
-    satir.profile === null ||
-    satir.weightRegularity === null ||
-    satir.weightAcceptance === null ||
-    satir.weightApproval === null ||
-    satir.weightFollowUp === null
+    row.profile === null ||
+    row.weightRegularity === null ||
+    row.weightAcceptance === null ||
+    row.weightApproval === null ||
+    row.weightFollowUp === null
   ) {
     return null;
   }
 
-  const yazilanlar = olgular.filter((o) => o.kind === "WRITTEN");
-  const kararlar = olgular.filter((o) => o.kind === "DECISION");
-  const yukumlulukler = olgular.filter((o) => o.kind === "OBLIGATION");
+  const writtenFacts = facts.filter((fact) => fact.kind === "WRITTEN");
+  const decisionFacts = facts.filter((fact) => fact.kind === "DECISION");
+  const obligationFacts = facts.filter((fact) => fact.kind === "OBLIGATION");
 
   return {
-    hesapla,
-    profil: satir.profile as ScoreProfile,
-    agirliklar: {
-      regularity: satir.weightRegularity,
-      acceptance: satir.weightAcceptance,
-      approval: satir.weightApproval,
-      followUp: satir.weightFollowUp,
+    calculate,
+    profile: row.profile as ScoreProfile,
+    weights: {
+      regularity: row.weightRegularity,
+      acceptance: row.weightAcceptance,
+      approval: row.weightApproval,
+      followUp: row.weightFollowUp,
     },
-    girdi: {
-      // **Payda dönem sonunda dondu**: sonradan iptal edilen izin ya da
-      // eklenen tatil kapanmış dönemi değiştiremez.
-      expectedDays: satir.expectedDays,
+    input: {
+      // **The denominator is frozen at period end**: a later cancellation or
+      // added holiday cannot change a closed period.
+      expectedDays: row.expectedDays,
       writtenDays: new Set(
-        yazilanlar
+        writtenFacts
           .filter((o) => o.onTime)
           .map((o) => o.happenedOn.toISOString().slice(0, 10)),
       ).size,
-      writtenCount: yazilanlar.length,
-      approvedCount: olgular.filter((o) => o.kind === "ACCEPTED").length,
-      decidedCount: kararlar.length,
-      decidedOnTimeCount: kararlar.filter((o) => o.onTime).length,
-      followUpTotal: yukumlulukler.length,
-      followUpHandled: yukumlulukler.filter((o) => o.onTime).length,
-      appreciationCount: olgular.filter((o) => o.kind === "APPRECIATION").length,
-      appreciationPointsPer: satir.appreciationPointsPer ?? 0,
+      writtenCount: writtenFacts.length,
+      approvedCount: facts.filter((fact) => fact.kind === "ACCEPTED").length,
+      decidedCount: decisionFacts.length,
+      decidedOnTimeCount: decisionFacts.filter((fact) => fact.onTime).length,
+      followUpTotal: obligationFacts.length,
+      followUpHandled: obligationFacts.filter((fact) => fact.onTime).length,
+      appreciationCount: facts.filter((fact) => fact.kind === "APPRECIATION").length,
+      appreciationPointsPer: row.appreciationPointsPer ?? 0,
     },
   };
 }
 
 /**
- * Birden çok kişinin trendi — **kişi sayısından bağımsız** sorguyla.
+ * Trends for multiple people with a query count **independent of people**.
  *
- * İki bulgu birlikte kapanıyor (ürün sahibi kararı, 24.08.2026):
+ * Two findings are addressed together (product decision, 24.08.2026):
  *
- * **P3-R2-4 (dondurma).** Kapanmış dönem, başkası baktığında canlı
- * tablolardan yeniden hesaplanıyordu ve hesap **bugünün** verisiyle
- * yapılıyordu: eylülde verilen onay ağustosun kabul oranını değiştiriyor,
- * sonradan iptal edilen izin paydayı büyütüyor, ağırlık ayarı bütün geçmişi
- * yeniden yazıyordu. Artık dönem kapanışta donuyor; okuma anında yalnız
- * **görünürlükten** süzülüyor. Görünürlük yine bugünden gelir — dala
- * sonradan gelen yönetici geçmişi görür (§4.6) — ama *o dönemde ne olduğu*
- * dönem sonundan gelir.
+ * **P3-R2-4 (freezing).** A closed period used to be recalculated from live
+ * tables when someone viewed it, using **today's** data: a September approval
+ * changed August acceptance, a later leave cancellation grew the denominator,
+ * and a weight setting rewrote all history. Periods now freeze at closure;
+ * reads apply only **visibility**. Visibility still comes from today—an
+ * administrator who later joins a branch can see its history (§4.6)—but what
+ * happened *during that period* comes from period end.
  *
- * **Bulgu 9 (N+1).** Trend kişi başına okunuyordu ve her dönem için ayrı bir
- * çok tablolu hesap koşuyordu: altı dönemlik grafikte kişi başına altı hesap.
- * Şimdi bütün kişilerin bütün dönemleri iki sorguda okunuyor.
+ * **Finding 9 (N+1).** Trends were read per person with a multi-table
+ * calculation for every period: six calculations per person for a six-period
+ * chart. All people and periods are now read in two queries.
  *
- * **Eski dönemler görünmez.** Katkı taşımayan (`frozen = false`) satırlar
- * hiçbir ekrana çıkmaz — ürün sahibi kararı (25.08.2026): "geçmiş
- * temizlensin". Satır fiziksel olarak silinmez (§16.6); okunmaz.
+ * **Old periods remain hidden.** Rows without facts (`frozen = false`) are not
+ * shown on any screen (product decision, 25.08.2026). The row is not deleted
+ * physically (§16.6); it is simply not read.
  */
 export async function readScoreTrends(
   db: ScoreReadDb,
   viewer: Viewer,
   userIds: string[],
 ): Promise<Map<string, ScoreTrend>> {
-  const sonuc = new Map<string, ScoreTrend>();
-  if (userIds.length === 0) return sonuc;
+  const result = new Map<string, ScoreTrend>();
+  if (userIds.length === 0) return result;
 
-  // **Hedef listesi burada yetkilendirilir** (denetim 25.08.2026,
-  // P8-1).
+  // **Authorize the target list here** (audit 25.08.2026, P8-1).
   //
-  // Önce çağıranın verdiği liste olduğu gibi sorguya giriyordu. Olguları
-  // `visibleActivityWhere` ile süzmek hedef kişiye **erişim denetimi
-  // değildir**: kapsam dışı kişi için bile dönem sayısı, donmuş payda ve
-  // profil üzerinden hesaplanan bir toplam dönüyordu — kişinin geçmiş
-  // çalışma ve izin düzenine ilişkin türetilmiş içerik.
+  // The caller's list used to enter the query unchanged. Filtering facts with
+  // `visibleActivityWhere` is **not access control for the target**: even for
+  // an out-of-scope person, the period count, frozen denominator, and profile
+  // total exposed derived history about work and leave.
   //
-  // "Bugünkü çağıran zaten kapsamlı liste üretiyor" savunması yetmez:
-  // güvenlik servis sınırında durmalı, çağıranın sırasına bırakılmamalı
-  // (§18.4). Kapsam **bir kez** çözülüyor; toplu yol bozulmuyor.
-  const astlar = await subordinateUserIds(db, viewer.id);
-  const kapsamdakiler = new Set([viewer.id, ...astlar]);
-  const izinliler = userIds.filter((id) => kapsamdakiler.has(id));
-  if (izinliler.length === 0) return sonuc;
+  // "The caller already supplied a scoped list" is not sufficient: security
+  // must hold at the service boundary, not depend on caller ordering (§18.4).
+  const subordinateIds = await subordinateUserIds(db, viewer.id);
+  const inScope = new Set([viewer.id, ...subordinateIds]);
+  const authorizedUserIds = userIds.filter((id) => inScope.has(id));
+  if (authorizedUserIds.length === 0) return result;
 
-  const [esik, derinlik] = await Promise.all([
+  const [threshold, depth] = await Promise.all([
     readNumericSetting(db, SETTING_KEYS.scoringDeclinePeriods),
-    donemDerinligi(db),
+    periodDepth(db),
   ]);
 
-  // **Yalnız gereken dönemler çekilir** (denetim 25.08.2026, P8-8).
+  // **Read only the periods required** (audit 25.08.2026, P8-8).
   //
-  // Önce bütün donmuş dönemler getirilip bellekte kesiliyordu: sorgu sayısı
-  // sabit kalsa da taşınan satır tarihçeyle doğrusal büyüyordu. Altmış
-  // dönemlik bir kişide 60 dönem ve 1200 katkı satırı ağdan geçiyordu; oysa
-  // ekranın ve düşüş hesabının ihtiyacı en yeni `max(6, eşik)` dönem.
+  // The old query fetched all frozen periods and sliced them in memory. Query
+  // count stayed constant, but transferred history grew linearly: one person
+  // with 60 periods sent 60 periods and 1,200 fact rows, although the screen
+  // needs only the newest `max(6, threshold)` periods.
   //
-  // Pencere işlevi kişi başına sıralamayı **veritabanında** yapıyor.
-  const satirlar = await db.$queryRaw<DonemSatiri[]>`
-    WITH son_surum AS (
+  // The window function ranks periods per person **in the database**.
+  const rows = await db.$queryRaw<PeriodRow[]>`
+    WITH latest_revision_per_period AS (
       SELECT *,
              row_number() OVER (
                PARTITION BY "userId", "periodStart"
                ORDER BY "revisionNo" DESC
-             ) AS surum_sirasi
+               ) AS version_rank
         FROM "UserScorePeriod"
-       WHERE "userId" = ANY(${izinliler}) AND "frozen"
-    ), donemler AS (
+       WHERE "userId" = ANY(${authorizedUserIds}) AND "frozen"
+    ), latest_periods AS (
       SELECT *,
              row_number() OVER (
                PARTITION BY "userId" ORDER BY "periodStart" DESC
-             ) AS donem_sirasi
-        FROM son_surum
-       -- Önce en yeni sürüm seçilir, sonra geçersiz kılma mührü elenir.
-       -- Ters sıra eski ve yanlış sürümü yeniden görünür yapardı.
-       WHERE surum_sirasi = 1 AND NOT "voided"
+             ) AS period_rank
+        FROM latest_revision_per_period
+       -- Select the newest revision first, then exclude voided revisions.
+       -- Reversing this order could expose an old, invalid revision.
+       WHERE version_rank = 1 AND NOT "voided"
     )
     SELECT "userId", "periodStart", "revisionNo", "total", "expectedDays", "formulaVersion",
            "profile", "weightRegularity", "weightAcceptance",
            "weightApproval", "weightFollowUp", "appreciationPointsPer"
-      FROM donemler
-     WHERE donem_sirasi <= ${derinlik}
+      FROM latest_periods
+     WHERE period_rank <= ${depth}
      ORDER BY "userId", "periodStart" DESC
   `;
 
-  const kisiSatirlari = new Map<string, DonemSatiri[]>();
-  for (const satir of satirlar) {
-    const mevcut = kisiSatirlari.get(satir.userId) ?? [];
-    mevcut.push(satir);
-    kisiSatirlari.set(satir.userId, mevcut);
+  const personRows = new Map<string, PeriodRow[]>();
+  for (const row of rows) {
+    const existingRows = personRows.get(row.userId) ?? [];
+    existingRows.push(row);
+    personRows.set(row.userId, existingRows);
   }
 
-  // **Kişinin kendi satırı yeniden hesaplanmaz**: satır zaten onun
-  // kapsamıyla yazıldı ve yeniden hesaplamak kapanıştan sonra düzeltilen bir
-  // geçmişi sessizce değiştirirdi.
-  // **Olgu sorgusu kişi-dönem çiftlerine bağlanır** (denetim
-  // 25.08.2026, P8-R2-5).
+  // **The person's own row is not recalculated**: it was written with that
+  // person's scope, and recalculation after closure would silently change
+  // history.
+  // **Fact queries are tied to person-period pairs** (audit P8-R2-5,
+  // 25.08.2026).
   //
-  // Önce tarihlerin **birleşimi** kullanılıyordu: uzun tarihçeli birinin
-  // ekrandan kesilmiş eski dönemleri, kısa tarihçeli başka birinin seçilen
-  // tarihlerine denk geldiği için yeniden sorguya giriyordu. İki kullanıcılı
-  // asimetrik örnekte ihtiyaç 120 satırken 180 satır taşınıyordu.
-  const okunanCiftler = satirlar
-    .filter((satir) => satir.userId !== viewer.id)
-    .map((satir) => ({
-      userId: satir.userId,
-      periodStart: satir.periodStart,
-      revisionNo: satir.revisionNo,
+  // The old query used the **union of dates**: old periods cut from one
+  // person's chart were queried again when they matched another person's
+  // selected dates. An asymmetric two-person example transferred 180 rows
+  // when only 120 were needed.
+  const personPeriodPairs = rows
+    .filter((row) => row.userId !== viewer.id)
+    .map((row) => ({
+      userId: row.userId,
+      periodStart: row.periodStart,
+      revisionNo: row.revisionNo,
     }));
 
-  const olgular =
-    okunanCiftler.length === 0
+  const facts =
+    personPeriodPairs.length === 0
       ? []
       : await db.userScorePeriodFact.findMany({
           where: {
-            // Yalnız seçilen **kişi-dönem** çiftleri; bütün geçmişin
-            // olgularını çekmek satır sayısını tarihçeyle büyütüyordu (P8-8).
-            OR: okunanCiftler,
-            // Görünürlük süzgeci **katkının faaliyeti** üzerinden: bakanın
-            // göremediği kayıt toplama girmez (§18.4).
+            // Only selected **person-period** pairs; fetching all historical
+            // facts made row count grow with history (P8-8).
+            OR: personPeriodPairs,
+            // Visibility filters through the fact's activity: records the
+            // viewer cannot see never enter the calculation (§18.4).
             activity: await visibleActivityWhere(db, viewer),
           },
           select: {
@@ -571,91 +555,87 @@ export async function readScoreTrends(
           },
         });
 
-  const olguIndeksi = new Map<string, typeof olgular>();
-  for (const olgu of olgular) {
-    const anahtar = `${olgu.userId}|${olgu.periodStart.toISOString().slice(0, 10)}|${olgu.revisionNo}`;
-    const mevcut = olguIndeksi.get(anahtar) ?? [];
-    mevcut.push(olgu);
-    olguIndeksi.set(anahtar, mevcut);
+  const factsByKey = new Map<string, typeof facts>();
+  for (const fact of facts) {
+    const key = `${fact.userId}|${fact.periodStart.toISOString().slice(0, 10)}|${fact.revisionNo}`;
+    const existingFacts = factsByKey.get(key) ?? [];
+    existingFacts.push(fact);
+    factsByKey.set(key, existingFacts);
   }
 
-  for (const userId of izinliler) {
-    const kendi = userId === viewer.id;
-    const kisiSatir = kisiSatirlari.get(userId) ?? [];
+  for (const userId of authorizedUserIds) {
+    const own = userId === viewer.id;
+    const personRow = personRows.get(userId) ?? [];
 
-    const toplamlar = kisiSatir.flatMap((satir) => {
-      const gun = satir.periodStart.toISOString().slice(0, 10);
+    const totals = personRow.flatMap((row) => {
+      const day = row.periodStart.toISOString().slice(0, 10);
 
-      // **Tanınmayan sürüm sahibine de gösterilmez** (denetim
-      // 25.08.2026, P8-R2-4). Önce yalnız başka bakan için kontrol ediliyordu;
-      // sahibine saklanan `total` veriliyordu. Aynı dönem için iki bakanın
-      // biri sayı görüp diğeri görmemesi, paketin kapatmak istediği
-      // tutarsızlığın ta kendisi.
-      if (satir.formulaVersion === null || !SCORE_CALCULATORS[satir.formulaVersion]) {
+      // **Unknown formula versions are hidden from their owner too** (audit
+      // P8-R2-4, 25.08.2026). Returning the stored total only to the owner
+      // meant two viewers could see different values for the same period.
+      if (row.formulaVersion === null || !SCORE_CALCULATORS[row.formulaVersion]) {
         return [];
       }
 
-      if (kendi) return [{ periodStart: gun, total: satir.total }];
+      if (own) return [{ periodStart: day, total: row.total }];
 
-      const kurulum = girdiyiKur(
-        satir,
-        olguIndeksi.get(`${userId}|${gun}|${satir.revisionNo}`) ?? [],
+      const calculation = buildScoreInput(
+        row,
+        factsByKey.get(`${userId}|${day}|${row.revisionNo}`) ?? [],
       );
-      // Formülü taşımayan satır okunamaz; sessizce bugünkü ayarla hesaplamak
-      // tam da kapatılan hatanın kendisi olurdu.
-      if (!kurulum) return [];
+      // A row without its formula cannot be read; falling back to today's
+      // setting would recreate the historical bug being prevented.
+      if (!calculation) return [];
 
       return [
         {
-          periodStart: gun,
-          total: kurulum.hesapla(
-            kurulum.profil,
-            kurulum.girdi,
-            kurulum.agirliklar,
+          periodStart: day,
+          total: calculation.calculate(
+            calculation.profile,
+            calculation.input,
+            calculation.weights,
           ).total,
         },
       ];
     });
 
-    sonuc.set(userId, {
-      periods: toplamlar.slice(0, GRAFIK_DONEMI),
-      declining: dususVarMi(toplamlar, esik),
+    result.set(userId, {
+      periods: totals.slice(0, GRAPH_PERIODS),
+      declining: hasDecline(totals, threshold),
     });
   }
 
-  return sonuc;
+  return result;
 }
 
-/** Yeniden eskiye bakıldığında eşik kadar dönem üst üste düşmüş mü. */
-function dususVarMi(toplamlar: { total: number }[], esik: number): boolean {
-  // Her adımda **bir öncekinden düşük** olması aranıyor; arada tek bir
-  // yükselme seriyi kırar.
-  let ardisik = 0;
-  for (let i = 0; i + 1 < toplamlar.length; i += 1) {
-    const yeni = toplamlar[i]?.total ?? 0;
-    const eski = toplamlar[i + 1]?.total ?? 0;
-    if (yeni < eski) ardisik += 1;
+/** Whether the score has declined for the configured number of periods. */
+function hasDecline(totals: { total: number }[], threshold: number): boolean {
+  // Each next period must be lower; one increase breaks the consecutive run.
+  let consecutiveDeclines = 0;
+  for (let i = 0; i + 1 < totals.length; i += 1) {
+    const next = totals[i]?.total ?? 0;
+    const old = totals[i + 1]?.total ?? 0;
+    if (next < old) consecutiveDeclines += 1;
     else break;
   }
 
-  // **Eşik dönem sayısıdır, geçiş sayısı değil** (denetim 23.08.2026,
-  // bulgu 7). Üç dönemlik `91 → 78 → 64` dizisinde iki geçiş vardır ve
-  // tasarımın "üç dönemdir düşüyor" örneği tam olarak bu diziyi anlatır.
-  // Geçiş sayısı olarak okunduğunda işaret bir dönem geç yanıyordu.
-  return ardisik >= Math.max(1, esik - 1);
+  // **The threshold is a period count, not a transition count** (audit
+  // 23.08.2026, finding 7). The three-period sequence `91 → 78 → 64` has
+  // two transitions and is the design's example of a three-period decline.
+  return consecutiveDeclines >= Math.max(1, threshold - 1);
 }
 
-/** Kişinin son dönemleri ve düşüş işareti; kapsam dışında boş döner. */
+/** Returns a person's recent periods and decline flag; out-of-scope is empty. */
 export async function readScoreTrend(
   db: ScoreReadDb,
   viewer: Viewer,
   userId: string,
 ): Promise<ScoreTrend> {
-  // Trend de bir okuma yoludur: kapsam dışı kişinin geçmişi görünmez.
-  if (!(await gorebilirMi(db, viewer, userId))) {
+  // A trend is also a read path: out-of-scope history must remain hidden.
+  if (!(await canViewScore(db, viewer, userId))) {
     return { periods: [], declining: false };
   }
 
-  const hepsi = await readScoreTrends(db, viewer, [userId]);
-  return hepsi.get(userId) ?? { periods: [], declining: false };
+  const trends = await readScoreTrends(db, viewer, [userId]);
+  return trends.get(userId) ?? { periods: [], declining: false };
 }

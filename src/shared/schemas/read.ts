@@ -1,11 +1,10 @@
 import { z } from "zod";
 
-// Okuma kaydı girdisi (§10.2). Sunucu eylemi doğrulanmamış veri kabul
-// etmiyordu (denetim 18.08.2026, FAZ 4 bulgu 8).
+// Read-ticket submission input (§10.2). The server validates every submission.
 
 export const readTicketSubmissionSchema = z.object({
   activityId: z.string().uuid(),
-  // Biçim: "<zaman>.<imza>"; içeriği `reads/ticket.ts` doğrular.
+  // Format: `<timestamp>.<signature>`; `reads/ticket.ts` verifies the contents.
   ticket: z.string().min(3).max(200),
 });
 

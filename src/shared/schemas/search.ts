@@ -1,12 +1,12 @@
 import { z } from "zod";
 
-// Arama girdisi (§16.2). Sorgu metni serbesttir; PostgreSQL `plainto_tsquery`
-// ile ayrıştırır, operatör kaçışı gerekmez.
+// Search input (§16.2). PostgreSQL parses the free-form text with
+// `plainto_tsquery`, so operator escaping is not required.
 
 export const searchQuerySchema = z
   .string()
   .trim()
-  .max(200, "Arama en fazla 200 karakter olabilir");
+  .max(200, "Search must be 200 characters or fewer");
 
 export const searchPageSchema = z.coerce
   .number()

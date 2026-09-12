@@ -12,6 +12,11 @@ import {
   type OrgTreeFailure,
 } from "@/server/org/tree";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   createOrgUnitSchema,
   deactivateOrgUnitSchema,
@@ -29,17 +34,23 @@ import {
 
 import type { OrgFormState, WorkWindowSummary } from "./form-state";
 
-function pencereOzeti(pencere: WorkWindowLike): WorkWindowSummary {
+function workWindowSummary(window: WorkWindowLike): WorkWindowSummary {
   return {
-    days: formatWorkingDays(pencere.workingDays),
-    hours: formatWorkHours(pencere),
-    holidays: formatHolidayRule(pencere),
-    source: formatWindowSource(pencere),
+    days: formatWorkingDays(window.workingDays),
+    hours: formatWorkHours(window),
+    holidays: formatHolidayRule(window),
+    source: formatWindowSource(window),
   };
 }
 
-function failureState(failure: OrgTreeFailure): OrgFormState {
-  return { error: failure.message, success: null };
+function failureState(
+  t: Parameters<typeof localizeServiceMessage>[0],
+  failure: OrgTreeFailure,
+): OrgFormState {
+  return {
+    error: localizeServiceMessage(t, "organization", failure),
+    success: null,
+  };
 }
 
 export async function createOrgUnitAction(
@@ -47,6 +58,7 @@ export async function createOrgUnitAction(
   formData: FormData,
 ): Promise<OrgFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = createOrgUnitSchema.safeParse({
     name: formData.get("name"),
@@ -58,14 +70,17 @@ export async function createOrgUnitAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz", success: null };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]), success: null };
   }
 
   const result = await createOrgUnit(prisma, parsed.data, me.id);
-  if (!result.ok) return failureState(result);
+  if (!result.ok) return failureState(t, result);
 
   revalidatePath("/admin/org");
-  return { error: null, success: `"${result.value.name}" birimi eklendi.` };
+  return {
+    error: null,
+    success: t("screens.organization.created", { unit: result.value.name }),
+  };
 }
 
 export async function reactivateOrgUnitAction(
@@ -73,25 +88,29 @@ export async function reactivateOrgUnitAction(
   formData: FormData,
 ): Promise<OrgFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = deactivateOrgUnitSchema.safeParse({ id: formData.get("id") });
   if (!parsed.success) {
-    return { error: "Birim seçilmedi.", success: null };
+    return { error: t("common.invalidInput"), success: null };
   }
 
   const result = await reactivateOrgUnit(prisma, parsed.data.id, me.id);
-  if (!result.ok) return failureState(result);
+  if (!result.ok) return failureState(t, result);
 
   revalidatePath("/admin/org");
-  return { error: null, success: `"${result.value.name}" birimi aktifleştirildi.` };
+  return {
+    error: null,
+    success: t("screens.organization.reactivated", { unit: result.value.name }),
+  };
 }
 
 export async function updateOrgUnitAction(
   _previous: OrgFormState,
   formData: FormData,
 ): Promise<OrgFormState> {
-  // Ekranın gizlenmesi koruma değildir; yetki burada da ayrıca doğrulanır.
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = updateOrgUnitSchema.safeParse({
     id: formData.get("id"),
@@ -103,14 +122,17 @@ export async function updateOrgUnitAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz", success: null };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]), success: null };
   }
 
   const result = await updateOrgUnit(prisma, parsed.data, me.id);
-  if (!result.ok) return failureState(result);
+  if (!result.ok) return failureState(t, result);
 
   revalidatePath("/admin/org");
-  return { error: null, success: `"${result.value.name}" birimi güncellendi.` };
+  return {
+    error: null,
+    success: t("screens.organization.updated", { unit: result.value.name }),
+  };
 }
 
 export async function moveOrgUnitAction(
@@ -118,46 +140,47 @@ export async function moveOrgUnitAction(
   formData: FormData,
 ): Promise<OrgFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
-  const imza = formData.get("confirmedCalendarSignature");
+  const signature = formData.get("confirmedCalendarSignature");
 
   const parsed = moveOrgUnitSchema.safeParse({
     id: formData.get("id"),
     newParentId: formData.get("newParentId"),
-    ...(typeof imza === "string" && imza !== ""
-      ? { confirmedCalendarSignature: imza }
+    ...(typeof signature === "string" && signature !== ""
+      ? { confirmedCalendarSignature: signature }
       : {}),
   });
 
   if (!parsed.success) {
-    return { error: "Taşıma bilgileri geçersiz.", success: null };
+    return { error: t("screens.organization.invalidMove"), success: null };
   }
 
   const result = await moveOrgUnit(prisma, parsed.data, me.id);
 
-  // **Yan etki görülmeden onaylanmaz** (tasarım Paket H). Taşıma o birimdeki
-  // herkesin hatırlatma saatini ve skor paydasını kaydırıyor; ekran iki
-  // pencereyi yan yana gösterip onay istiyor.
   if (!result.ok && result.calendarChange) {
-    const degisiklik = result.calendarChange;
+    const change = result.calendarChange;
 
     return {
-      error: result.message,
+      error: localizeServiceMessage(t, "organization", result),
       success: null,
       calendarConfirm: {
         unitId: parsed.data.id,
         newParentId: parsed.data.newParentId,
-        signature: degisiklik.imza,
-        before: pencereOzeti(degisiklik.mevcut),
-        after: pencereOzeti(degisiklik.yeni),
+        signature: change.signature,
+        before: workWindowSummary(change.current),
+        after: workWindowSummary(change.next),
       },
     };
   }
 
-  if (!result.ok) return failureState(result);
+  if (!result.ok) return failureState(t, result);
 
   revalidatePath("/admin/org");
-  return { error: null, success: `"${result.value.name}" birimi taşındı.` };
+  return {
+    error: null,
+    success: t("screens.organization.moved", { unit: result.value.name }),
+  };
 }
 
 export async function deactivateOrgUnitAction(
@@ -165,19 +188,20 @@ export async function deactivateOrgUnitAction(
   formData: FormData,
 ): Promise<OrgFormState> {
   const me = await requireSystemAdmin();
+  const t = await getTranslations();
 
   const parsed = deactivateOrgUnitSchema.safeParse({ id: formData.get("id") });
 
   if (!parsed.success) {
-    return { error: "Birim bilgisi geçersiz.", success: null };
+    return { error: t("screens.organization.invalidUnit"), success: null };
   }
 
   const result = await deactivateOrgUnit(prisma, parsed.data.id, me.id);
-  if (!result.ok) return failureState(result);
+  if (!result.ok) return failureState(t, result);
 
   revalidatePath("/admin/org");
   return {
     error: null,
-    success: `"${result.value.name}" birimi pasifleştirildi.`,
+    success: t("screens.organization.deactivated", { unit: result.value.name }),
   };
 }

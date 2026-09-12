@@ -1,4 +1,9 @@
-import { createTranslator, type Locale, type TranslateFunction } from "@/shared/i18n";
+import {
+  createTranslator,
+  type Locale,
+  type TranslateFunction,
+  type TranslationKey,
+} from "@/shared/i18n";
 import { getLocale } from "./locale";
 
 /**
@@ -10,4 +15,13 @@ export async function getTranslations(
 ): Promise<TranslateFunction> {
   const locale = explicitLocale ?? (await getLocale());
   return createTranslator(locale);
+}
+
+/** Resolves a localized route title from the same registry as page content. */
+export async function getLocalizedMetadata(
+  titleKey: TranslationKey | string,
+  explicitLocale?: Locale,
+): Promise<{ title: string }> {
+  const t = await getTranslations(explicitLocale);
+  return { title: t(titleKey) };
 }

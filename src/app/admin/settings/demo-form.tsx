@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { useTranslations } from "@/components/i18n";
 
 import { FormMessage } from "@/components/ui/alert";
 import { Alert } from "@/components/ui/alert";
@@ -17,13 +18,13 @@ import {
 } from "./actions";
 import { emptySettingsFormState } from "./form-state";
 
-// Örnek (demo) veri yönetimi.
+
 //
-// Yeni kurulan bir sistemde ekranların çoğu boştur ve boş ekran, çalıştığını
-// göstermez. Bu kart bir örnek şirket kurar: birimler, farklı yetkilerde
-// kullanıcılar, onayın dört hâlindeki faaliyetler, açık ve cevaplanmış
-// sorular, takip maddeleri, okundu bilgisi, bildirimler, izin işaretleri ve
-// resmî tatiller.
+
+
+
+
+// public holidays.
 
 export function DemoForm({
   installed,
@@ -32,43 +33,40 @@ export function DemoForm({
   installed: boolean;
   legacyOriginCandidates: LegacyDemoOriginCandidate[];
 }) {
-  const [kurState, kurAction, kurPending] = useActionState(
+  const t = useTranslations();
+  const [installState, installAction, installPending] = useActionState(
     async () => installDemoAction(),
     emptySettingsFormState,
   );
-  const [silState, silAction, silPending] = useActionState(
+  const [deletionState, deleteAction, deletePending] = useActionState(
     purgeDemoAction,
     emptySettingsFormState,
   );
-  const [kokenState, kokenAction, kokenPending] = useActionState(
+  const [originState, originAction, originPending] = useActionState(
     classifyLegacyDemoOriginsAction,
     emptySettingsFormState,
   );
-  const [silmeAcik, setSilmeAcik] = useState(false);
+  const [deletionOpen, setDeletionOpen] = useState(false);
 
   return (
     <Card>
       <CardHeader
-        title="Örnek veri"
-        description="Sistemi denemek ve ekranların dolu hâlini görmek için örnek bir şirket kurar: birimler, farklı yetkilerde kullanıcılar, onay bekleyen ve karara bağlanmış faaliyetler, sorular, takip maddeleri ve bildirimler."
+        title={t("screens.settingsForms.demo.title")}
+        description={t("screens.settingsForms.demo.description")}
       />
       <CardBody>
         <div className="flex flex-col gap-5">
           <div>
             <p className="prose-measure text-[length:var(--text-sm)] leading-[var(--leading-relaxed)] text-muted">
-              Kurulum <strong className="font-semibold text-ink">yalnızca eksik olanı</strong>{" "}
-              ekler; mevcut verinize dokunmaz ve ikinci kez çalıştırmak
-              zararsızdır. Örnek hesapların e-posta adresleri{" "}
-              <span className="mono">@example.test</span> ile biter — gerçek
-              kullanıcılarınızla karışmaz.
+              {t("screens.settingsForms.demo.installationNote", { domain: "@example.test" })}
             </p>
 
-            <form action={kurAction} className="mt-4">
+            <form action={installAction} className="mt-4">
               <FormActions
-                message={<FormMessage error={kurState.error} success={kurState.success} />}
+                message={<FormMessage error={installState.error} success={installState.success} />}
               >
-                <Button type="submit" variant="primary" disabled={kurPending}>
-                  {installed ? "Eksik örnek veriyi tamamla" : "Örnek veriyi yükle"}
+                <Button type="submit" variant="primary" disabled={installPending}>
+                  {installed ? t("screens.settingsForms.demo.completeMissing") : t("screens.settingsForms.demo.install")}
                 </Button>
               </FormActions>
             </form>
@@ -76,77 +74,65 @@ export function DemoForm({
 
           {installed ? (
             <div className="border-t border-line pt-5">
-              <p className="section-label mb-2">Temizleme</p>
+              <p className="section-label mb-2">{t("screens.settingsForms.demo.cleanup")}</p>
               <p className="prose-measure text-[length:var(--text-sm)] leading-[var(--leading-relaxed)] text-muted">
-                Örnek verinin tamamını kaldırır: <span className="mono">@example.test</span>{" "}
-                hesapları ve yalnızca onlara bağlı kayıtlar. Örnek bir kayda
-                gerçek veri bağlanmışsa (örneğin gerçek bir kullanıcı örnek bir
-                faaliyete soru sorduysa) işlem <strong className="font-semibold text-ink">reddedilir</strong>{" "}
-                ve hiçbir şey silinmez.
+                {t("screens.settingsForms.demo.cleanupDescription", { domain: "@example.test" })}
               </p>
               <p className="prose-measure mt-2 text-[length:var(--text-sm)] leading-[var(--leading-relaxed)] text-muted">
-                Ortak ayarlar <strong className="font-semibold text-ink">kalır</strong>: örnek veriyle
-                birlikte gelen resmî tatiller ve onay gerekçeleri silinmez —
-                bunlar örnek şirkete değil, sisteminizin yapılandırmasına
-                aittir. Gerekmiyorsa Çalışma takvimi ve Onay gerekçeleri
-                ekranlarından kaldırabilirsiniz.
+                {t("screens.settingsForms.demo.sharedSettingsDescription")}
               </p>
 
               {legacyOriginCandidates.length > 0 ? (
-                <form action={kokenAction} className="mt-4 flex flex-col gap-4">
-                  <Alert tone="correction" title="Eski kurulum: birim kökeni belirsiz">
-                    Ad bir köken kanıtı değildir. Temizlik başlamadan önce her
-                    birimin örnek kurulum tarafından mı oluşturulduğunu, yoksa
-                    daha önce var olup yeniden mi kullanıldığını seçin. Yanlış
-                    birimi “kurulum oluşturdu” diye işaretlemek o birimin
-                    silinmesine izin verir.
+                <form action={originAction} className="mt-4 flex flex-col gap-4">
+                  <Alert tone="correction" title={t("screens.settingsForms.demo.legacyTitle")}>
+                    {t("screens.settingsForms.demo.legacyDescription")}
                   </Alert>
 
                   <div className="flex flex-col gap-3">
-                    {legacyOriginCandidates.map((birim) => (
+                    {legacyOriginCandidates.map((unit) => (
                       <fieldset
-                        key={birim.id}
+                        key={unit.id}
                         className="rounded-(--radius-sm) border border-line bg-inset/40 p-3.5"
                       >
                         <legend className="px-1 text-[length:var(--text-sm)] font-semibold text-ink">
-                          {birim.name}
+                          {unit.name}
                         </legend>
-                        <input type="hidden" name="orgUnitId" value={birim.id} />
+                        <input type="hidden" name="orgUnitId" value={unit.id} />
                         <p className="mb-2 text-[length:var(--text-xs)] text-muted">
-                          Üst birim: {birim.parentName ?? "Yok"} · Kimlik:{" "}
-                          <span className="mono break-all">{birim.id}</span>
+                          {t("screens.settingsForms.demo.parentUnit")}: {unit.parentName ?? t("common.none")} · ID:{" "}
+                          <span className="mono break-all">{unit.id}</span>
                         </p>
                         <label className="flex min-h-(--spacing-touch) items-start gap-2.5 py-1 text-[length:var(--text-sm)]">
                           <input
                             type="radio"
-                            name={`origin:${birim.id}`}
+                            name={`origin:${unit.id}`}
                             value="CREATED_BY_INSTALLER"
                             required
                             className="mt-1 size-4"
                           />
                           <span>
                             <span className="font-medium text-ink">
-                              Örnek kurulum oluşturdu
+                              {t("screens.settingsForms.demo.createdByInstaller")}
                             </span>
                             <span className="block text-[length:var(--text-xs)] text-muted">
-                              Temizlik bu birimi, boşaldığında siler.
+                              {t("screens.settingsForms.demo.createdByInstallerDescription")}
                             </span>
                           </span>
                         </label>
                         <label className="flex min-h-(--spacing-touch) items-start gap-2.5 py-1 text-[length:var(--text-sm)]">
                           <input
                             type="radio"
-                            name={`origin:${birim.id}`}
+                            name={`origin:${unit.id}`}
                             value="REUSED_EXISTING"
                             required
                             className="mt-1 size-4"
                           />
                           <span>
                             <span className="font-medium text-ink">
-                              Önceden vardı, yeniden kullanıldı
+                              {t("screens.settingsForms.demo.reusedExisting")}
                             </span>
                             <span className="block text-[length:var(--text-xs)] text-muted">
-                              Temizlik demo kayıtlarını kaldırır, bu birimi korur.
+                              {t("screens.settingsForms.demo.reusedExistingDescription")}
                             </span>
                           </span>
                         </label>
@@ -157,56 +143,55 @@ export function DemoForm({
                   <FormActions
                     message={
                       <FormMessage
-                        error={kokenState.error}
-                        success={kokenState.success}
+                        error={originState.error}
+                        success={originState.success}
                       />
                     }
                   >
-                    <Button type="submit" variant="primary" disabled={kokenPending}>
-                      Köken kararlarını kaydet
+                    <Button type="submit" variant="primary" disabled={originPending}>
+                    {t("screens.settingsForms.demo.saveOriginDecisions")}
                     </Button>
                   </FormActions>
                 </form>
-              ) : silmeAcik ? (
-                <form action={silAction} className="mt-4 flex flex-col gap-4">
+              ) : deletionOpen ? (
+                <form action={deleteAction} className="mt-4 flex flex-col gap-4">
                   <Alert tone="danger">
-                    Bu işlem geri alınamaz. Örnek veri silindikten sonra
-                    yeniden yüklenirse kayıtlar yeni tarihlerle oluşur.
+                    {t("screens.settingsForms.demo.irreversible")}
                   </Alert>
 
                   <Field
-                    htmlFor="onay"
-                    label="Onay"
-                    hint="Silmeyi onaylamak için kutuya büyük harflerle SİL yazın."
+                    htmlFor="confirmation"
+                    label={t("screens.settingsForms.demo.confirmation")}
+                    hint={t("screens.settingsForms.demo.confirmationHint")}
                     required
                   >
                     <Input
-                      id="onay"
-                      name="onay"
+                      id="confirmation"
+                      name="confirmation"
                       autoComplete="off"
-                      placeholder="SİL"
+                      placeholder="DELETE"
                       className="max-w-40"
                     />
                   </Field>
 
                   <FormActions
-                    message={<FormMessage error={silState.error} success={silState.success} />}
+                    message={<FormMessage error={deletionState.error} success={deletionState.success} />}
                   >
-                    <Button type="submit" variant="danger" disabled={silPending}>
-                      Örnek veriyi sil
+                    <Button type="submit" variant="danger" disabled={deletePending}>
+                      {t("screens.settingsForms.demo.delete")}
                     </Button>
-                    <Button type="button" onClick={() => setSilmeAcik(false)}>
-                      Vazgeç
+                    <Button type="button" onClick={() => setDeletionOpen(false)}>
+                      {t("common.cancel")}
                     </Button>
                   </FormActions>
                 </form>
               ) : (
                 <div className="mt-4">
-                  <Button type="button" onClick={() => setSilmeAcik(true)}>
-                    Örnek veriyi sil…
+                  <Button type="button" onClick={() => setDeletionOpen(true)}>
+                    {t("screens.settingsForms.demo.deleting")}
                   </Button>
                   <div className="mt-2">
-                    <FormMessage error={silState.error} success={silState.success} />
+                    <FormMessage error={deletionState.error} success={deletionState.success} />
                   </div>
                 </div>
               )}

@@ -1,13 +1,13 @@
-// İş günü hesabı (§12.1). Hafta sonu ve resmî tatillerde sayaç işlemez;
-// §9.3'teki "10 iş günü" ve §12.2'deki "3 iş günü" kuralları buradan beslenir.
+
+
 //
-// Tatil listesi parametre olarak alınır: çalışma takvimi yönetimi Görev 5.4'te
-// gelecek, o zaman liste veritabanından beslenecek. Kural burada bir kez
-// yazıldı; iki yerde ayrı hesap yapmak, ikisinin ayrışması demektir.
+
+
+
 
 import { companyDay } from "@/server/activities/date-rules";
 
-/** ISO gün numarası (1 = Pazartesi … 7 = Pazar). */
+
 function isoWeekday(day: string): number {
   const date = new Date(`${day}T00:00:00.000Z`);
   const jsDay = date.getUTCDay();
@@ -15,9 +15,9 @@ function isoWeekday(day: string): number {
 }
 
 export interface BusinessDayOptions {
-  /** Çalışılan günler; varsayılan Pazartesi–Cuma. */
+  /** Working days; defaults to Monday–Friday. */
   workingDays?: number[];
-  /** `YYYY-MM-DD` biçiminde resmî tatiller. */
+  /** Public holidays in `YYYY-MM-DD` form. */
   holidays?: string[];
 }
 
@@ -32,8 +32,9 @@ export function isBusinessDay(day: string, options: BusinessDayOptions = {}): bo
 }
 
 /**
- * İki an arasında geçen **tam iş günü** sayısı. Başlangıç günü sayılmaz:
- * "3 iş günüdür cevap yok" ifadesi, üçüncü iş gününün dolmasını anlatır.
+ * Counts complete **business days** between two instants. The start day is
+ * excluded: "no answer for 3 business days" means the third business day has
+ * elapsed.
  */
 export function businessDaysBetween(
   from: Date,

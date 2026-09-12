@@ -1,25 +1,24 @@
 import { z } from "zod";
 
-// Onay akışı girdileri (§5.4). Aynı şema hem formda hem sunucuda çalışır.
+// Approval-flow input (§5.4), shared by the form and server.
 
 export const approveActivitySchema = z.object({
   id: z.string().uuid(),
 });
 
 /**
- * Onay kararının gerekçesi (ürün sahibi kararı, 19.08.2026).
+ * Reason for an approval decision.
  *
- * **Kategori zorunlu, açıklama isteğe bağlı.** Serbest metin raporlanamaz:
- * herkes kendi cümlesini yazarsa "faaliyetler neden reddediliyor" sorusu
- * sayıya dökülemez. Kategorileri sistem yöneticisi tanımlar.
+ * The category is required and the description is optional. Free-form text
+ * cannot be reported consistently, so system administrators define categories.
  */
 const decisionFields = {
   id: z.string().uuid(),
-  reasonId: z.string().uuid("Gerekçe seçilmeli"),
+  reasonId: z.string().uuid("Select a reason"),
   note: z
     .string()
     .trim()
-    .max(1000, "Açıklama en fazla 1000 karakter olabilir")
+    .max(1000, "Description must be 1000 characters or fewer")
     .optional()
     .or(z.literal("")),
 };
@@ -27,7 +26,7 @@ const decisionFields = {
 export const requestChangesSchema = z.object(decisionFields);
 export const rejectActivitySchema = z.object(decisionFields);
 
-/** Gerekçe kataloğu yönetimi (§15.1: yalnız sistem yöneticisi). */
+/** Approval-reason catalog management (§15.1). */
 export const approvalReasonKindSchema = z.enum(["CHANGES_REQUESTED", "REJECTED"]);
 
 export const createApprovalReasonSchema = z.object({
@@ -35,8 +34,8 @@ export const createApprovalReasonSchema = z.object({
   label: z
     .string()
     .trim()
-    .min(2, "Gerekçe adı en az 2 karakter olmalı")
-    .max(120, "Gerekçe adı en fazla 120 karakter olabilir"),
+    .min(2, "The reason name must be at least 2 characters")
+    .max(120, "The reason name cannot exceed 120 characters"),
   sortOrder: z.coerce.number().int().min(0).max(999).default(0),
 });
 
@@ -45,8 +44,8 @@ export const updateApprovalReasonSchema = z.object({
   label: z
     .string()
     .trim()
-    .min(2, "Gerekçe adı en az 2 karakter olmalı")
-    .max(120, "Gerekçe adı en fazla 120 karakter olabilir"),
+    .min(2, "The reason name must be at least 2 characters")
+    .max(120, "The reason name cannot exceed 120 characters"),
   sortOrder: z.coerce.number().int().min(0).max(999).default(0),
 });
 

@@ -1,37 +1,29 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
+import { Breadcrumbs, type Crumb } from "./breadcrumbs";
 
-// Sayfa iskeleti — editoryal ritim.
+// Shared page layout and editorial rhythm.
 //
-// Genişlik içeriğin türüne göre değişir (brief §5): belge ve formlar
-// kontrollü satır uzunluğunda, akış ve yönetim tabloları geniş. Sayfa
-// başlıkları kutu içinde değil, bir kural çizgisinin üstünde durur.
+
+
+
 
 export function Page({
   children,
-  isaret,
+  marker,
 }: {
   children: ReactNode;
-  /**
-   * Rotanın adı, ölçüm ve testler için (denetim 23.08.2026, bulgu 10).
-   *
-   * Kabul ölçümü süreyi kaydetmeden önce **doğru sayfada** olduğunu
-   * doğrulamak zorunda: yalnız `main` beklemek yetmiyordu, çünkü hata ve
-   * "bulunamadı" yüzeyleri de `main` çiziyor. O zaman yetkisiz yönlendirme
-   * ya da beklenmeyen hata bile hızlı ve başarılı bir ölçüm olarak
-   * kaydedilebiliyordu.
-   */
-  isaret?: string;
+
+  marker?: string;
 }) {
-  // **Tek genişlik.** Önce üç ölçü vardı (okuma / liste / tablo) ve sayfa
-  // değiştikçe içerik sütunu genişleyip daralıyordu — kullanıcının gözü her
-  // geçişte yeniden hizalanmak zorunda kalıyordu. Çerçeve artık her sayfada
-  // aynı; okuma ölçüsü çerçeveyi daraltarak değil, içerikte `prose-measure`
-  // ve form ızgarasıyla ayarlanıyor.
+
+
+
+
+
   return (
     <main
-      id="icerik"
-      data-sayfa={isaret}
+      id="content"
+      data-page={marker}
       className="mx-auto flex max-w-[1180px] flex-col gap-(--spacing-section) px-4 pt-6 pb-(--spacing-page) sm:px-7"
     >
       {children}
@@ -39,50 +31,10 @@ export function Page({
   );
 }
 
-export interface Crumb {
-  label: string;
-  href?: string;
-}
+export type { Crumb } from "./breadcrumbs";
 
 /**
- * Sayfa yolu. Kullanıcı **nerede olduğunu** ve nereye döneceğini görmeli;
- * tarayıcının geri düğmesine bırakmak yetmez, çünkü sayfaya bağlantıyla da
- * gelinir.
- */
-export function Breadcrumbs({ items }: { items: Crumb[] }) {
-  if (items.length === 0) return null;
-
-  return (
-    <nav aria-label="Sayfa yolu">
-      <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[length:var(--text-xs)] text-faint">
-        {items.map((item, index) => {
-          const sonuncu = index === items.length - 1;
-
-          return (
-            <li key={`${item.label}-${index}`} className="flex items-center gap-2">
-              {item.href && !sonuncu ? (
-                <Link href={item.href} className="hover:text-ink hover:underline">
-                  {item.label}
-                </Link>
-              ) : (
-                <span className={sonuncu ? "text-muted" : undefined}>{item.label}</span>
-              )}
-              {sonuncu ? null : (
-                <span aria-hidden className="text-line-strong">
-                  /
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
-}
-
-/**
- * Sayfa başlığı. Üstte ince kural çizgisi ve bölüm etiketi, altında büyük
- * editoryal başlık — kayıt defteri sayfasının açılışı gibi.
+ * Page heading with a section marker, rule, title, and optional description.
  */
 export function PageHeader({
   title,
@@ -95,7 +47,7 @@ export function PageHeader({
   description?: ReactNode;
   action?: ReactNode;
   breadcrumbs?: Crumb[];
-  /** Bölüm etiketi: "FAALİYET", "YÖNETİM" gibi. */
+  /** Section marker such as "ACTIVITY" or "ADMINISTRATION". */
   marker?: string;
 }) {
   return (
@@ -110,14 +62,8 @@ export function PageHeader({
       ) : null}
 
       <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        {/* Metin bloğu **kalan genişliği alır** (`flex-1`) ve açıklamaya
-            ölçü sınırı konmaz.
-
-            Tipografide gövde metni 65-75 karakterde tutulur; ama buradaki
-            açıklama sürekli okunan bir gövde değil, bir kez okunan alt
-            satır. Dar ölçüye sıkıştırıldığında geniş ekranda iki-üç satıra
-            kırılıyor ve sağ taraf bomboş kalıyordu — ürün sahibi kararı
-            (21.08.2026): mevcut genişlik kullanılsın. */}
+        {/* The text block takes the remaining width so long descriptions do not
+            wrap into an unnecessarily narrow column. */}
         <div className="min-w-0 flex-1">
           <h1 className="text-[length:var(--text-2xl)] font-semibold text-ink">
             {title}
@@ -134,7 +80,7 @@ export function PageHeader({
   );
 }
 
-/** Form satırı düzeni: dar ekranda tek sütun, geniş ekranda bölünür. */
+/** Form rows use one column on narrow screens and split on wider screens. */
 export function FormGrid({
   children,
   columns = 2,
@@ -142,19 +88,19 @@ export function FormGrid({
   children: ReactNode;
   columns?: 1 | 2 | 3;
 }) {
-  const sinif =
+  const className =
     columns === 1
       ? "grid-cols-1"
       : columns === 2
         ? "sm:grid-cols-2"
         : "sm:grid-cols-2 lg:grid-cols-3";
 
-  return <div className={`grid grid-cols-1 gap-5 ${sinif}`}>{children}</div>;
+  return <div className={`grid grid-cols-1 gap-5 ${className}`}>{children}</div>;
 }
 
 /**
- * Formun alt şeridi. Birincil eylem solda: Türkçe okuma yönünde ilk göze
- * çarpan yer orasıdır ve mobilde başparmağa en yakın.
+ * Form action row. The primary action appears first and stays close to the
+ * thumb on narrow screens.
  */
 export function FormActions({
   children,
@@ -172,9 +118,8 @@ export function FormActions({
 }
 
 /**
- * Ölçüm şeridi (brief §7 profil): özet değerler **dekoratif kartlara
- * bölünmez**. Tek bir şeritte, dikey kural çizgileriyle ayrılmış tanım
- * listesi olarak durur.
+ * Summary strip for profile metrics (§7); values remain a single grouped list
+ * instead of being split into decorative cards.
  */
 export function StatStrip({ children }: { children: ReactNode }) {
   return (
@@ -195,7 +140,7 @@ export function Stat({
   tone?: "neutral" | "primary" | "correction";
   hint?: ReactNode;
 }) {
-  const renk =
+  const toneClass =
     tone === "primary"
       ? "text-primary"
       : tone === "correction"
@@ -206,7 +151,7 @@ export function Stat({
     <div className="flex flex-col gap-1 border-line px-4 py-3.5 not-first:border-s">
       <dt className="section-label">{label}</dt>
       <dd
-        className={`mono text-[length:var(--text-xl)] leading-[var(--leading-tight)] font-semibold ${renk}`}
+        className={`mono text-[length:var(--text-xl)] leading-[var(--leading-tight)] font-semibold ${toneClass}`}
       >
         {value}
       </dd>

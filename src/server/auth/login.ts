@@ -19,16 +19,14 @@ import {
   type CreatedSession,
 } from "./session";
 
-// Giriş akışı (§15.3). Dışarıdan alınan her şey (veritabanı, saat, bekleme)
-// parametredir; kural sahte saatle ve beklemeden test edilebilsin diye.
+
+// The current time is injected so the rule can be tested with a fake clock
+// without waiting.
 
 export type LoginFailureReason =
-  /** Kullanıcı yok, parola yanlış veya kullanıcı pasif — üçü de aynı cevabı
-   *  verir: hangi e-postanın kayıtlı olduğu dışarıdan anlaşılmamalı. */
+
   | "invalid_credentials"
-  /** Hesap geçici olarak kilitli. Bu ayrım yalnızca sunucu tarafında anlamlı;
-   *  kullanıcıya dönen metin `invalid_credentials` ile aynıdır, aksi hâlde
-   *  kilit cevabı hesabın var olduğunu doğrulardı (denetim, bulgu 8). */
+
   | "locked"
   | "rate_limited";
 
@@ -42,11 +40,11 @@ export type LoginResult =
   | {
       ok: false;
       reason: LoginFailureReason;
-      /** Kilit veya hız sınırı bitene kadar kalan süre. */
+
       retryAfterMs?: number;
     };
 
-/** Giriş akışının dokunduğu tablolar; fazlasına erişim istenmez. */
+
 export type LoginDb = Pick<
   PrismaClient,
   | "user"
@@ -61,24 +59,21 @@ export type LoginDb = Pick<
 export interface LoginDependencies {
   db: LoginDb;
   now: Date;
-  /** Hız sınırı anahtarı; genellikle istemci IP'si. */
+
   rateLimitKey: string;
-  /** Artan gecikmeyi uygular. Testlerde beklemeden geçilir. */
+
   sleep?: (ms: number) => Promise<void>;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-// Hiçbir hesaba ait olmayan sabit bir özet; ilk ihtiyaçta bir kez üretilir.
+
 let dummyHash: Promise<string> | null = null;
 
-/**
- * Kullanıcı bulunamadığında da bir parola doğrulaması yapılır. Aksi hâlde
- * "kayıtlı e-posta" ile "kayıtsız e-posta" cevap süresinden ayırt edilebilirdi.
- */
+
 async function burnTime(password: string): Promise<void> {
-  dummyHash ??= hashPassword("gecersiz-parola-yer-tutucu");
+  dummyHash ??= hashPassword("invalid-password-placeholder");
   await verifyPassword(await dummyHash, password);
 }
 
@@ -87,20 +82,17 @@ export async function login(
   input: {
     email: string;
     password: string;
-    /**
-     * "Beni hatırla". Yalnız oturum ömrünü uzatır; kilitlenme, hız sınırı ve
-     * parola değişiminde oturum iptali aynen işler.
-     */
+
     remember?: boolean;
   },
 ): Promise<LoginResult> {
   const { db, now, rateLimitKey } = deps;
   const sleep = deps.sleep ?? defaultSleep;
 
-  const clientKey = `istemci:${rateLimitKey}`;
-  // İstemci adresi başlıktan geldiği için değiştirilebilir; denenen hesap
-  // değiştirilemez. İki sayaç birlikte tutulur.
-  const accountKey = `hesap:${input.email}`;
+  const clientKey = `client:${rateLimitKey}`;
+  // The client address comes from a header and can be changed; the attempted
+  // account cannot. Keep both counters independently.
+  const accountKey = `account:${input.email}`;
   const clock = now.getTime();
 
   const byClient = peekFailures(clientKey, clock);
@@ -114,7 +106,7 @@ export async function login(
     };
   }
 
-  /** Başarısız denemeyi iki sayaca da işler. */
+  /** Records a failed attempt in both counters. */
   const noteFailure = () => {
     recordFailure(clientKey, clock);
     recordFailure(accountKey, clock);
@@ -126,15 +118,15 @@ export async function login(
   });
 
   if (!user || !user.credential || !user.isActive) {
-    // Kayıtlı hesapla aynı gecikme profilini uygula: gecikmenin yokluğu da
-    // "bu e-posta kayıtlı değil" bilgisidir.
+    // Apply the same delay profile as for a known account: a missing delay
+    // would reveal that the email address is not registered.
     await sleep(loginDelayMs(byAccount.count));
     await burnTime(input.password);
     noteFailure();
 
-    // §15.2 "oturum açma denemeleri": kayıtsız ya da pasif bir hesaba yapılan
-    // deneme de iz bırakır. Kullanıcı bilinmediği için kayıt kullanıcısızdır;
-    // denenen adres ayrıntıda durur.
+    // §15.2 "login attempts": attempts against an unknown or inactive account
+    // are also audited. There is no user when the account is unknown; the
+    // attempted address remains in the details.
     await recordAudit(db, {
       userId: user?.id ?? null,
       objectType: AUDIT_OBJECTS.session,
@@ -152,9 +144,9 @@ export async function login(
   const { lockedUntil } = credential;
 
   if (isLocked(lockedUntil, now)) {
-    // Kilitli hesap da diğer yollarla aynı gecikmeyi ve aynı parola doğrulama
-    // maliyetini öder. Hemen dönmek, cevap süresinden "bu e-posta kayıtlı ve
-    // aktif" bilgisini sızdırıyordu (denetim FAZ 2, bulgu 2).
+    // A locked account pays the same delay and password-verification cost as
+    // other paths. Returning immediately leaked "this email is registered and
+    // active" through response time (phase 2 audit, finding 2).
     await sleep(loginDelayMs(byAccount.count));
     await burnTime(input.password);
     noteFailure();
@@ -166,8 +158,8 @@ export async function login(
     };
   }
 
-  // Kilit süresi dolmuşsa sayaç sıfırdan başlar; temizlik tek ifadede yapılır
-  // ki iki eşzamanlı istek arasında yarım kalmış bir durum oluşmasın.
+  // Once the lock expires, start the counter from zero. Perform cleanup in one
+  // statement so concurrent requests cannot observe a partial state.
   let previousFailures = credential.failedLoginCount;
   if (credential.lockedUntil !== null) {
     await db.userCredential.updateMany({
@@ -185,9 +177,9 @@ export async function login(
   );
 
   if (!passwordMatches) {
-    // Sayaç veritabanında atomik olarak artırılır. Okuyup geri yazmak, aynı
-    // anda gelen denemelerde kayıp güncellemeye ve kilidin hiç devreye
-    // girmemesine yol açıyordu (denetim, bulgu 6).
+    // Increment the counter atomically in the database. Read-then-write caused
+    // lost updates for concurrent attempts and could prevent the lock from
+    // activating (audit, finding 6).
     const { failedLoginCount } = await db.userCredential.update({
       where: { userId: user.id },
       data: { failedLoginCount: { increment: 1 } },
@@ -197,11 +189,11 @@ export async function login(
     noteFailure();
 
     if (isLockThresholdReached(failedLoginCount)) {
-      const kilitDakikasi = await readNumericSetting(
+      const lockoutMinutes = await readNumericSetting(
         db,
         SETTING_KEYS.lockoutMinutes,
       );
-      const lockedTo = lockUntil(now, kilitDakikasi);
+      const lockedTo = lockUntil(now, lockoutMinutes);
 
       await db.userCredential.update({
         where: { userId: user.id },
@@ -243,36 +235,36 @@ export async function login(
     data: { failedLoginCount: 0, lockedUntil: null },
   });
 
-  // Başarılı giriş sayaçları temizler: meşru kullanıcı, sık giriş yaptığı için
-  // kendini veya aynı adresi paylaşan mesai arkadaşlarını kilitlememeli.
+  // A successful login clears the counters: a legitimate user should not lock
+  // themselves or colleagues sharing the same address through frequent use.
   clearFailures(clientKey);
   clearFailures(accountKey);
 
-  // Oturum yalnızca doğrulanan kimlik kuşağı hâlâ geçerliyse açılır: parola
-  // doğrulaması ile oturum yazımı arasında parola değişmiş olabilir.
-  // "Beni hatırla" işaretliyse oturum ömrü ayardaki gün sayısına çıkar.
-  // Ayar 0 ise özellik kapalıdır ve işaret yok sayılır — giriş ekranı da
-  // kutuyu hiç göstermez, ama istemciden gelen bir değere güvenilmez.
-  const hatirlaGun = await readNumericSetting(db, SETTING_KEYS.rememberMeDays);
-  const oturumSaati =
-    input.remember && hatirlaGun > 0 ? hatirlaGun * 24 : undefined;
+  // Create a session only if the verified credential version is still current:
+  // the password may have changed between verification and session creation.
+  // With "Remember me", the session lasts the configured number of days. A
+  // setting of 0 disables the feature and the client value is ignored.
+  const rememberDay = await readNumericSetting(db, SETTING_KEYS.rememberMeDays);
+  const sessionHours =
+    input.remember && rememberDay > 0 ? rememberDay * 24 : undefined;
 
   const session = await createSessionIfCredentialUnchanged(
     db,
     user.id,
     credential.version,
     now,
-    oturumSaati,
+    sessionHours,
   );
 
   if (!session) {
-    // Parola tam bu sırada değişti; doğrulanan parola artık geçerli değil.
+    // The password changed at this exact moment; the verified password is no
+    // longer current.
     return { ok: false, reason: "invalid_credentials" };
   }
 
-  // Son giriş zamanı yalnız parola doğrulaması ve oturum oluşturma birlikte
-  // başarılı olduktan sonra güncellenir. Başarısız denemeler ve yarışta
-  // geçersizleşen parolalar bu bilgiyi değiştiremez.
+  // Update the last-login time only after both password verification and
+  // session creation succeed. Failed attempts and passwords invalidated by a
+  // race must not change it.
   await db.user.update({
     where: { id: user.id },
     data: { lastLoginAt: now },

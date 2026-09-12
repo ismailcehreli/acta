@@ -10,6 +10,11 @@ import {
   replyToConversation,
 } from "@/server/conversations/service";
 import { prisma } from "@/server/db";
+import { getTranslations } from "@/server/i18n/server";
+import {
+  localizeServiceMessage,
+  localizeValidationIssue,
+} from "@/shared/i18n/message";
 import {
   askQuestionSchema,
   closeConversationSchema,
@@ -29,6 +34,7 @@ export async function askQuestionAction(
   formData: FormData,
 ): Promise<ConversationFormState> {
   const me = await actor();
+  const t = await getTranslations();
 
   const parsed = askQuestionSchema.safeParse({
     activityId: formData.get("activityId"),
@@ -36,11 +42,13 @@ export async function askQuestionAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz" };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
   const result = await askQuestion(prisma, me, parsed.data, new Date());
-  if (!result.ok) return { error: result.message };
+  if (!result.ok) {
+    return { error: localizeServiceMessage(t, "conversation", result) };
+  }
 
   revalidatePath(`/activities/${parsed.data.activityId}`);
   return { error: null };
@@ -51,6 +59,7 @@ export async function replyAction(
   formData: FormData,
 ): Promise<ConversationFormState> {
   const me = await actor();
+  const t = await getTranslations();
 
   const parsed = replySchema.safeParse({
     conversationId: formData.get("conversationId"),
@@ -58,11 +67,13 @@ export async function replyAction(
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Girdi geçersiz" };
+    return { error: localizeValidationIssue(t, parsed.error.issues[0]) };
   }
 
   const result = await replyToConversation(prisma, me, parsed.data, new Date());
-  if (!result.ok) return { error: result.message };
+  if (!result.ok) {
+    return { error: localizeServiceMessage(t, "conversation", result) };
+  }
 
   revalidatePath(`/activities/${result.value.activityId}`);
   return { error: null };
@@ -73,16 +84,19 @@ export async function closeConversationAction(
   formData: FormData,
 ): Promise<ConversationFormState> {
   const me = await actor();
+  const t = await getTranslations();
 
   const rawReason = formData.get("reason");
   const parsed = closeConversationSchema.safeParse({
     conversationId: formData.get("conversationId"),
-    // Boş alan "gerekçe verilmedi" demektir; şema boş metni reddediyor.
+    // An empty field means no reason was provided; the schema rejects empty text.
     reason: typeof rawReason === "string" && rawReason.trim() !== "" ? rawReason : undefined,
   });
 
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Konuşma bilgisi geçersiz." };
+    return {
+      error: localizeValidationIssue(t, parsed.error.issues[0]),
+    };
   }
 
   const result = await closeConversation(
@@ -92,7 +106,9 @@ export async function closeConversationAction(
     new Date(),
     parsed.data.reason,
   );
-  if (!result.ok) return { error: result.message };
+  if (!result.ok) {
+    return { error: localizeServiceMessage(t, "conversation", result) };
+  }
 
   revalidatePath(`/activities/${result.value.activityId}`);
   return { error: null };

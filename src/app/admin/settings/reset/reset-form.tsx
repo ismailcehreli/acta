@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { useLocale, useTranslations } from "@/components/i18n/provider";
 import { Alert, FormMessage } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -9,74 +10,61 @@ import { Field, Input } from "@/components/ui/form";
 import { PasswordInput } from "@/components/ui/password-input";
 import { FormActions, FormGrid } from "@/components/ui/page";
 import type { ResetRequestView } from "@/server/reset/service";
+import { formatInstant } from "@/shared/format/date-time";
 
 import { requestSystemResetAction } from "./actions";
 import { emptyResetFormState } from "./form-state";
 
-const STATUS_LABELS: Record<ResetRequestView["status"], string> = {
-  PENDING: "Bekliyor",
-  RUNNING: "Çalışıyor",
-  DONE: "Tamamlandı",
-  FAILED: "Başarısız",
-};
-
-function tarihMetni(value: Date): string {
-  return new Intl.DateTimeFormat("tr-TR", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(value);
-}
-
 export function ResetForm({ lastRequest }: { lastRequest: ResetRequestView | null }) {
+  const t = useTranslations();
+  const locale = useLocale();
   const [state, formAction, pending] = useActionState(
     requestSystemResetAction,
     emptyResetFormState,
   );
 
-  const aktif =
+  const active =
     lastRequest?.status === "PENDING" || lastRequest?.status === "RUNNING";
 
   return (
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader
-          title="Başlangıca dönüş"
-          description="Bu işlem uygulamadaki kullanıcıları ve iş kayıtlarını temizler; şema, sunucu ayarları ve alınmış yedekler korunur."
+          title={t("screens.settingsForms.reset.title")}
+          description={t("screens.settingsForms.reset.description")}
         />
         <CardBody className="flex flex-col gap-5">
-          <Alert tone="danger" title="Geri alınamaz işlem">
-            İşlem başlamadan önce otomatik bir yedek alınır. Yedek alınamazsa
-            hiçbir veri silinmez. İşlem tamamlandığında mevcut oturumlar kapanır
-            ve yalnız aşağıda belirlediğiniz başlangıç yöneticisi kalır.
+          <Alert tone="danger" title={t("screens.settingsForms.reset.irreversibleTitle")}>
+            {t("screens.settingsForms.reset.irreversibleDescription")}
           </Alert>
 
           <div className="grid gap-5 text-[length:var(--text-sm)] md:grid-cols-2">
             <div>
-              <p className="font-semibold text-ink">Temizlenecekler</p>
+              <p className="font-semibold text-ink">{t("screens.settingsForms.reset.cleared")}</p>
               <ul className="mt-2 list-disc space-y-1 ps-5 text-muted">
-                <li>Kullanıcılar, parolalar ve oturumlar</li>
-                <li>Organizasyon ağacı ve iş kayıtları</li>
-                <li>İzin, bildirim, geri bildirim ve yardım içerikleri</li>
-                <li>Skorlar ve uygulama ayarlarının özel değerleri</li>
-                <li>Avatar, logo ve ek dosya depoları</li>
+                <li>{t("screens.settingsForms.reset.clearedUsers")}</li>
+                <li>{t("screens.settingsForms.reset.clearedOrganization")}</li>
+                <li>{t("screens.settingsForms.reset.clearedContent")}</li>
+                <li>{t("screens.settingsForms.reset.clearedScores")}</li>
+                <li>{t("screens.settingsForms.reset.clearedFiles")}</li>
               </ul>
             </div>
             <div>
-              <p className="font-semibold text-ink">Korunacaklar</p>
+              <p className="font-semibold text-ink">{t("screens.settingsForms.reset.preserved")}</p>
               <ul className="mt-2 list-disc space-y-1 ps-5 text-muted">
-                <li>Uygulama kodu, şema ve migration geçmişi</li>
-                <li>`.env` içindeki bağlantı ve sunucu sırları</li>
-                <li>Daha önce alınmış şifreli yedekler</li>
+                <li>{t("screens.settingsForms.reset.preservedCode")}</li>
+                <li>{t("screens.settingsForms.reset.preservedSecrets")}</li>
+                <li>{t("screens.settingsForms.reset.preservedBackups")}</li>
               </ul>
             </div>
           </div>
 
           <form action={formAction} className="flex flex-col gap-5 border-t border-line pt-5">
-            <p className="section-label">Kimlik doğrulama</p>
+            <p className="section-label">{t("screens.settingsForms.reset.authentication")}</p>
             <Field
               htmlFor="currentPassword"
-              label="Mevcut parolanız"
-              hint="Bu işlem yalnızca sistem yöneticisi hesabının gerçek sahibi tarafından başlatılabilir."
+              label={t("screens.settingsForms.reset.currentPassword")}
+              hint={t("screens.settingsForms.reset.currentPasswordHint")}
               required
             >
               <PasswordInput
@@ -87,20 +75,27 @@ export function ResetForm({ lastRequest }: { lastRequest: ResetRequestView | nul
               />
             </Field>
 
-            <p className="section-label border-t border-line pt-5">Yeni başlangıç yöneticisi</p>
+            <p className="section-label border-t border-line pt-5">
+              {t("screens.settingsForms.reset.bootstrapTitle")}
+            </p>
             <FormGrid>
-              <Field htmlFor="bootstrapFullName" label="Ad soyad" required>
+              <Field htmlFor="bootstrapFullName" label={t("screens.settingsForms.reset.fullName")} required>
                 <Input id="bootstrapFullName" name="bootstrapFullName" required autoComplete="name" />
               </Field>
               <Field
                 htmlFor="bootstrapEmail"
-                label="E-posta"
-                hint="Yeni yönetici bu adresle giriş yapacak."
+                label={t("screens.settingsForms.reset.email")}
+                hint={t("screens.settingsForms.reset.emailHint")}
                 required
               >
                 <Input id="bootstrapEmail" name="bootstrapEmail" type="email" required autoComplete="email" />
               </Field>
-              <Field htmlFor="bootstrapPassword" label="Başlangıç parolası" hint="En az 10 karakter." required>
+              <Field
+                htmlFor="bootstrapPassword"
+                label={t("screens.settingsForms.reset.initialPassword")}
+                hint={t("screens.settingsForms.reset.passwordHint")}
+                required
+              >
                 <PasswordInput
                   id="bootstrapPassword"
                   name="bootstrapPassword"
@@ -108,7 +103,11 @@ export function ResetForm({ lastRequest }: { lastRequest: ResetRequestView | nul
                   required
                 />
               </Field>
-              <Field htmlFor="bootstrapPasswordRepeat" label="Başlangıç parolası (tekrar)" required>
+              <Field
+                htmlFor="bootstrapPasswordRepeat"
+                label={t("screens.settingsForms.reset.confirmPassword")}
+                required
+              >
                 <PasswordInput
                   id="bootstrapPasswordRepeat"
                   name="bootstrapPasswordRepeat"
@@ -120,22 +119,26 @@ export function ResetForm({ lastRequest }: { lastRequest: ResetRequestView | nul
 
             <Field
               htmlFor="confirmation"
-              label="İşlemi onaylayın"
-              hint="Başlatmak için BAŞLANGICA DÖN yazın."
+              label={t("screens.settingsForms.reset.confirmation")}
+              hint={t("screens.settingsForms.reset.confirmationHint")}
               required
             >
               <Input
                 id="confirmation"
                 name="confirmation"
                 autoComplete="off"
-                placeholder="BAŞLANGICA DÖN"
+                placeholder="RESET APPLICATION"
                 required
               />
             </Field>
 
             <FormActions message={<FormMessage error={state.error} success={state.success} />}>
-              <Button type="submit" variant="danger" disabled={pending || aktif}>
-                {pending ? "İstek oluşturuluyor…" : aktif ? "Başlangıca dönüş bekliyor" : "Başlangıca dön"}
+              <Button type="submit" variant="danger" disabled={pending || active}>
+                {pending
+                  ? t("screens.settingsForms.reset.createRequest")
+                  : active
+                    ? t("screens.settingsForms.reset.requestPending")
+                    : t("screens.settingsForms.reset.submit")}
               </Button>
             </FormActions>
           </form>
@@ -144,18 +147,25 @@ export function ResetForm({ lastRequest }: { lastRequest: ResetRequestView | nul
 
       {lastRequest ? (
         <Card>
-          <CardHeader title="Son işlem" />
+          <CardHeader title={t("screens.settingsForms.reset.lastOperation")} />
           <CardBody className="flex flex-col gap-2 text-[length:var(--text-sm)]">
             <p className="text-ink">
-              <span className="font-semibold">Durum:</span> {STATUS_LABELS[lastRequest.status]}
+              <span className="font-semibold">{t("screens.settingsForms.reset.status")}</span>{" "}
+              {t(`screens.settingsForms.reset.${lastRequest.status === "DONE" ? "completed" : lastRequest.status.toLowerCase()}`)}
             </p>
             <p className="text-muted">
-              İstek zamanı: {tarihMetni(new Date(lastRequest.requestedAt))}
+              {t("screens.settingsForms.reset.requestTime")} {formatInstant(new Date(lastRequest.requestedAt), locale)}
             </p>
             <p className="text-muted">
-              Yeni yönetici: {lastRequest.bootstrapFullName} · {lastRequest.bootstrapEmail}
+              {t("screens.settingsForms.reset.newAdministrator")} {lastRequest.bootstrapFullName} · {lastRequest.bootstrapEmail}
             </p>
-            {lastRequest.message ? <p className="text-danger">{lastRequest.message}</p> : null}
+            {lastRequest.message ? (
+              <p className="text-danger">
+                {t("screens.settingsForms.reset.operationDetails", {
+                  message: lastRequest.message,
+                })}
+              </p>
+            ) : null}
           </CardBody>
         </Card>
       ) : null}

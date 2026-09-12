@@ -2,95 +2,83 @@ import type { UnitCalendarDb, UnitWorkWindow } from "./unit-calendar";
 
 import { resolveUnitWorkWindow } from "./unit-calendar";
 
-// Birim taşımanın **mesai penceresine etkisi** (denetim 23.08.2026,
-// bulgu 14; tasarım Paket H).
+// Unit move effect on work window (audit 2026-08-23, finding 14).
 //
-// Taşıma yalnız ağaç görünümünü değiştirmiyor. Mesai penceresi üstten
-// devralınıyor; birim başka bir dala geçince o birimdeki **herkesin**
-// hatırlatma saati ve skor paydası kayıyor. Tasarım bu yüzden açık bir uyarı
-// istiyor: *"Bu birim taşındığında mesai penceresi X'ten Y'ye değişecek."*
-//
-// Ekran yeni üstü seçer seçmez taşıyordu; sistem yöneticisi yan etkiyi
-// görmeden işlemi tamamlıyordu.
+// Move affects more than just tree visualization: shift window is inherited from parent;
+// moving to another branch shifts everyone's reminder time and score denominator.
 
 export interface UnitMoveCalendarPreview {
-  /** Bugünkü pencere. */
-  mevcut: UnitWorkWindow;
-  /** Taşımadan sonra geçerli olacak pencere. */
-  yeni: UnitWorkWindow;
-  /** İkisi farklı mı; aynıysa onay istenmez. */
-  degisiyor: boolean;
-  /**
-   * Önizlemenin parmak izi.
-   *
-   * Onay bu değeri taşıyor ve sunucu **yeniden hesaplayıp** karşılaştırıyor:
-   * kullanıcı "07:00–17:00'den 09:00–18:00'e" cümlesini okuyup onayladıktan
-   * sonra araya giren bir takvim değişikliği, onaylanan cümleyi yanlış
-   * kılardı.
-   */
-  imza: string;
+  /** Current window. */
+  current: UnitWorkWindow;
+  /** Window that will apply after move. */
+  next: UnitWorkWindow;
+  /** Whether the two windows differ; if false, confirmation is not requested. */
+  changes: boolean;
+  /** Fingerprint of the preview. */
+  signature: string;
+
 }
 
-/** Pencereyi karşılaştırılabilir tek bir metne indirger. */
-export function workWindowSignature(pencere: UnitWorkWindow): string {
+/** Reduces work window to a single comparable string. */
+export function workWindowSignature(window: UnitWorkWindow): string {
   return [
-    [...pencere.workingDays].sort((a, b) => a - b).join("-"),
-    pencere.workStartMinute,
-    pencere.workEndMinute,
-    pencere.worksOnHolidays ? "tatil" : "tatilsiz",
+    [...window.workingDays].sort((a, b) => a - b).join("-"),
+    window.workStartMinute,
+    window.workEndMinute,
+    window.worksOnHolidays ? "holiday" : "no-holiday",
   ].join("|");
 }
 
 /**
- * Taşımadan önce ve sonra geçerli olacak pencereler.
+ * Windows that apply before and after the move.
  *
- * **Kendi takvimi olan birim etkilenmez**: pencere üstten devralınmıyorsa
- * taşıma onu değiştirmez ve gereksiz bir onay adımı istemek, uyarının
- * kendisini gürültüye çevirirdi.
+ * A unit with its own calendar is unaffected: if not inherited, moving does not change it.
  */
 export async function previewUnitMoveCalendar(
   db: UnitCalendarDb,
   unitId: string,
   newParentId: string,
 ): Promise<UnitMoveCalendarPreview> {
-  const mevcut = await resolveUnitWorkWindow(db, unitId);
+  const current = await resolveUnitWorkWindow(db, unitId);
 
-  if (mevcut.source === "unit") {
+  if (current.source === "unit") {
+    const sig = `${workWindowSignature(current)}=>${workWindowSignature(current)}`;
     return {
-      mevcut,
-      yeni: mevcut,
-      degisiyor: false,
-      imza: `${workWindowSignature(mevcut)}=>${workWindowSignature(mevcut)}`,
+      current,
+      next: current,
+      changes: false,
+      signature: sig,
     };
   }
 
-  // Devralınan pencere yeni üstün zincirinden gelecek. Yeni üstün **kendi**
-  // satırı varsa bizim için o "devralınan"dır; adı da oradan gelir.
-  const ustPencere = await resolveUnitWorkWindow(db, newParentId);
-  const yeni: UnitWorkWindow =
-    ustPencere.source === "company"
-      ? { ...ustPencere }
+  // Inherited window comes from new parent's chain.
+  const parentWindow = await resolveUnitWorkWindow(db, newParentId);
+  const next: UnitWorkWindow =
+    parentWindow.source === "company"
+      ? { ...parentWindow }
       : {
-          ...ustPencere,
+          ...parentWindow,
           source: "inherited",
           sourceUnitName:
-            ustPencere.source === "unit"
-              ? await birimAdi(db, newParentId)
-              : ustPencere.sourceUnitName,
+            parentWindow.source === "unit"
+              ? await getUnitName(db, newParentId)
+              : parentWindow.sourceUnitName,
         };
 
-  const mevcutImza = workWindowSignature(mevcut);
-  const yeniImza = workWindowSignature(yeni);
+  const currentSig = workWindowSignature(current);
+  const nextSig = workWindowSignature(next);
+  const changes = currentSig !== nextSig;
+  const sig = `${currentSig}=>${nextSig}`;
 
   return {
-    mevcut,
-    yeni,
-    degisiyor: mevcutImza !== yeniImza,
-    imza: `${mevcutImza}=>${yeniImza}`,
+    current,
+    next,
+    changes,
+    signature: sig,
   };
 }
 
-async function birimAdi(db: UnitCalendarDb, id: string): Promise<string | null> {
-  const birim = await db.orgUnit.findUnique({ where: { id }, select: { name: true } });
-  return birim?.name ?? null;
+async function getUnitName(db: UnitCalendarDb, id: string): Promise<string | null> {
+  const unit = await db.orgUnit.findUnique({ where: { id }, select: { name: true } });
+  return unit?.name ?? null;
 }

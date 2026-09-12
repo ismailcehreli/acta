@@ -15,52 +15,49 @@ import {
   type FilterOptions,
   type FilterValues,
 } from "@/components/filters/activity-filters";
+import type { Locale, TranslateFunction } from "@/shared/i18n";
 
-// Kapsam akışı (§13.1). Okunmamışlar belirgin, okunmuşlar sönük: yöneticinin
-// ihtiyacı "hangilerine baktım" sorusudur, bir durum alanı değil (§10.1).
+
+
 //
-// Düzen her kademede aynıdır; değişen yalnız başlık ve kapsamın genişliği
-// (§13.1). Öğrenilecek tek bir arayüz olur.
 
-/**
- * Kayıtları güne göre gruplar (brief §6, katman 3).
- *
- * Kayıt defteri karakterinin taşıyıcısı: liste düz bir akış değil, tarih
- * şeritleriyle bölünmüş bir defter sayfasıdır. Sunucunun seçtiği sıra korunur;
- * ana akış yeniden eskiye, dikkat kuyruğu eskiden yeniye akar.
- */
-function gunlereBol(items: FeedItem[]): { gun: string; date: Date; items: FeedItem[] }[] {
-  const gruplar: { gun: string; date: Date; items: FeedItem[] }[] = [];
+
+
+
+function groupByDay(items: FeedItem[]): { day: string; date: Date; items: FeedItem[] }[] {
+  const groups: { day: string; date: Date; items: FeedItem[] }[] = [];
 
   for (const item of items) {
-    const anahtar = item.activityDate.toISOString().slice(0, 10);
-    const son = gruplar[gruplar.length - 1];
-    if (son && son.gun === anahtar) son.items.push(item);
-    else gruplar.push({ gun: anahtar, date: item.activityDate, items: [item] });
+    const key = item.activityDate.toISOString().slice(0, 10);
+    const last = groups[groups.length - 1];
+    if (last && last.day === key) last.items.push(item);
+    else groups.push({ day: key, date: item.activityDate, items: [item] });
   }
 
-  return gruplar;
+  return groups;
 }
 
 export type FeedFilterOptions = FilterOptions;
 
-/**
- * Akıştaki tek kayıt satırı.
- *
- * Ana ekrandaki kısa önizleme ile akış sayfası **aynı** satırı kullanır:
- * iki yerde ayrı ayrı yazılsaydı biri değiştiğinde diğeri sessizce
- * geride kalırdı.
- */
-export function FeedRow({ item }: { item: FeedItem }) {
-  const iptal = item.approvalStatus === "CANCELLED";
+
+export function FeedRow({
+  item,
+  locale,
+  t,
+}: {
+  item: FeedItem;
+  locale: Locale;
+  t: TranslateFunction;
+}) {
+  const isCancelled = item.approvalStatus === "CANCELLED";
 
   return (
-    // `data-okundu` makine tarafından okunabilir durum: uçtan uca testler
-    // rozete değil buna bakar.
+
+
     <li
       key={item.id}
-      data-test="akis-satiri"
-      data-okundu={item.read ? "evet" : "hayir"}
+      data-test="feed-row"
+      data-read={item.read ? "yes" : "no"}
     >
       <Link
         href={`/activities/${item.id}`}
@@ -72,8 +69,8 @@ export function FeedRow({ item }: { item: FeedItem }) {
       >
         <ReadDot read={item.read} />
 
-        {/* Yazarın yüzü satırın başında: kim yazdı sorusu adı okumadan
-            cevaplanır (Görev 11.5). */}
+        {/* The author's avatar answers "who wrote this?" before the name is read
+            (Task 11.5). */}
         <Avatar
           user={{
             id: item.authorId,
@@ -81,34 +78,37 @@ export function FeedRow({ item }: { item: FeedItem }) {
             avatarExtension: item.authorAvatarExtension,
           }}
           size={28}
+          locale={locale}
           className="mt-0.5"
         />
 
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            {/* Sıra numarası (§3.1): kayda atıf vermenin kısa yolu. */}
+            {/* Order number (§3.1): a compact reference to the record. */}
             <span className="mono shrink-0 text-[length:var(--text-xs)] text-faint">
               #{item.activityNo}
             </span>
             <span
               className={
-                iptal
+                isCancelled
                   ? "min-w-0 flex-1 truncate text-[length:var(--text-sm)] font-medium text-faint line-through"
                   : "min-w-0 flex-1 truncate text-[length:var(--text-sm)] font-medium text-ink"
               }
             >
               {item.title}
             </span>
-            {iptal ? <Badge tone="cancelled">İptal edildi</Badge> : null}
-            {!item.read && !iptal && item.approvalStatus !== "REJECTED" ? (
-              <Badge tone="waiting">Okunmadı</Badge>
+            {isCancelled ? (
+              <Badge tone="cancelled">{t("activityStatus.CANCELLED")}</Badge>
+            ) : null}
+            {!item.read && !isCancelled && item.approvalStatus !== "REJECTED" ? (
+              <Badge tone="waiting">{t("activities.unread")}</Badge>
             ) : null}
           </span>
 
           <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[length:var(--text-xs)] text-muted">
             <span className="font-medium text-ink">{item.authorName}</span>
-            {/* Unvan yetki değildir; okuyanın "bu kişi ne iş yapıyor"
-                sorusuna cevap verir. Boşsa ayraç da yazılmaz. */}
+            {/* A title is not an authorization signal; it answers "what does this
+                person do?" Separators are omitted when it is empty. */}
             {item.authorTitle ? (
               <>
                 <span aria-hidden className="text-line-strong">·</span>
@@ -127,23 +127,22 @@ export function FeedRow({ item }: { item: FeedItem }) {
             ) : null}
             <span aria-hidden className="text-line-strong">·</span>
             <time dateTime={item.createdAt.toISOString()} className="text-faint">
-              Kaydedildi: {formatInstantShort(item.createdAt)}
+              {t("activities.saved")}: {formatInstantShort(item.createdAt, locale)}
             </time>
           </span>
         </span>
 
-        {/* Sağ sütun **yalnız faaliyetin günü**. Kaydın yazıldığı an alt
-            satırda, etiketiyle birlikte duruyor.
+        {/* The right column contains **only the activity date**. The saved-at
+            timestamp is shown on the line above with its label.
 
-            Önce ikisi burada alt alta yazılıyordu ve "20 Ağu / 20:42" tek
-            bir tarih-saat gibi okunuyordu — oysa 20 Ağustos tarihli kayıt
-            21 Ağustos'ta yazılmıştı. Etiketsiz iki sayıyı yan yana koymak,
-            aralarındaki ilişkiyi okuyucunun tahminine bırakıyor. */}
+            Previously the two values appeared as "Aug 20 / 20:42" and looked like
+            one timestamp, although an activity dated August 20 could be saved on
+            August 21. Labels make their relationship explicit. */}
         <time
           dateTime={item.activityDate.toISOString().slice(0, 10)}
           className="mono shrink-0 pt-0.5 text-[length:var(--text-xs)] text-faint"
         >
-          {formatDayShort(item.activityDate)}
+          {formatDayShort(item.activityDate, locale)}
         </time>
       </Link>
     </li>
@@ -151,6 +150,8 @@ export function FeedRow({ item }: { item: FeedItem }) {
 }
 
 export function ScopeFeed({
+  locale,
+  t,
   label,
   items,
   filters,
@@ -168,87 +169,87 @@ export function ScopeFeed({
   firstPageHref,
   clearHref = "/",
 }: {
+  locale: Locale;
+  t: TranslateFunction;
   label: string;
   items: FeedItem[];
   filters: FeedFilterOptions;
   selected: FilterValues;
   nextPageHref?: string | null;
   /**
-   * Sayaçtan gelen durum daraltmasının adı ("onay bekleyenler" gibi).
-   * Daraltma **görünür** olmalı: liste kısaldığında kullanıcı bunun bir
-   * süzgeçten mi yoksa veri yokluğundan mı olduğunu bilmeli.
+   * The status-filter label from the counter (for example, "awaiting approval").
+   * The filter must be **visible**: when the list shrinks, users need to know
+   * whether it is because of a filter or missing data.
    */
   statusLabel?: string | null;
-  /** Durum daraltmasını kaldıran adres. */
+  /** URL that removes the status filter. */
   clearStatusHref?: string;
-  /** Yalnız okunmamış kayıtların gösterildiği akış filtresi. */
+  /** Feed filter that shows only unread records. */
   unreadOnly?: boolean;
-  /** Sayaç rozetinin açtığı okunmamış akış adresi. */
+  /** Unread feed URL opened by the counter badge. */
   unreadHref?: string;
-  /** Okunmamış filtresini kaldıran, diğer süzgeçleri koruyan adres. */
+  /** URL that removes the unread filter while preserving other filters. */
   clearUnreadHref?: string;
-  /** Kapsamdaki kişi sayısı; başlığın yanında bağlam verir. */
+  /** Number of people in scope, shown beside the heading for context. */
   personCount?: number;
-  /** Kapsamdaki okunmamış kayıt sayısı; sıfırsa rozet çizilmez. */
+  /** Number of unread records in scope; no badge is rendered when it is zero. */
   unreadCount?: number;
-  /** Süzgeçli kapsamın toplam kayıt sayısı; sayfalama başlığında. */
+  /** Total records in the filtered scope, shown in the pagination heading. */
   totalCount?: number;
-  /** Bir sayfada kaç kayıt; "1-50 / 312" yazabilmek için. */
+  /** Records per page, used to render values such as "1-50 / 312". */
   pageSize?: number;
-  /** İmleçli sayfada başa dönüş adresi. */
+  /** URL for returning to the first cursor page. */
   firstPageHref?: string | null;
-  /** Süzgeçleri temizleyen adres; sayfa kendi yolunu verir. */
+  /** URL that clears the filters; each page provides its own URL. */
   clearHref?: string;
 }) {
   return (
-    <Card id="kapsam" className="scroll-mt-6">
-      {/* Süzgeç kutularının `key`i seçili değerdir.
-          Sebep: `defaultValue` yalnız **bağlanma anında** DOM'a yazılır.
-          Departman özetinden gelen bağlantı yumuşak gezinme yapıyor, React
-          aynı `<select>` düğümünü yeniden kullanıyor ve kutu eski değerde
-          kalıyordu — liste daralmış, süzgeç "Hepsi" görünüyordu. `key`
-          değişince düğüm yeniden bağlanıyor ve adresle uyumlu oluyor. */}
+    <Card id="scope" className="scroll-mt-6">
+      {/* The filter controls use the selected value as their `key`.
+          `defaultValue` is written to the DOM only on mount. A link from the
+          department summary can reuse the same `<select>` node, leaving its old
+          value visible while the list is filtered. Changing `key` remounts it. */}
       <CardHeader
         title={label}
         description={
           personCount === undefined
             ? undefined
-            : `${personCount} kişinin kayıtları`
+              : t("dashboard.peopleRepresented", { count: personCount })
         }
         action={
           <span className="flex items-center gap-2">
-            {/* Okunmamış sayısı kapsamın tamamına aittir, bu sayfaya değil:
-                süzgeç daralttığında bile "kaç iş bekliyor" değişmemeli.
-
-                Daraltma varken rozet **kapsamda** diyor: yan yana duran
-                "0 kayıt" ile "2 okunmamış" birbiriyle çelişiyormuş gibi
-                görünüyordu (Görev 11.2). İki sayı iki farklı şeyi ölçüyor;
-                etiket bunu söylüyor. */}
+            {/* The unread count belongs to the whole scope, not this page, so it
+                must not change when a filter narrows the list. The badge says
+                "in scope" when a filter is active because the two counts measure
+                different things (Task 11.2). */}
             {unreadCount ? (
               unreadOnly ? (
                 <Badge tone="waiting">
-                  {statusLabel || unreadOnly ? "kapsamda " : ""}
-                  {unreadCount} okunmamış
+                  {t("dashboard.unreadCount", { count: unreadCount })}
                 </Badge>
               ) : (
                 <Link
-                  href={unreadHref ?? "/feed?period=all&okunmamis=1"}
+                  href={unreadHref ?? "/feed?period=all&unread=1"}
                   className="rounded-(--radius-xs) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-                  data-test="okunmamis-akis-link"
+                  data-test="unread-feed-link"
                 >
                   <Badge tone="waiting">
-                    {statusLabel ? "kapsamda " : ""}
-                    {unreadCount} okunmamış
+                    {statusLabel
+                      ? t("dashboard.inScopeUnread", { count: unreadCount })
+                      : t("dashboard.unreadCount", { count: unreadCount })}
                   </Badge>
                 </Link>
               )
             ) : null}
             <Badge tone="primary">
               {totalCount === undefined
-                ? `${items.length} kayıt`
+                ? t("dashboard.recordCount", { count: items.length })
                 : pageSize !== undefined && totalCount > pageSize
-                  ? `${items.length} / ${totalCount} kayıt`
-                  : `${totalCount} kayıt`}
+                  ? t("dashboard.recordRange", {
+                      shown: items.length,
+                      total: totalCount,
+                    })
+                  : t("dashboard.recordCount", { count: totalCount })}
             </Badge>
           </span>
         }
@@ -260,23 +261,22 @@ export function ScopeFeed({
         clearHref={clearHref}
         pageSize={pageSize}
         unreadOnly={unreadOnly}
-        hidden={unreadOnly ? [{ name: "okunmamis", value: "1" }] : undefined}
+        hidden={unreadOnly ? [{ name: "unread", value: "1" }] : undefined}
       />
 
       {unreadOnly ? (
         <div
           className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line bg-waiting-soft px-4 py-2.5 sm:px-5"
-          data-test="okunmamis-filtresi"
+          data-test="unread-filter"
         >
           <p className="text-[length:var(--text-sm)] text-ink">
-            Yalnızca <strong className="font-semibold">okunmamış faaliyetler</strong>{" "}
-            gösteriliyor.
+            {t("dashboard.onlyUnread")}
           </p>
           <Link
             href={clearUnreadHref ?? "/feed"}
             className="text-[length:var(--text-sm)] text-primary underline-offset-4 hover:underline"
           >
-            Okunmamış filtresini kaldır
+            {t("dashboard.clearUnreadFilter")}
           </Link>
         </div>
       ) : null}
@@ -284,53 +284,52 @@ export function ScopeFeed({
       {statusLabel ? (
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line bg-inset px-4 py-2.5">
           <p className="text-[length:var(--text-sm)] text-ink">
-            Yalnızca <strong className="font-semibold">{statusLabel}</strong>{" "}
-            gösteriliyor.
+            {t("dashboard.onlyStatus", { status: statusLabel })}
           </p>
           <Link
             href={clearStatusHref ?? "/"}
             className="text-[length:var(--text-sm)] text-primary underline-offset-4 hover:underline"
           >
-            Daraltmayı kaldır
+            {t("common.clearFilter")}
           </Link>
         </div>
       ) : null}
 
       {items.length === 0 ? (
-        // Boşluğun sebebi metne yansır: daraltma varken "bu aralıkta kayıt
-        // yok" demek, kullanıcıyı dönemi genişletmeye yönlendiriyordu — oysa
-        // listeyi boşaltan şey dönem değil, durum süzgeciydi (Görev 11.2).
+        // Reflect the reason for an empty list in the message. When a filter is
+        // active, saying "no records in this period" incorrectly points users to
+        // expand the period; the filter is what emptied the list (Task 11.2).
         statusLabel || unreadOnly ? (
           <EmptyState
             title={
               unreadOnly
-                ? "Kapsamınızda okunmamış faaliyet yok."
-                : "Kapsamınızda " + statusLabel + " yok."
+                ? t("dashboard.noUnreadActivitiesInScope")
+                : t("dashboard.noStatusRecordsInScope", { status: statusLabel ?? "" })
             }
-            description="Daraltmayı kaldırarak bütün kayıtları görebilirsiniz."
+            description={t("dashboard.clearFilterToSeeAll")}
           />
         ) : (
           <EmptyState
-            title="Bu aralıkta kayıt yok."
-            description="Dönemi genişletmeyi ya da süzgeci temizlemeyi deneyin."
+            title={t("dashboard.noRecordsInPeriod")}
+            description={t("dashboard.tryExpandingPeriod")}
           />
         )
       ) : (
         <div>
-          {gunlereBol(items).map((grup) => (
-            <section key={grup.gun} aria-label={formatDayLong(grup.date)}>
-              {/* Tarih şeridi: defterin gün ayracı. Yapışkan değil —
-                  uzun listede sürekli üstte duran bir şerit, okunan
-                  satırın bağlamını değil ekranın üstünü doldurur. */}
+          {groupByDay(items).map((group) => (
+            <section key={group.day} aria-label={formatDayLong(group.date, locale)}>
+              {/* The date strip separates logbook days. It is not sticky: on a
+                  long list, a permanent strip would fill the screen instead of
+                  providing context for the row being read. */}
               <h3 className="section-label flex items-center gap-3 border-y border-line bg-inset/60 px-4 py-2 sm:px-5">
-                <span>{formatDayLong(grup.date)}</span>
+                <span>{formatDayLong(group.date, locale)}</span>
                 <span aria-hidden className="h-px flex-1 bg-line" />
-                <span className="mono">{grup.items.length}</span>
+                <span className="mono">{group.items.length}</span>
               </h3>
 
               <ul className="divide-y divide-line">
-                {grup.items.map((item) => (
-                  <FeedRow key={item.id} item={item} />
+                {group.items.map((item) => (
+                  <FeedRow key={item.id} item={item} locale={locale} t={t} />
                 ))}
               </ul>
             </section>
@@ -340,20 +339,19 @@ export function ScopeFeed({
             <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 py-3.5 sm:px-5">
               {firstPageHref ? (
                 <ButtonLink href={firstPageHref} size="sm">
-                  Başa dön
+                  {t("dashboard.backToFirstPage")}
                 </ButtonLink>
               ) : null}
               {nextPageHref ? (
-                <ButtonLink href={nextPageHref} data-test="sonraki-sayfa" size="sm">
-                  Sonraki sayfa
+                <ButtonLink href={nextPageHref} data-test="next-page" size="sm">
+                  {t("common.next")}
                 </ButtonLink>
               ) : null}
-              {/* İmleçli sayfalamada numaralı sayfa yok; sebebi sayfa
-                  dosyasında yazılı. Kullanıcı kaybolmasın diye toplam
-                  yazılıyor. */}
+              {/* Cursor pagination has no numbered pages; the total keeps the
+                  user's position visible. */}
               {totalCount !== undefined ? (
                 <span className="ms-auto text-[length:var(--text-xs)] text-faint">
-                  Toplam {totalCount} kayıt
+                  {t("dashboard.totalRecords", { count: totalCount })}
                 </span>
               ) : null}
             </div>

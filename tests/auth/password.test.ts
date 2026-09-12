@@ -2,34 +2,34 @@ import { describe, expect, it } from "vitest";
 
 import { hashPassword, verifyPassword } from "@/server/auth/password";
 
-describe("parola özeti", () => {
-  it("düz parolayı saklamaz, Argon2id özeti üretir", async () => {
-    const hash = await hashPassword("dogru-parola-123");
+describe("password hashing", () => {
+  it("does not store plain password, produces Argon2id hash", async () => {
+    const hash = await hashPassword("correct-password-123");
 
     expect(hash).toMatch(/^\$argon2id\$/);
-    expect(hash).not.toContain("dogru-parola-123");
+    expect(hash).not.toContain("correct-password-123");
   });
 
-  it("aynı parola her seferinde farklı özet üretir (tuz)", async () => {
-    const first = await hashPassword("dogru-parola-123");
-    const second = await hashPassword("dogru-parola-123");
+  it("same password produces different hash every time (salt)", async () => {
+    const first = await hashPassword("correct-password-123");
+    const second = await hashPassword("correct-password-123");
 
     expect(first).not.toBe(second);
   });
 
-  it("doğru parola doğrulanır", async () => {
-    const hash = await hashPassword("dogru-parola-123");
+  it("correct password verifies successfully", async () => {
+    const hash = await hashPassword("correct-password-123");
 
-    expect(await verifyPassword(hash, "dogru-parola-123")).toBe(true);
+    expect(await verifyPassword(hash, "correct-password-123")).toBe(true);
   });
 
-  it("yanlış parola doğrulanmaz", async () => {
-    const hash = await hashPassword("dogru-parola-123");
+  it("incorrect password fails verification", async () => {
+    const hash = await hashPassword("correct-password-123");
 
-    expect(await verifyPassword(hash, "yanlis-parola-123")).toBe(false);
+    expect(await verifyPassword(hash, "wrong-password-123")).toBe(false);
   });
 
-  it("bozuk özet hata fırlatmaz, eşleşmedi sayılır", async () => {
-    expect(await verifyPassword("bozuk-veri", "herhangi-parola")).toBe(false);
+  it("corrupted hash does not throw error, treated as mismatch", async () => {
+    expect(await verifyPassword("corrupted-data", "any-password")).toBe(false);
   });
 });

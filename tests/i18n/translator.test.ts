@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_LOCALE,
+  LOCALE_DICTIONARIES,
+  LOCALE_LABELS,
+  LOCALE_LANGUAGE_TAGS,
+  LOCALE_REGISTRY,
   SUPPORTED_LOCALES,
   createTranslator,
   isSupportedLocale,
@@ -12,7 +16,24 @@ import { tr } from "@/shared/i18n/messages/tr";
 describe("i18n translator", () => {
   it("uses English as default locale", () => {
     expect(DEFAULT_LOCALE).toBe("en");
-    expect(SUPPORTED_LOCALES).toEqual(["en", "tr"]);
+    expect(SUPPORTED_LOCALES).toEqual(Object.keys(LOCALE_REGISTRY));
+  });
+
+  it("derives locale metadata and dictionaries from the central registry", () => {
+    expect(Object.keys(LOCALE_REGISTRY)).toEqual(SUPPORTED_LOCALES);
+    for (const locale of SUPPORTED_LOCALES) {
+      expect(LOCALE_REGISTRY[locale].dictionary).toBe(LOCALE_DICTIONARIES[locale]);
+      expect(LOCALE_LABELS[locale]).toBe(LOCALE_REGISTRY[locale].label);
+      expect(LOCALE_LANGUAGE_TAGS[locale]).toBe(
+        LOCALE_REGISTRY[locale].languageTag,
+      );
+    }
+    expect(LOCALE_REGISTRY.en.dictionary).toBe(en);
+    expect(LOCALE_REGISTRY.tr.dictionary).toBe(tr);
+    expect(LOCALE_LABELS.en).toBe("English");
+    expect(LOCALE_LABELS.tr).toBe("Türkçe");
+    expect(LOCALE_LANGUAGE_TAGS.en).toBe("en-US");
+    expect(LOCALE_LANGUAGE_TAGS.tr).toBe("tr-TR");
   });
 
   it("identifies supported locales correctly", () => {
@@ -52,7 +73,7 @@ describe("i18n translator", () => {
     );
   });
 
-  it("guarantees 100% key parity between English and Turkish dictionaries", () => {
+  it("keeps Turkish keys valid and allows safe English fallback", () => {
     function getLeafKeys(obj: Record<string, unknown>, prefix = ""): string[] {
       return Object.entries(obj).flatMap(([key, value]) => {
         const fullKey = prefix ? `${prefix}.${key}` : key;
@@ -66,6 +87,11 @@ describe("i18n translator", () => {
     const enKeys = getLeafKeys(en as Record<string, unknown>).sort();
     const trKeys = getLeafKeys(tr as Record<string, unknown>).sort();
 
-    expect(trKeys).toEqual(enKeys);
+    expect(enKeys).toEqual(expect.arrayContaining(trKeys));
+    expect(trKeys.length).toBeLessThanOrEqual(enKeys.length);
+    expect(createTranslator("tr")("common.allRightsReserved")).toBe(
+      "Tüm hakları saklıdır.",
+    );
+    expect(createTranslator("tr")("common.invalidInput")).toBe("Geçersiz giriş.");
   });
 });

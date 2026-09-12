@@ -1,13 +1,13 @@
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
 
-// Düğme.
+
 //
-// Köşeli (3px), dolgun ama gölgesiz. Bir ekranda **tek** birincil eylem
-// bulunur; ikincil eylemler çizgili, üçüncüler yalnız metin.
+
+
 //
-// Yükseklik 40px (mobil birincil 46px): dokunma hedefi asgarisi 44px'i
-// birincil eylemlerde karşılar (§10).
+
+
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md" | "lg";

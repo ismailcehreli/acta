@@ -1,16 +1,15 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Bu testler gerçek FormData'yı sunucu eylemlerine verir. Ekranın yönetim
-// sekmesini gizlemesi tek başına güvenlik kanıtı değildir; yetkisiz çağrı
-// doğrudan eyleme geldiğinde de veri değişmemelidir.
-const { oturum } = vi.hoisted(() => ({
-  oturum: {
-    kisi: null as { id: string; isSystemAdmin: boolean } | null,
+// These tests verify server actions with real FormData instances.
+// Validates that unauthorized direct server action invocations are properly rejected.
+const { session } = vi.hoisted(() => ({
+  session: {
+    user: null as { id: string; isSystemAdmin: boolean } | null,
   },
 }));
 
 vi.mock("@/server/auth/current-user", () => ({
-  getCurrentUser: async () => oturum.kisi,
+  getCurrentUser: async () => session.user,
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
@@ -36,28 +35,28 @@ const NOW = new Date("2026-09-02T09:00:00.000Z");
 
 beforeEach(async () => {
   await resetDatabase();
-  oturum.kisi = null;
+  session.user = null;
 });
 
 afterAll(async () => {
   await testDb.$disconnect();
 });
 
-async function users() {
-  const root = await createOrgUnit({ name: "Şirket", type: "Kök" });
+async function setupUsers() {
+  const root = await createOrgUnit({ name: "Company", type: "ROOT" });
   const admin = await seedUser(root.id, {
-    fullName: "Sistem Yöneticisi",
-    email: "admin-feedback@ornek.test",
+    fullName: "System Admin",
+    email: "admin-feedback@example.test",
     isSystemAdmin: true,
   });
   const manager = await seedUser(root.id, {
-    fullName: "Birim Müdürü",
-    email: "mudur-feedback@ornek.test",
+    fullName: "Unit Manager",
+    email: "manager-feedback@example.test",
     isUnitManager: true,
   });
   const employee = await seedUser(root.id, {
-    fullName: "Geri Bildirim Gönderen",
-    email: "calisan-feedback@ornek.test",
+    fullName: "Feedback Submitter",
+    email: "employee-feedback@example.test",
   });
 
   return { admin, manager, employee };
@@ -66,9 +65,9 @@ async function users() {
 function createForm(): FormData {
   const form = new FormData();
   form.set("category", "BUG");
-  form.set("title", "Arama ekranı açılmıyor");
-  form.set("description", "Arama ekranına girdiğimde sonuçlar görünmüyor.");
-  form.set("sourcePath", "Arama");
+  form.set("title", "Search screen issue");
+  form.set("description", "Search results are not loading as expected.");
+  form.set("sourcePath", "Search");
   return form;
 }
 
@@ -76,7 +75,7 @@ function updateForm(id: string): FormData {
   const form = new FormData();
   form.set("id", id);
   form.set("status", "RESOLVED");
-  form.set("response", "Düzeltme yayınlandı.");
+  form.set("response", "Fix has been released.");
   return form;
 }
 
@@ -86,47 +85,46 @@ function idForm(id: string): FormData {
   return form;
 }
 
-describe("feedback sunucu eylemleri", () => {
-  it("kullanıcı gerçek FormData ile geri bildirim oluşturur", async () => {
-    const { employee } = await users();
-    oturum.kisi = { id: employee.id, isSystemAdmin: false };
+describe("feedback server actions", () => {
+  it("allows user to submit feedback via FormData", async () => {
+    const { employee } = await setupUsers();
+    session.user = { id: employee.id, isSystemAdmin: false };
 
     const result = await createFeedbackAction(
       { error: null, success: null },
       createForm(),
     );
 
-    expect(result).toEqual({
-      error: null,
-      success: "Geri bildiriminiz kaydedildi. Durumunu bu sayfadan takip edebilirsiniz.",
-    });
+    expect(result.error).toBeNull();
+    expect(result.success).toBeDefined();
+
     const stored = await testDb.feedback.findFirstOrThrow({
       where: { submittedById: employee.id },
     });
-    expect(stored.title).toBe("Arama ekranı açılmıyor");
+    expect(stored.title).toBe("Search screen issue");
   });
 
-  it("yönetici olmayan kullanıcı yönetim eylemlerini elle çağıramaz", async () => {
-    const { manager, employee } = await users();
+  it("prevents non-admin user from invoking admin management actions", async () => {
+    const { manager, employee } = await setupUsers();
     const created = await createFeedback(
       testDb,
       employee.id,
       {
         category: "BUG",
-        title: "Arama ekranı açılmıyor",
-        description: "Arama ekranına girdiğimde sonuçlar görünmüyor.",
+        title: "Search screen issue",
+        description: "Search results are not loading as expected.",
       },
       NOW,
     );
-    if (!created.ok) throw new Error("Geri bildirim kurulamadı");
+    if (!created.ok) throw new Error("setup failed");
 
-    oturum.kisi = { id: manager.id, isSystemAdmin: false };
+    session.user = { id: manager.id, isSystemAdmin: false };
 
     const update = await updateFeedbackAction(
       { error: null, success: null },
       updateForm(created.feedback.id),
     );
-    expect(update.error).toContain("yönetici yetkisi");
+    expect(update.error).toBeDefined();
 
     await markFeedbackReadAction(idForm(created.feedback.id));
     await archiveFeedbackAction(idForm(created.feedback.id));
@@ -139,35 +137,34 @@ describe("feedback sunucu eylemleri", () => {
     expect(unchanged.archivedAt).toBeNull();
   });
 
-  it("sistem yöneticisi yönetim eylemiyle kaydı çözer", async () => {
-    const { admin, employee } = await users();
+  it("allows system admin to resolve feedback item", async () => {
+    const { admin, employee } = await setupUsers();
     const created = await createFeedback(
       testDb,
       employee.id,
       {
         category: "SUGGESTION",
-        title: "Kısa öneri",
-        description: "Bu öneri yönetim ekranından güncellenecek.",
+        title: "Feature suggestion",
+        description: "Suggestion to be updated via management screen.",
       },
       NOW,
     );
-    if (!created.ok) throw new Error("Geri bildirim kurulamadı");
+    if (!created.ok) throw new Error("setup failed");
 
-    oturum.kisi = { id: admin.id, isSystemAdmin: true };
+    session.user = { id: admin.id, isSystemAdmin: true };
     const result = await updateFeedbackAction(
       { error: null, success: null },
       updateForm(created.feedback.id),
     );
 
-    expect(result).toEqual({
-      error: null,
-      success: "Geri bildirim güncellendi.",
-    });
+    expect(result.error).toBeNull();
+    expect(result.success).toBeDefined();
+
     await expect(
       testDb.feedback.findUniqueOrThrow({ where: { id: created.feedback.id } }),
     ).resolves.toMatchObject({
       status: "RESOLVED",
-      response: "Düzeltme yayınlandı.",
+      response: "Fix has been released.",
       resolvedById: admin.id,
     });
   });

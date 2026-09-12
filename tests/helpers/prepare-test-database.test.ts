@@ -2,115 +2,115 @@ import { describe, expect, it } from "vitest";
 
 import { prepareTestDatabase } from "./prepare-test-database";
 
-// Korumanın değeri sırada: işaret taşımayan bir veritabanına migration
-// **hiç uygulanmamalı**. Önceki düzeltme boşaltmayı korumuş, migration yolunu
-// korumamıştı — göç şema değiştirir ve veri dönüştürür; sonrasında durmak
-// hasarı geri almaz (denetim 18.08.2026, FAZ 4 bulgu 12).
 
-function izleyici() {
-  const sira: string[] = [];
-  let schemaSaglam = true;
+
+
+
+
+function createObserver() {
+  const order: string[] = [];
+  let schemaReady = true;
   return {
-    sira,
+    order,
     resolveUrl: () => {
-      sira.push("adres");
+      order.push("url");
       return "postgresql://test/faaliyet_test";
     },
     assertSentinel: async () => {
-      sira.push("isaret");
+      order.push("sentinel");
     },
     runMigrations: () => {
-      sira.push("migration");
+      order.push("migration");
     },
     isSchemaReady: async () => {
-      sira.push("sema");
-      return schemaSaglam;
+      order.push("schema");
+      return schemaReady;
     },
     resetDatabase: () => {
-      sira.push("reset");
-      schemaSaglam = true;
+      order.push("reset");
+      schemaReady = true;
     },
   };
 }
 
-describe("test veritabanı hazırlığı", () => {
-  it("adres, işaret, migration sırasıyla ilerler", async () => {
-    const adimlar = izleyici();
+describe("test database preparation", () => {
+  it("runs URL, sentinel, and migration in order", async () => {
+    const steps = createObserver();
 
-    await prepareTestDatabase(adimlar);
+    await prepareTestDatabase(steps);
 
-    expect(adimlar.sira).toEqual(["adres", "isaret", "migration", "sema"]);
+    expect(steps.order).toEqual(["url", "sentinel", "migration", "schema"]);
   });
 
-  it("işaret yoksa migration hiç çalışmaz", async () => {
-    const adimlar = izleyici();
+  it("does not run migrations when the sentinel is missing", async () => {
+    const steps = createObserver();
 
     await expect(
       prepareTestDatabase({
-        ...adimlar,
+        ...steps,
         assertSentinel: async () => {
-          adimlar.sira.push("isaret");
-          throw new Error("Hedef veritabanında test işareti yok.");
+          steps.order.push("sentinel");
+          throw new Error("The target database is missing the test sentinel.");
         },
       }),
-    ).rejects.toThrow(/test işareti yok/);
+    ).rejects.toThrow(/missing the test sentinel/);
 
-    expect(adimlar.sira).toEqual(["adres", "isaret"]);
-    expect(adimlar.sira).not.toContain("migration");
+    expect(steps.order).toEqual(["url", "sentinel"]);
+    expect(steps.order).not.toContain("migration");
   });
 
-  it("adres reddedilirse işaret bile aranmaz", async () => {
-    const adimlar = izleyici();
+  it("does not look for a sentinel when the URL is rejected", async () => {
+    const steps = createObserver();
 
     await expect(
       prepareTestDatabase({
-        ...adimlar,
+        ...steps,
         resolveUrl: () => {
-          adimlar.sira.push("adres");
-          throw new Error("Test veritabanı adresi geçersiz.");
+          steps.order.push("url");
+          throw new Error("The test database URL is invalid.");
         },
       }),
-    ).rejects.toThrow(/adresi geçersiz/);
+    ).rejects.toThrow(/URL is invalid/);
 
-    expect(adimlar.sira).toEqual(["adres"]);
+    expect(steps.order).toEqual(["url"]);
   });
 
-  it("migration geçmişi varken şema eksikse yalnız doğrulanmış test hedefini resetler", async () => {
-    const adimlar = izleyici();
-    let ilkKontrol = true;
+  it("resets only the verified test target when the schema is missing after migration", async () => {
+    const steps = createObserver();
+    let initialCheck = true;
 
     await prepareTestDatabase({
-      ...adimlar,
+      ...steps,
       isSchemaReady: async () => {
-        adimlar.sira.push("sema");
-        if (ilkKontrol) {
-          ilkKontrol = false;
+        steps.order.push("schema");
+        if (initialCheck) {
+          initialCheck = false;
           return false;
         }
         return true;
       },
     });
 
-    expect(adimlar.sira).toEqual([
-      "adres", "isaret", "migration", "sema", "reset", "sema",
+    expect(steps.order).toEqual([
+      "url", "sentinel", "migration", "schema", "reset", "schema",
     ]);
   });
 
-  it("reset sonrası da eksik şema varsa uygulama sunucusundan önce açık hata verir", async () => {
-    const adimlar = izleyici();
+  it("reports a clear error before starting the app when the schema is still missing after reset", async () => {
+    const steps = createObserver();
 
     await expect(
       prepareTestDatabase({
-        ...adimlar,
+        ...steps,
         isSchemaReady: async () => {
-          adimlar.sira.push("sema");
+          steps.order.push("schema");
           return false;
         },
       }),
-    ).rejects.toThrow(/zorunlu tabloları hâlâ eksik/);
+    ).rejects.toThrow(/Required tables are still missing/);
 
-    expect(adimlar.sira).toEqual([
-      "adres", "isaret", "migration", "sema", "reset", "sema",
+    expect(steps.order).toEqual([
+      "url", "sentinel", "migration", "schema", "reset", "schema",
     ]);
   });
 });

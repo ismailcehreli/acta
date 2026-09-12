@@ -8,13 +8,8 @@ import { updateActivity } from "@/server/activities/write";
 import { createOrgUnit, createUser } from "../helpers/fixtures";
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Sızıntı toleransı sıfır (§18.4). Bu dosya, matris testlerinden farklı olarak
-// **gerçek okuma ve yazma yollarını** kullanır: bir yol görünürlük modülünü
-// atlarsa matris testleri yeşil kalsa bile burası kırılır.
-//
-// Görev 2.2'nin açık bırakılan bitiş kanıtı da buradadır: sistem yöneticisi
-// rolü, ağaçtan gelmeyen hiçbir içeriği açmaz (§15.1). Arama ve ek indirme
-// yolları Görev 5.1 ve 5.2'de eklendiğinde bu dosyaya o denemeler de girecek.
+// Zero tolerance for authorization leaks (§18.4).
+// Uses actual read and write operational paths rather than mock queries.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -24,24 +19,24 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-const GIZLI = "SIZMAMASI GEREKEN ICERIK";
+const SECRET = "CONFIDENTIAL_DO_NOT_LEAK";
 
 async function scenario() {
-  const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-  const moldShop = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
-  const planning = await createOrgUnit({ name: "Planlama", parentId: root.id });
-  const it = await createOrgUnit({ name: "Bilgi İşlem", parentId: root.id });
+  const root = await createOrgUnit({ name: "General Directorate", type: "Root" });
+  const moldShop = await createOrgUnit({ name: "Workshop", parentId: root.id });
+  const planning = await createOrgUnit({ name: "Planning", parentId: root.id });
+  const it = await createOrgUnit({ name: "IT Dept", parentId: root.id });
 
   const author = await createUser(moldShop.id, {
-    fullName: "Kalıphane Müdürü",
+    fullName: "Workshop Manager",
     isUnitManager: true,
   });
   const peer = await createUser(planning.id, {
-    fullName: "Planlama Müdürü",
+    fullName: "Planning Manager",
     isUnitManager: true,
   });
   const sysAdmin = await createUser(it.id, {
-    fullName: "Sistem Yöneticisi",
+    fullName: "System Admin",
     isSystemAdmin: true,
     isUnitManager: true,
   });
@@ -51,14 +46,13 @@ async function scenario() {
       authorId: author.id,
       authorOrgUnitId: moldShop.id,
       activityDate: new Date("2026-08-17T00:00:00.000Z"),
-      title: "Kalıp bakımı",
-      description: GIZLI,
+      title: "Mold maintenance",
+      description: SECRET,
       approvalStatus: "APPROVED",
     },
   });
 
-  // Muhatap etiketi de erişim vermez (§8.3): Planlama Müdürü etiketlense bile
-  // faaliyeti göremez.
+  // Tagging department does not grant access (§8.3).
   await testDb.activityTargetDept.create({
     data: { activityId: activity.id, orgUnitId: planning.id },
   });
@@ -66,15 +60,15 @@ async function scenario() {
   return { author, peer, sysAdmin, activity };
 }
 
-const yetkisizler = [
-  ["akran müdür", "peer"],
-  ["sistem yöneticisi", "sysAdmin"],
+const unauthorizedRoles = [
+  ["peer manager", "peer"],
+  ["system admin", "sysAdmin"],
 ] as const;
 
-describe("liste yolu sızdırmaz", () => {
-  it.each(yetkisizler)("%s başkasının faaliyetini listede göremez", async (_ad, kim) => {
+describe("list path does not leak", () => {
+  it.each(unauthorizedRoles)("%s cannot see another user's activity in list", async (_title, roleKey) => {
     const context = await scenario();
-    const viewer = context[kim];
+    const viewer = context[roleKey];
 
     const list = await listOwnActivities(
       testDb,
@@ -83,14 +77,14 @@ describe("liste yolu sızdırmaz", () => {
     );
 
     expect(list.map((item) => item.id)).not.toContain(context.activity.id);
-    expect(JSON.stringify(list)).not.toContain(GIZLI);
+    expect(JSON.stringify(list)).not.toContain(SECRET);
   });
 });
 
-describe("detay yolu sızdırmaz", () => {
-  it.each(yetkisizler)("%s detay kaydını çekemez", async (_ad, kim) => {
+describe("detail path does not leak", () => {
+  it.each(unauthorizedRoles)("%s cannot fetch detail of another user's activity", async (_title, roleKey) => {
     const context = await scenario();
-    const viewer = context[kim];
+    const viewer = context[roleKey];
 
     const found = await findOwnActivity(
       testDb,
@@ -102,10 +96,10 @@ describe("detay yolu sızdırmaz", () => {
   });
 });
 
-describe("yazma yolları da kapalıdır", () => {
-  it.each(yetkisizler)("%s başkasının faaliyetini düzeltemez", async (_ad, kim) => {
+describe("write paths are protected against unauthorized users", () => {
+  it.each(unauthorizedRoles)("%s cannot update another user's activity", async (_title, roleKey) => {
     const context = await scenario();
-    const viewer = context[kim];
+    const viewer = context[roleKey];
 
     const result = await updateActivity(
       testDb,
@@ -113,8 +107,8 @@ describe("yazma yolları da kapalıdır", () => {
       {
         id: context.activity.id,
         activityDate: "2026-08-17",
-        title: "Ele geçirilmiş başlık",
-        description: "Değiştirilmiş açıklama",
+        title: "Hijacked title",
+        description: "Modified description",
         targetDepartmentIds: [context.activity.authorOrgUnitId],
       },
       new Date("2026-08-17T09:05:00.000Z"),
@@ -125,12 +119,12 @@ describe("yazma yolları da kapalıdır", () => {
     const stored = await testDb.activity.findUniqueOrThrow({
       where: { id: context.activity.id },
     });
-    expect(stored.title).toBe("Kalıp bakımı");
+    expect(stored.title).toBe("Mold maintenance");
   });
 
-  it.each(yetkisizler)("%s başkasının faaliyetini iptal edemez", async (_ad, kim) => {
+  it.each(unauthorizedRoles)("%s cannot cancel another user's activity", async (_title, roleKey) => {
     const context = await scenario();
-    const viewer = context[kim];
+    const viewer = context[roleKey];
     const actor = { id: viewer.id, isSystemAdmin: viewer.isSystemAdmin };
 
     expect(await canCancelActivity(testDb, context.activity, actor)).toBe(false);
@@ -139,7 +133,7 @@ describe("yazma yolları da kapalıdır", () => {
       testDb,
       actor,
       context.activity.id,
-      "Yetkisiz iptal denemesi.",
+      "Unauthorized cancellation attempt.",
       new Date("2026-08-17T09:05:00.000Z"),
     );
 
@@ -152,24 +146,19 @@ describe("yazma yolları da kapalıdır", () => {
   });
 });
 
-// Denetim (18.08.2026, bulgu 4): yukarıdaki yollarda `authorId = viewer`
-// koşulu tek başına yeterli olduğu için, görünürlük filtresi tamamen kaldırılsa
-// bile testler yeşil kalıyordu — yani "bir yol modülü atlarsa kırılır" iddiası
-// kanıtlanmıyordu. Aşağıdaki blok, sonucu **yalnızca kapsamın** belirlediği
-// yolu kullanır: yöneticinin akışı.
-describe("kapsam akışı gerçekten görünürlük modülüne bağlıdır", () => {
-  async function iceIceTree() {
-    const root = await createOrgUnit({ name: "Genel Müdürlük", type: "Kök" });
-    const moldShop = await createOrgUnit({ name: "Kalıphane", parentId: root.id });
-    const planning = await createOrgUnit({ name: "Planlama", parentId: root.id });
+describe("scope feed strictly depends on visibility module", () => {
+  async function nestedTree() {
+    const root = await createOrgUnit({ name: "General Directorate", type: "Root" });
+    const moldShop = await createOrgUnit({ name: "Workshop", parentId: root.id });
+    const planning = await createOrgUnit({ name: "Planning", parentId: root.id });
 
     const moldManager = await createUser(moldShop.id, {
-      fullName: "Kalıphane Müdürü",
+      fullName: "Workshop Manager",
       isUnitManager: true,
     });
-    const moldWorker = await createUser(moldShop.id, { fullName: "Kalıphane Çalışanı" });
+    const moldWorker = await createUser(moldShop.id, { fullName: "Workshop Worker" });
     const planningManager = await createUser(planning.id, {
-      fullName: "Planlama Müdürü",
+      fullName: "Planning Manager",
       isUnitManager: true,
     });
 
@@ -178,8 +167,8 @@ describe("kapsam akışı gerçekten görünürlük modülüne bağlıdır", () 
         authorId: moldWorker.id,
         authorOrgUnitId: moldShop.id,
         activityDate: new Date("2026-08-17T00:00:00.000Z"),
-        title: "Kendi ekibimin işi",
-        description: GIZLI,
+        title: "Team activity",
+        description: SECRET,
         approvalStatus: "APPROVED",
       },
     });
@@ -188,8 +177,8 @@ describe("kapsam akışı gerçekten görünürlük modülüne bağlıdır", () 
         authorId: planningManager.id,
         authorOrgUnitId: planning.id,
         activityDate: new Date("2026-08-17T00:00:00.000Z"),
-        title: "Akranın işi",
-        description: GIZLI,
+        title: "Peer activity",
+        description: SECRET,
         approvalStatus: "APPROVED",
       },
     });
@@ -197,8 +186,8 @@ describe("kapsam akışı gerçekten görünürlük modülüne bağlıdır", () 
     return { moldManager, own, foreign };
   }
 
-  it("yönetici yalnızca kendi ekibinin kayıtlarını görür", async () => {
-    const { moldManager, own, foreign } = await iceIceTree();
+  it("manager only sees activities from their own team", async () => {
+    const { moldManager, own, foreign } = await nestedTree();
 
     const { items: feed } = await listScopeActivities(
       testDb,
@@ -208,31 +197,26 @@ describe("kapsam akışı gerçekten görünürlük modülüne bağlıdır", () 
     );
     const ids = feed.map((item) => item.id);
 
-    // Bu iddia yalnızca kapsam filtresi çalışıyorsa doğrudur: burada
-    // `authorId = viewer` gibi ikinci bir daraltma yoktur.
     expect(ids).toContain(own.id);
     expect(ids).not.toContain(foreign.id);
   });
 
-  it("onay sürecindeki kayıt akışta hiç görünmez", async () => {
-    const { moldManager } = await iceIceTree();
+  it("pending approval activity never leaks into general scope feed", async () => {
+    const { moldManager } = await nestedTree();
     const root = await testDb.orgUnit.findFirstOrThrow({ where: { parentId: null } });
-    const stranger = await createUser(root.id, { fullName: "Yabancı" });
-    // Onay sürecindeki kaydın onaylayıcısı olmak zorunda (veritabanı kısıtı);
-    // onaylayıcı **başkası**, bakan kişi değil. Sızıntı iddiası da tam bu:
-    // onaylayıcısı olmadığın onay kaydını göremezsin.
-    const baskaOnaylayici = await createUser(root.id, {
-      fullName: "Başka Onaylayıcı",
+    const stranger = await createUser(root.id, { fullName: "Stranger" });
+    const anotherApprover = await createUser(root.id, {
+      fullName: "Another Approver",
     });
     const hidden = await testDb.activity.create({
       data: {
         authorId: stranger.id,
         authorOrgUnitId: root.id,
         activityDate: new Date("2026-08-17T00:00:00.000Z"),
-        title: "Onay bekleyen",
-        description: GIZLI,
+        title: "Pending approval",
+        description: SECRET,
         approvalStatus: "PENDING_APPROVAL",
-        approverId: baskaOnaylayici.id,
+        approverId: anotherApprover.id,
       },
     });
 
@@ -247,8 +231,8 @@ describe("kapsam akışı gerçekten görünürlük modülüne bağlıdır", () 
   });
 });
 
-describe("yazarın kendi erişimi bozulmaz", () => {
-  it("yazan kişi kendi kaydını listede ve detayda görür", async () => {
+describe("author access is preserved", () => {
+  it("author sees their own activity in list and detail views", async () => {
     const { author, activity } = await scenario();
     const viewer = { id: author.id, isSystemAdmin: false };
 
@@ -259,70 +243,67 @@ describe("yazarın kendi erişimi bozulmaz", () => {
     const detail = await findOwnActivity(testDb, viewer, activity.id);
 
     expect(list.map((item) => item.id)).toContain(activity.id);
-    expect(detail?.description).toBe(GIZLI);
+    expect(detail?.description).toBe(SECRET);
   });
 });
 
-// Denetim (18.08.2026, bulgu 1): yetkisiz erişim ile var olmayan kayıt
-// farklı cevaplar veriyordu. Kullanıcı, formdaki gizli kimlik alanını
-// değiştirerek kaydın varlığını ve durumunu öğrenebiliyordu.
-describe("cevaplar kaydın varlığını ele vermez", () => {
-  const OLMAYAN_ID = "00000000-0000-0000-0000-000000000000";
+describe("responses do not disclose existence of activities", () => {
+  const NON_EXISTENT_ID = "00000000-0000-0000-0000-000000000000";
 
-  it("düzeltme: yetkisiz kayıt ile olmayan kayıt aynı cevabı alır", async () => {
+  it("update: unauthorized record and non-existent record receive identical response", async () => {
     const { peer, activity } = await scenario();
     const now = new Date("2026-08-17T09:05:00.000Z");
 
     const input = {
       activityDate: "2026-08-17",
-      title: "Deneme başlığı",
-      description: "Deneme açıklaması",
+      title: "Attempted title",
+      description: "Attempted description",
       targetDepartmentIds: [activity.authorOrgUnitId],
     };
 
-    const yetkisiz = await updateActivity(
+    const unauthorized = await updateActivity(
       testDb,
       peer.id,
       { ...input, id: activity.id },
       now,
     );
-    const olmayan = await updateActivity(
+    const nonExistent = await updateActivity(
       testDb,
       peer.id,
-      { ...input, id: OLMAYAN_ID },
+      { ...input, id: NON_EXISTENT_ID },
       now,
     );
 
-    expect(yetkisiz).toEqual(olmayan);
+    expect(unauthorized).toEqual(nonExistent);
   });
 
-  it("iptal: yetkisiz kayıt ile olmayan kayıt aynı cevabı alır", async () => {
+  it("cancel: unauthorized record and non-existent record receive identical response", async () => {
     const { peer, activity } = await scenario();
     const actor = { id: peer.id, isSystemAdmin: false };
     const now = new Date("2026-08-17T09:05:00.000Z");
 
-    const yetkisiz = await cancelActivity(
+    const unauthorized = await cancelActivity(
       testDb,
       actor,
       activity.id,
-      "Yetkisiz iptal denemesi.",
+      "Unauthorized cancel attempt.",
       now,
     );
-    const olmayan = await cancelActivity(
+    const nonExistent = await cancelActivity(
       testDb,
       actor,
-      OLMAYAN_ID,
-      "Yetkisiz iptal denemesi.",
+      NON_EXISTENT_ID,
+      "Unauthorized cancel attempt.",
       now,
     );
 
-    expect(yetkisiz.ok).toBe(false);
-    expect(olmayan.ok).toBe(false);
-    if (yetkisiz.ok || olmayan.ok) return;
-    expect(yetkisiz.message).toBe(olmayan.message);
+    expect(unauthorized.ok).toBe(false);
+    expect(nonExistent.ok).toBe(false);
+    if (unauthorized.ok || nonExistent.ok) return;
+    expect(unauthorized.message).toBe(nonExistent.message);
   });
 
-  it("iptal edilmiş kaydın durumu yetkisiz kişiye açıklanmaz", async () => {
+  it("status of cancelled activity is not disclosed to unauthorized user", async () => {
     const { author, peer, activity } = await scenario();
     const now = new Date("2026-08-17T09:05:00.000Z");
 
@@ -330,21 +311,20 @@ describe("cevaplar kaydın varlığını ele vermez", () => {
       testDb,
       { id: author.id, isSystemAdmin: false },
       activity.id,
-      "Yazarın kendi iptali.",
+      "Author self-cancel.",
       now,
     );
 
-    const yetkisiz = await cancelActivity(
+    const unauthorized = await cancelActivity(
       testDb,
       { id: peer.id, isSystemAdmin: false },
       activity.id,
-      "Yetkisiz iptal denemesi.",
+      "Unauthorized cancel attempt.",
       now,
     );
 
-    expect(yetkisiz.ok).toBe(false);
-    if (yetkisiz.ok) return;
-    // "Zaten iptal edilmiş" demek, kaydın varlığını ve durumunu ele verirdi.
-    expect(yetkisiz.message).toBe("Faaliyet bulunamadı.");
+    expect(unauthorized.ok).toBe(false);
+    if (unauthorized.ok) return;
+    expect(unauthorized.message).toBe("Activity not found.");
   });
 });

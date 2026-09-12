@@ -7,141 +7,148 @@ import {
   savedAtLabel,
 } from "@/shared/drafts/activity-draft";
 
-// Yarım kalmış metnin karar kuralları (Görev 10.2).
+// Decision rules for draft content.
 //
-// Bu kurallar tarayıcıya bağlı değil; saf ve testli tutulmalarının sebebi bu.
-// React tarafı yalnız DOM okuyup yazıyor.
+// These rules are decoupled from the browser; that is why they are kept pure and tested.
+// The React layer only reads and writes the DOM.
 
-const BOS = {
+const EMPTY_DRAFT = {
   activityDate: "2026-08-19",
   title: "",
   description: "",
   targetDepartmentIds: [] as string[],
 };
 
-const DOLU = {
+const FILLED_DRAFT = {
   activityDate: "2026-08-19",
-  title: "Kalıp bakımı",
-  description: "Üç numaralı kalıpta erken aşınma.",
+  title: "Mold maintenance",
+  description: "Early wear detected in mold number 3.",
   targetDepartmentIds: ["11111111-1111-4111-8111-111111111111"],
 };
 
-describe("depodan okuma", () => {
-  it("kayıt yoksa null döner", () => {
+describe("storage parsing", () => {
+  it("returns null when empty or missing", () => {
     expect(parseDraft(null)).toBeNull();
     expect(parseDraft("")).toBeNull();
   });
 
-  it("bozuk JSON sessizce yok sayılır", () => {
-    // Yerel depo kullanıcının elinin altındadır; bozuk kayıt uygulamayı
-    // düşürmemeli.
-    expect(parseDraft("{bozuk")).toBeNull();
+  it("corrupted JSON is silently ignored", () => {
+    // Local storage is under client control; corrupted entry should not crash the app.
+    expect(parseDraft("{corrupted")).toBeNull();
   });
 
-  it("beklenmeyen biçim kabul edilmez", () => {
-    // Başka bir sürümün bıraktığı eski biçim de olabilir.
-    expect(parseDraft(JSON.stringify({ title: "yalnız başlık" }))).toBeNull();
+  it("unexpected schema shape is rejected", () => {
+    // Might also be an obsolete format from an older version.
+    expect(parseDraft(JSON.stringify({ title: "title only" }))).toBeNull();
   });
 
-  it("departman kimliği uuid değilse reddedilir", () => {
-    const bozuk = JSON.stringify({
-      ...DOLU,
+  it("rejects non-uuid department IDs", () => {
+    const invalid = JSON.stringify({
+      ...FILLED_DRAFT,
       targetDepartmentIds: ["'; DROP TABLE"],
       savedAt: "2026-08-19T09:00:00.000Z",
     });
 
-    expect(parseDraft(bozuk)).toBeNull();
+    expect(parseDraft(invalid)).toBeNull();
   });
 
-  it("geçerli kayıt okunur", () => {
-    const ham = JSON.stringify({ ...DOLU, savedAt: "2026-08-19T09:00:00.000Z" });
+  it("reads valid draft record", () => {
+    const raw = JSON.stringify({ ...FILLED_DRAFT, savedAt: "2026-08-19T09:00:00.000Z" });
 
-    const draft = parseDraft(ham);
+    const draft = parseDraft(raw);
 
-    expect(draft?.title).toBe("Kalıp bakımı");
+    expect(draft?.title).toBe("Mold maintenance");
     expect(draft?.targetDepartmentIds).toHaveLength(1);
   });
 });
 
-describe("saklamaya değer mi", () => {
-  it("boş form saklanmaz", () => {
-    expect(hasContent(BOS)).toBe(false);
+describe("worth saving check", () => {
+  it("empty form is not saved", () => {
+    expect(hasContent(EMPTY_DRAFT)).toBe(false);
   });
 
-  it("yalnız boşluk saklanmaz", () => {
-    expect(hasContent({ ...BOS, title: "   ", description: "\n\t" })).toBe(false);
+  it("whitespace-only content is not saved", () => {
+    expect(hasContent({ ...EMPTY_DRAFT, title: "   ", description: "\n\t" })).toBe(false);
   });
 
-  it("başlık ya da açıklama doluysa saklanır", () => {
-    expect(hasContent({ ...BOS, title: "K" })).toBe(true);
-    expect(hasContent({ ...BOS, description: "bir şey" })).toBe(true);
+  it("saved when title or description is populated", () => {
+    expect(hasContent({ ...EMPTY_DRAFT, title: "K" })).toBe(true);
+    expect(hasContent({ ...EMPTY_DRAFT, description: "some content" })).toBe(true);
   });
 
-  it("yalnız departman seçmek metin sayılmaz", () => {
-    // Kutucuk işaretleyip vazgeçen kullanıcıya "yarım metniniz var" demek
-    // gürültüdür.
-    expect(hasContent({ ...BOS, targetDepartmentIds: ["x"] })).toBe(false);
+  it("selecting target departments alone is not considered content", () => {
+    // Telling a user who ticked a checkbox and gave up that "you have an unfinished draft" is noise.
+    expect(hasContent({ ...EMPTY_DRAFT, targetDepartmentIds: ["x"] })).toBe(false);
   });
 });
 
-describe("geri getirmeyi teklif etmeye değer mi", () => {
-  it("formda aynı metin varsa teklif edilmez", () => {
-    // Düzeltme ekranında kendi kaydettiği metni "yarım kalmış" diye görmek
-    // kafa karıştırırdı.
-    expect(differsFromCurrent(DOLU, DOLU)).toBe(false);
+describe("worth offering restore check", () => {
+  it("not offered if current form content is identical", () => {
+    // Showing "draft available" on an edit screen for the exact content just saved would be confusing.
+    expect(differsFromCurrent(FILLED_DRAFT, FILLED_DRAFT)).toBe(false);
   });
 
-  it("baştaki ve sondaki boşluk fark sayılmaz", () => {
+  it("leading and trailing whitespace differences are ignored", () => {
     expect(
-      differsFromCurrent({ ...DOLU, title: "  Kalıp bakımı  " }, DOLU),
+      differsFromCurrent({ ...FILLED_DRAFT, title: "  Mold maintenance  " }, FILLED_DRAFT),
     ).toBe(false);
   });
 
-  it("başlık farklıysa teklif edilir", () => {
-    expect(differsFromCurrent({ ...DOLU, title: "Başka" }, DOLU)).toBe(true);
+  it("offered when title differs", () => {
+    expect(differsFromCurrent({ ...FILLED_DRAFT, title: "Other title" }, FILLED_DRAFT)).toBe(true);
   });
 
-  it("tarih farklıysa teklif edilir", () => {
+  it("offered when activity date differs", () => {
     expect(
-      differsFromCurrent({ ...DOLU, activityDate: "2026-08-18" }, DOLU),
+      differsFromCurrent({ ...FILLED_DRAFT, activityDate: "2026-08-18" }, FILLED_DRAFT),
     ).toBe(true);
   });
 
-  it("departman kümesi farklıysa teklif edilir", () => {
+  it("offered when department selection differs", () => {
     expect(
-      differsFromCurrent({ ...DOLU, targetDepartmentIds: [] }, DOLU),
+      differsFromCurrent({ ...FILLED_DRAFT, targetDepartmentIds: [] }, FILLED_DRAFT),
     ).toBe(true);
   });
 
-  it("departman sırası fark sayılmaz", () => {
+  it("department order difference is ignored", () => {
     const a = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
     const b = [...a].reverse();
 
     expect(
       differsFromCurrent(
-        { ...DOLU, targetDepartmentIds: a },
-        { ...DOLU, targetDepartmentIds: b },
+        { ...FILLED_DRAFT, targetDepartmentIds: a },
+        { ...FILLED_DRAFT, targetDepartmentIds: b },
       ),
     ).toBe(false);
   });
 });
 
-describe("ne zaman yazıldığı", () => {
-  const simdi = new Date("2026-08-19T12:00:00.000Z");
+describe("saved at label formatting", () => {
+  const now = new Date("2026-08-19T12:00:00.000Z");
 
-  it("bir dakikanın altı 'az önce'", () => {
-    expect(savedAtLabel("2026-08-19T11:59:30.000Z", simdi)).toBe("az önce");
+  it("less than a minute displays 'just now'", () => {
+    expect(savedAtLabel("2026-08-19T11:59:30.000Z", now)).toBe("just now");
   });
 
-  it("saat altı dakika ile söylenir", () => {
-    expect(savedAtLabel("2026-08-19T11:20:00.000Z", simdi)).toBe("40 dakika önce");
+  it("under an hour displays minutes", () => {
+    expect(savedAtLabel("2026-08-19T11:20:00.000Z", now)).toBe("40m ago");
   });
 
-  it("gün altı saat ile söylenir", () => {
-    expect(savedAtLabel("2026-08-19T09:00:00.000Z", simdi)).toBe("3 saat önce");
+  it("under a day displays hours", () => {
+    expect(savedAtLabel("2026-08-19T09:00:00.000Z", now)).toBe("3h ago");
   });
 
-  it("daha eskisi tarih olarak yazılır", () => {
-    expect(savedAtLabel("2026-08-15T09:00:00.000Z", simdi)).toMatch(/15\.08\.2026/);
+  it("older timestamps display full date", () => {
+    expect(savedAtLabel("2026-08-15T09:00:00.000Z", now)).toMatch(/08\/15\/2026/);
+  });
+
+  it("can use translated relative-time labels", () => {
+    expect(
+      savedAtLabel("2026-08-19T11:20:00.000Z", now, "tr", {
+        justNow: "az önce",
+        minutesAgo: (count) => `${count} dakika önce`,
+        hoursAgo: (count) => `${count} saat önce`,
+      }),
+    ).toBe("40 dakika önce");
   });
 });

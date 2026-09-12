@@ -5,15 +5,15 @@ import { AUDIT_ACTIONS, AUDIT_OBJECTS, recordAudit } from "@/server/audit/log";
 import { appSecret } from "@/server/auth/config";
 import { openSecret, sealSecret } from "@/server/crypto/secret-box";
 
-// SMTP ayarları (§12.3). Ekrandan yönetilir: BT sorumlusu sunucu bilgisini
-// değiştirmek için `.env` düzenleyip yığını yeniden başlatmak zorunda kalmaz.
+
+
 //
-// Parola **şifreli** saklanır (`APP_SECRET` türevi anahtarla). Düz yazılsaydı
-// veritabanı yedeğini alan herkes şirketin posta hesabını ele geçirirdi.
+
+
 //
-// Ortam değişkenleri geri dönüş olarak kalır: veritabanında kayıt yoksa
-// `SMTP_HOST`/`SMTP_FROM` okunur. Böylece ilk kurulumda ekran açılmadan da
-// posta gönderilebilir ve mevcut kurulumlar bozulmaz.
+
+
+
 
 const SEAL_PURPOSE = "smtp-password";
 
@@ -46,9 +46,9 @@ export interface SmtpView {
   secure: boolean;
   user: string;
   from: string;
-  /** Parola **hiçbir zaman** geri gönderilmez; yalnız var olup olmadığı. */
+
   hasPassword: boolean;
-  /** Ayarlar veritabanından mı geliyor, ortamdan mı. */
+
   source: "database" | "environment" | "none";
 }
 
@@ -59,7 +59,7 @@ async function readMap(db: SmtpDb): Promise<Map<string, string>> {
   return new Map(rows.map((row) => [row.key, row.value]));
 }
 
-/** Ekranda gösterilecek hâli; parola taşımaz. */
+
 export async function readSmtpView(db: SmtpDb): Promise<SmtpView> {
   const map = await readMap(db);
   const host = map.get(KEYS.host) ?? "";
@@ -100,11 +100,7 @@ export async function readSmtpView(db: SmtpDb): Promise<SmtpView> {
   };
 }
 
-/**
- * Gönderim için gereken tam ayarlar. Adres ya da gönderen eksikse `null` döner
- * — çağıran buna göre karar verir; sessizce bir varsayılana düşmek postanın
- * gittiğini sanıp gitmemesi demekti.
- */
+
 export async function readSmtpSettings(
   db: SmtpDb,
   secret: string = appSecret(),
@@ -116,12 +112,12 @@ export async function readSmtpSettings(
     const sealed = map.get(KEYS.password) ?? "";
     const password = sealed === "" ? "" : (openSecret(sealed, secret, SEAL_PURPOSE) ?? "");
 
-    // Şifre çözülemiyorsa (anahtar değişmiş, kayıt bozulmuş) sessizce boş
-    // parolayla bağlanmak yerine ayar yok sayılır ve günlüğe yazılır.
+
+
     if (sealed !== "" && password === "") {
       console.error(
-        "[smtp] Kayıtlı parola çözülemedi (APP_SECRET değişmiş olabilir); " +
-          "SMTP ayarı yok sayılıyor.",
+        "[smtp] Stored password could not be decrypted (APP_SECRET may have changed); " +
+          "SMTP settings are ignored.",
       );
       return null;
     }
@@ -159,11 +155,7 @@ export interface SmtpInput {
   secure: boolean;
   user: string;
   from: string;
-  /**
-   * Boş bırakılırsa mevcut parola **korunur**. Ekranda parola hiç
-   * gösterilmediği için, her kaydetmede yeniden yazmak zorunda kalmak
-   * kullanıcıyı parolayı bir yere not etmeye iterdi.
-   */
+
   password?: string;
 }
 
@@ -174,24 +166,24 @@ export async function saveSmtpSettings(
   actorId: string | null = null,
   now: Date = new Date(),
 ): Promise<void> {
-  const yazilacak: { key: string; value: string; description: string }[] = [
-    { key: KEYS.host, value: input.host.trim(), description: "SMTP sunucu adresi" },
-    { key: KEYS.port, value: String(input.port), description: "SMTP portu" },
+  const records: { key: string; value: string; description: string }[] = [
+    { key: KEYS.host, value: input.host.trim(), description: "SMTP server address" },
+    { key: KEYS.port, value: String(input.port), description: "SMTP port" },
     { key: KEYS.secure, value: String(input.secure), description: "SMTP TLS" },
-    { key: KEYS.user, value: input.user.trim(), description: "SMTP kullanıcı adı" },
-    { key: KEYS.from, value: input.from.trim(), description: "Gönderen adresi" },
+    { key: KEYS.user, value: input.user.trim(), description: "SMTP username" },
+    { key: KEYS.from, value: input.from.trim(), description: "Sender address" },
   ];
 
   if (input.password !== undefined && input.password !== "") {
-    yazilacak.push({
+    records.push({
       key: KEYS.password,
       value: sealSecret(input.password, secret, SEAL_PURPOSE),
-      description: "SMTP parolası (şifreli)",
+      description: "SMTP password (encrypted)",
     });
   }
 
   await db.$transaction(async (tx) => {
-    for (const item of yazilacak) {
+    for (const item of records) {
       await tx.systemSetting.upsert({
         where: { key: item.key },
         update: { value: item.value, description: item.description },
@@ -204,8 +196,8 @@ export async function saveSmtpSettings(
       objectType: AUDIT_OBJECTS.setting,
       objectId: "smtp",
       action: AUDIT_ACTIONS.smtpChanged,
-      // Parola hiçbir biçimde kayda geçmez; yalnız değiştirilip
-      // değiştirilmediği.
+
+
       detail: {
         host: input.host,
         port: input.port,
@@ -219,14 +211,7 @@ export async function saveSmtpSettings(
   });
 }
 
-/**
- * Parolayı siler; ayarların kalanına dokunmaz.
- *
- * İz bırakır (§15.2, denetim 21.08.2026, bulgu 14): parolanın silinmesi
- * bildirim kanalını durdurabilir. Aynı ekranda normal SMTP kaydı ize
- * yazılırken bu işlem yazılmıyordu — sessizce e-posta gönderimini kesen bir
- * değişiklik, izsiz kalmamalı.
- */
+
 export async function clearSmtpPassword(
   db: SmtpDb,
   actorId: string,

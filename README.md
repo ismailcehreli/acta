@@ -8,7 +8,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-316192.svg)](https://www.postgresql.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue.svg)](tsconfig.json)
 
-**[Türkçe Dokümantasyon için tıklayın](README.tr.md)**
+English is the default application language. Turkish is available as an additional locale.
 
 ---
 
@@ -28,7 +28,7 @@ Modern organizations often get caught between two extremes:
 ### 1. ⚡ Swift Daily Activity Logging
 * **Sub-30 second logging**: Distraction-free interface designed for fast daily entries.
 * **Client-side draft recovery**: Auto-saves unsubmitted input locally so work is never lost.
-* **Rich file attachments**: Validated via cryptographic mime-signatures with secure visibility checks.
+* **Rich file attachments**: Validated from file-content signatures with secure visibility checks.
 
 ### 2. 🌳 Organizational Tree & Visibility Matrix
 * **Dynamic corporate hierarchy**: Multi-tier organizational units with manager inheritance.
@@ -45,7 +45,7 @@ Modern organizations often get caught between two extremes:
 * **Independent follow-up tracking**: Action items tied to activities with mandatory closing notes and reason-backed reopening.
 
 ### 5. 🛡️ Enterprise-Grade Compliance & Audit
-* **Zero physical deletion policy**: Records, users, and units are soft-deactivated or cancelled; foreign keys prevent accidental data loss.
+* **Controlled data retention**: Routine operations preserve core records: users and units are deactivated, and activities are cancelled. A separate root-administrator workflow, protected by a confirmation code and audit trail, can permanently delete an activity when explicitly requested.
 * **Immutable audit trails**: Comprehensive append-only operational log recording every security, organizational, and authorization event.
 * **Strict authorization boundaries**: Single central authorization gateway ensuring zero data leak between unrelated units.
 
@@ -73,7 +73,7 @@ Modern organizations often get caught between two extremes:
 
 ---
 
-## 🚀 Quick Start in 60 Seconds
+## 🚀 Quick Start
 
 ### Prerequisites
 * [Docker](https://docs.docker.com/get-docker/) & Docker Compose
@@ -96,18 +96,20 @@ Docker will automatically initialize the database schema via the migration servi
 ### 3. Initialize Root Administrator
 In another terminal, initialize the root unit and the first system administrator:
 ```bash
-docker compose exec app pnpm kurulum
+docker compose exec app pnpm setup
 ```
-*(Or if running locally: `pnpm kurulum`)*. The command will output a temporary password for the administrator.
+*(Or if running locally: `pnpm setup`)*. The command will output a temporary password for the administrator.
 
 ### 4. (Optional) Load Rich Demo Data
 To evaluate Acta with realistic departments, users, activities, and approval flows:
 ```bash
-docker compose exec app pnpm seed:demo
+docker compose exec -e DEMO_FORCE=yes app pnpm seed:demo
 ```
-*(This creates an interactive sandbox with sample teams and 12 days of activities. Demo data can be safely removed anytime from the administration panel).*
+*(The production container requires this explicit demo override; this creates an interactive sandbox with sample teams and 12 days of activities.)*
+Demo data can be safely removed anytime from the administration panel.
 
-Visit **`http://localhost:3000`** in your browser and log in!
+Visit **`http://localhost:3000`** in your browser and log in.
+If you changed `APP_PORT` in `.env`, use that port instead.
 
 ---
 
@@ -135,6 +137,9 @@ acta/
 Acta is heavily tested with zero tolerance for authorization leaks or data corruption:
 
 ```bash
+# Start the isolated database used by Vitest and Playwright (once)
+docker compose --profile test up -d test-postgres
+
 # Run unit and integration tests (1,500+ tests)
 pnpm test
 
@@ -148,6 +153,12 @@ pnpm lint
 pnpm e2e
 ```
 
+## 🌍 Adding a language
+
+Add `src/shared/i18n/messages/<locale>.ts` as a `DeepPartial<Messages>` dictionary, then add one entry to `LOCALE_REGISTRY` in `src/shared/i18n/config.ts` with a display label, BCP-47 `languageTag`, and dictionary. The switcher, fallback, date/number formatting, metadata, and route/business logic are registry-driven; no page or component changes are needed. Missing keys safely fall back to English.
+
+Background email and push notifications currently use the English default because locale is stored per browser, not on the user record. Persisted per-user delivery locales can be added separately if required.
+
 ---
 
 ## 📖 Documentation
@@ -155,7 +166,6 @@ pnpm e2e
 * [Architecture Overview](docs/architecture.md) — Core principles, visibility matrix, and data flow.
 * [Deployment & Operations](docs/deployment.md) — Production setup, reverse proxy, backups, and SSL.
 * [Contributing Guide](CONTRIBUTING.md) — How to propose changes and development conventions.
-* [Türkçe Tanıtım ve Kurulum](README.tr.md) — Türkçe kullanım ve mimari özeti.
 
 ---
 

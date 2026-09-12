@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input, Select } from "@/components/ui/form";
 import { FormActions, FormGrid } from "@/components/ui/page";
+import { useTranslations } from "@/components/i18n/provider";
 
 import { createOrgUnitAction } from "./actions";
 import { emptyOrgFormState, type OrgFormState } from "./form-state";
@@ -14,15 +15,10 @@ export interface UnitOption {
   id: string;
   label: string;
 }
-
-/**
- * Sonuç mesajı. Kimlikler (`org-hatasi`, `org-basarili`) uçtan uca testlerin
- * tutunduğu yerlerdir; görünüm değişse de korunur.
- */
 function Feedback({ state }: { state: OrgFormState }) {
   if (state.error) {
     return (
-      <div id="org-hatasi">
+      <div id="organization-error">
         <Alert tone="danger">{state.error}</Alert>
       </div>
     );
@@ -30,7 +26,7 @@ function Feedback({ state }: { state: OrgFormState }) {
 
   if (state.success) {
     return (
-      <div id="org-basarili" role="status">
+      <div id="organization-success" role="status">
         <Alert tone="success">{state.success}</Alert>
       </div>
     );
@@ -40,6 +36,7 @@ function Feedback({ state }: { state: OrgFormState }) {
 }
 
 export function OrgUnitForm({ options }: { options: UnitOption[] }) {
+  const t = useTranslations();
   const [state, formAction, pending] = useActionState(
     createOrgUnitAction,
     emptyOrgFormState,
@@ -50,28 +47,34 @@ export function OrgUnitForm({ options }: { options: UnitOption[] }) {
   return (
     <form action={formAction} className="flex flex-col gap-5">
       <FormGrid columns={2}>
-        <Field htmlFor="name" label="Birim adı" required>
-          <Input id="name" name="name" required placeholder="örn. Kalıphane" />
+        <Field htmlFor="name" label={t("screens.organization.unitName")} required>
+          <Input
+            id="name"
+            name="name"
+            required
+            placeholder={t("screens.organization.unitNamePlaceholder")}
+          />
         </Field>
 
         <Field
           htmlFor="type"
-          label="Kademe"
-          hint="Serbest metin; koda gömülü bir hiyerarşi yoktur."
+          label={t("screens.organization.level")}
+          hint={t("screens.organization.levelHint")}
           required
         >
           <Input
             id="type"
             name="type"
             required
-            placeholder="Departman, Direktörlük, Genel Müdürlük…"
+            placeholder={t("screens.organization.levelPlaceholder")}
           />
         </Field>
 
-        <Field htmlFor="parentId" label="Üst birim">
+        <Field htmlFor="parentId" label={t("screens.organization.parentUnit")}>
           <Select id="parentId" name="parentId" defaultValue="">
-            {/* Ağaçta yalnızca bir kök olabilir; kök varken boş seçenek sunulmaz. */}
-            {hasRoot ? null : <option value="">(kök birim)</option>}
+            {hasRoot ? null : (
+              <option value="">{t("screens.organization.rootUnit")}</option>
+            )}
             {options.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.label}
@@ -82,39 +85,41 @@ export function OrgUnitForm({ options }: { options: UnitOption[] }) {
 
         <Field
           htmlFor="attentionGroupId"
-          label="Dikkat grubu (isteğe bağlı)"
-          hint="İleride bir kaydı üst yönetime taşırken, aynı grubu paylaşan birimler tek bir hedef olarak ele alınacak. Şu anki sürümde yalnızca kaydedilir, hiçbir davranışı değiştirmez — boş bırakabilirsiniz."
+          label={t("screens.organization.attentionGroup")}
+          hint={t("screens.organization.attentionGroupHint")}
         >
           <Input
             id="attentionGroupId"
             name="attentionGroupId"
-            placeholder="örn. yonetim-kurulu"
+            placeholder={t("screens.organization.attentionGroupPlaceholder")}
           />
         </Field>
       </FormGrid>
 
       <fieldset className="flex flex-col gap-2.5 rounded-(--radius-sm) border border-line bg-inset/40 p-3.5">
         <legend className="px-1 text-[length:var(--text-sm)] font-medium text-ink">
-          Davranış bayrakları
+          {t("screens.organization.behaviorFlags")}
         </legend>
         <p className="text-[length:var(--text-xs)] text-muted">
-          Onay akışı çalışıyor; yukarı taşıma Sürüm 2&apos;de devreye girer.
+          {t("screens.organization.approvalFlowHint")}
         </p>
         <Checkbox
           name="requiresApproval"
-          label="Bu birimdeki faaliyetler onaya tabidir"
-          description="Birim yöneticileri kapsam dışıdır: kendi faaliyetleri onaya düşmez, doğrudan üst kademelere akar."
+          label={t("screens.organization.requiresApproval")}
+          description={t("screens.organization.requiresApprovalDescription")}
         />
         <Checkbox
           name="autoFlowsUp"
           defaultChecked
-          label="Faaliyetler üst kademelere akar"
+          label={t("screens.organization.flowsUp")}
         />
       </fieldset>
 
       <FormActions message={<Feedback state={state} />}>
         <Button type="submit" variant="primary" disabled={pending}>
-          {pending ? "Ekleniyor…" : "Birim ekle"}
+          {pending
+            ? t("screens.organization.adding")
+            : t("screens.organization.addUnit")}
         </Button>
       </FormActions>
     </form>

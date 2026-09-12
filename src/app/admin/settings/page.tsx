@@ -1,25 +1,29 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { YetkiUyarisi } from "@/components/shell/yetki-uyarisi";
+import { PermissionWarning } from "@/components/shell/permission-warning";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { canManageOrganization } from "@/server/authz/admin";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 
 import { SETTINGS_SECTIONS } from "./settings-sections";
 import { SettingsChrome } from "./settings-chrome";
 
-export const metadata = { title: "Sistem ayarları" };
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.settingsPage.title");
+}
 
 export default async function SettingsAdminPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const t = await getTranslations();
 
   if (!canManageOrganization(user)) {
     return (
-      <YetkiUyarisi
+      <PermissionWarning
         user={user}
-        mesaj="Sistem ayarlarını yalnızca sistem yöneticisi değiştirebilir."
+        message={t("screens.settingsPage.permission")}
       />
     );
   }
@@ -27,8 +31,8 @@ export default async function SettingsAdminPage() {
   return (
     <SettingsChrome
       user={user}
-      title="Sistem ayarları"
-      description="Aradığınız ayarı ilgili kısa bölümde bulun. Değişiklikler kaydedildiği anda geçerli olur. Çalışma günleri, mesai saatleri ve resmî tatiller Çalışma takvimi ekranındadır."
+      title={t("screens.settingsPage.title")}
+      description={t("screens.settingsPage.description")}
     >
       <div className="grid gap-4 md:grid-cols-2">
         {SETTINGS_SECTIONS.map((section) => (
@@ -38,13 +42,13 @@ export default async function SettingsAdminPage() {
             className="group block"
           >
             <Card className="h-full transition-colors duration-(--duration-fast) group-hover:border-primary-line group-hover:bg-raised">
-              <CardHeader title={section.label} />
+              <CardHeader title={t(section.labelKey)} />
               <CardBody>
                 <p className="text-[length:var(--text-sm)] leading-[var(--leading-normal)] text-muted">
-                  {section.description}
+                  {t(section.descriptionKey)}
                 </p>
                 <span className="mt-4 inline-flex text-[length:var(--text-sm)] font-medium text-primary">
-                  Bölümü aç →
+                  {t("screens.settingsPage.openSection")}
                 </span>
               </CardBody>
             </Card>
@@ -55,8 +59,7 @@ export default async function SettingsAdminPage() {
       <Card>
         <CardBody>
           <p className="text-[length:var(--text-sm)] text-muted">
-            Bir ayarı değiştirdiğinizde yalnızca o bölümdeki değerler kaydedilir;
-            diğer bölümlerdeki ayarlar etkilenmez.
+            {t("screens.settingsPage.note")}
           </p>
         </CardBody>
       </Card>

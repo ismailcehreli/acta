@@ -1,19 +1,19 @@
 import type { ReactNode } from "react";
 
-// Tablo — kayıt defteri.
+
 //
-// Zebra yok, dış çerçeve yok: satırlar yalnız ince kural çizgisiyle ayrılır.
-// Başlık satırı versal, monospace ve küçük — teknik föy karakteri.
+
+
 //
-// Dar ekranda **günlük kullanılan** geniş tablolar `RecordList` bileşenine
-// dönüşür (aşağıda): her satır etiketli alanlardan oluşan bir kayıt olur,
-// sütun ilişkisi kaybolmaz (brief §5 mobil).
+
+
+
 //
-// Yönetim ekranlarındaki tablolar tablo kalır — yedi sütunlu denetim izi
-// kayıt kartına dönüştüğünde taranabilirliğini kaybeder ve o ekranın işi
-// zaten masaüstünde yapılır. Onlar için kaydırma alanı **klavyeyle de**
-// gezilebilir olmalı: aşağıdaki sarmalayıcı odaklanabilir ve adlandırılmış
-// bir bölge (WCAG 2.1.1).
+
+
+
+
+
 
 export type Align = "left" | "right" | "center";
 
@@ -28,8 +28,7 @@ export function Table({
   label,
 }: {
   children: ReactNode;
-  /** Kaydırma alanına ad verir; yalnız yatay kaydırma gerekebilecek geniş
-   *  tablolarda anlamlı. Verilmezse sarmalayıcı odaklanabilir olmaz. */
+
   label?: string;
 }) {
   return (
@@ -99,7 +98,7 @@ export function TD({
   children: ReactNode;
   align?: Align;
   className?: string;
-  /** Satırın tamamını kaplayan hücre (satır içi detay panelleri için). */
+  /** Cell spanning the whole row, used for inline detail panels. */
   colSpanAll?: boolean;
 } & React.TdHTMLAttributes<HTMLTableCellElement>) {
   return (
@@ -114,12 +113,11 @@ export function TD({
 }
 
 /**
- * Kayıt listesi — tablonun dar ekran karşılığı.
+ * Record list — the narrow-screen equivalent of a table.
  *
- * Her kayıt, etiketi görünen alanlardan oluşur. Tabloyu küçültmek yerine
- * biçim değiştirmenin sebebi şu: 390 px'de altı sütunlu bir tablo ya
- * okunamaz ya da yatay kaydırma ister; ikisi de sahada telefonla bakan
- * kullanıcı için kullanılamaz demektir.
+ * Each record consists of fields with visible labels. The layout changes instead
+ * of shrinking the table because a six-column table at 390px is either unreadable
+ * or requires horizontal scrolling, both of which fail for field users on phones.
  */
 export function RecordList({ children }: { children: ReactNode }) {
   return <ul className="divide-y divide-line">{children}</ul>;
@@ -140,7 +138,7 @@ export function RecordItem({
   );
 }
 
-/** Kayıt içindeki tek alan: etiket üstte küçük, değer altta. */
+/** One record field: a small label above its value. */
 export function RecordField({
   label,
   children,

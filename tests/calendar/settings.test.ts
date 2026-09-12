@@ -13,8 +13,7 @@ import { minuteToTime, timeToMinute } from "@/shared/schemas/calendar";
 
 import { resetDatabase, testDb } from "../helpers/test-db";
 
-// Çalışma takvimi §12.1: şirket genelinde **tek** tanım. Vardiya, geceye taşan
-// mesai ve kişi bazlı takvim v3'te kaldırıldı; burada da yoktur.
+// Work calendar §12.1: single definition across company.
 
 beforeEach(async () => {
   await resetDatabase();
@@ -24,12 +23,12 @@ afterAll(async () => {
   await testDb.$disconnect();
 });
 
-describe("çalışma takvimi", () => {
-  it("kayıt yokken hafta içi varsayılanı döner", async () => {
+describe("work calendar", () => {
+  it("returns weekday default when no record exists", async () => {
     expect(await readWorkCalendar(testDb)).toEqual(DEFAULT_WORK_CALENDAR);
   });
 
-  it("kaydedilir ve geri okunur", async () => {
+  it("saves and reads back", async () => {
     await saveWorkCalendar(testDb, {
       workingDays: [1, 2, 3, 4, 5, 6],
       workStartMinute: 9 * 60,
@@ -43,7 +42,7 @@ describe("çalışma takvimi", () => {
     });
   });
 
-  it("ikinci kayıt yenisini eklemez, mevcudu günceller", async () => {
+  it("second save updates existing record rather than adding new", async () => {
     await saveWorkCalendar(testDb, DEFAULT_WORK_CALENDAR);
     await saveWorkCalendar(testDb, {
       ...DEFAULT_WORK_CALENDAR,
@@ -54,7 +53,7 @@ describe("çalışma takvimi", () => {
     expect((await readWorkCalendar(testDb)).workingDays).toEqual([1, 2, 3]);
   });
 
-  it("günler sıralı ve tekil saklanır", async () => {
+  it("days are stored sorted and unique", async () => {
     await saveWorkCalendar(testDb, {
       ...DEFAULT_WORK_CALENDAR,
       workingDays: [5, 1, 3, 1],
@@ -63,7 +62,7 @@ describe("çalışma takvimi", () => {
     expect((await readWorkCalendar(testDb)).workingDays).toEqual([1, 3, 5]);
   });
 
-  it("ikinci bir takvim kaydı veritabanınca reddedilir", async () => {
+  it("rejects a second calendar record at database level", async () => {
     await saveWorkCalendar(testDb, DEFAULT_WORK_CALENDAR);
 
     await expect(
@@ -74,73 +73,73 @@ describe("çalışma takvimi", () => {
   });
 });
 
-describe("tatil listesi", () => {
-  it("eklenir ve tarihe göre sıralı döner", async () => {
-    await addHoliday(testDb, { date: "2026-10-29", description: "Cumhuriyet Bayramı" });
-    await addHoliday(testDb, { date: "2026-08-30", description: "Zafer Bayramı" });
+describe("holiday list", () => {
+  it("adds and returns sorted by date", async () => {
+    await addHoliday(testDb, { date: "2026-10-29", description: "Republic Day" });
+    await addHoliday(testDb, { date: "2026-08-30", description: "Victory Day" });
 
     expect(await listHolidays(testDb)).toEqual([
-      { date: "2026-08-30", description: "Zafer Bayramı" },
-      { date: "2026-10-29", description: "Cumhuriyet Bayramı" },
+      { date: "2026-08-30", description: "Victory Day" },
+      { date: "2026-10-29", description: "Republic Day" },
     ]);
   });
 
-  it("aynı tarih iki kez eklenemez", async () => {
-    await addHoliday(testDb, { date: "2026-10-29", description: "Cumhuriyet Bayramı" });
+  it("cannot add the same date twice", async () => {
+    await addHoliday(testDb, { date: "2026-10-29", description: "Republic Day" });
 
-    const sonuc = await addHoliday(testDb, {
+    const result = await addHoliday(testDb, {
       date: "2026-10-29",
-      description: "Tekrar",
+      description: "Repeat",
     });
 
-    expect(sonuc.ok).toBe(false);
-    if (sonuc.ok) return;
-    expect(sonuc.error).toBe("already_exists");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("already_exists");
     expect(await testDb.holiday.count()).toBe(1);
   });
 
-  it("yanlış girilen tatil kaldırılabilir", async () => {
-    await addHoliday(testDb, { date: "2026-10-29", description: "Yanlış" });
+  it("can remove incorrectly entered holiday", async () => {
+    await addHoliday(testDb, { date: "2026-10-29", description: "Incorrect" });
 
     expect(await removeHoliday(testDb, "2026-10-29")).toBe(true);
     expect(await listHolidays(testDb)).toEqual([]);
-    // Olmayan tarihin kaldırılması sessizce başarılı sayılmaz.
+    // Removing non-existent date is not considered successful.
     expect(await removeHoliday(testDb, "2026-10-29")).toBe(false);
   });
 
-  it("yıla göre süzülür", async () => {
+  it("filters by year", async () => {
     await addHoliday(testDb, { date: "2026-10-29", description: "2026" });
     await addHoliday(testDb, { date: "2027-01-01", description: "2027" });
 
     expect(await listHolidays(testDb, 2026)).toHaveLength(1);
   });
 
-  it("iş günü hesabı bu tatilleri kullanır", async () => {
+  it("business day calculation uses these holidays", async () => {
     await saveWorkCalendar(testDb, DEFAULT_WORK_CALENDAR);
-    await addHoliday(testDb, { date: "2026-08-19", description: "Deneme" });
+    await addHoliday(testDb, { date: "2026-08-19", description: "Test" });
 
-    const takvim = await loadWorkCalendar(
+    const calendar = await loadWorkCalendar(
       testDb,
       new Date("2026-08-17T00:00:00.000Z"),
       new Date("2026-08-21T00:00:00.000Z"),
     );
 
-    expect(takvim.holidays).toContain("2026-08-19");
-    expect(takvim.workingDays).toEqual([1, 2, 3, 4, 5]);
+    expect(calendar.holidays).toContain("2026-08-19");
+    expect(calendar.workingDays).toEqual([1, 2, 3, 4, 5]);
   });
 });
 
-describe("saat gösterimi", () => {
-  it("dakika ile metin arasında gidip gelir", () => {
+describe("time display", () => {
+  it("converts back and forth between minutes and string", () => {
     expect(minuteToTime(510)).toBe("08:30");
     expect(minuteToTime(0)).toBe("00:00");
     expect(timeToMinute("08:30")).toBe(510);
     expect(timeToMinute("17:30")).toBe(1050);
   });
 
-  it("bozuk metin sayıya çevrilmez", () => {
-    for (const bozuk of ["", "8", "08:60", "25:00", "abc"]) {
-      expect(timeToMinute(bozuk)).toBeNull();
+  it("invalid text is not converted to number", () => {
+    for (const invalid of ["", "8", "08:60", "25:00", "abc"]) {
+      expect(timeToMinute(invalid)).toBeNull();
     }
   });
 });

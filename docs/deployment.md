@@ -73,7 +73,7 @@ You should see `postgres`, `app`, and `worker` in `healthy` or `running` state.
 ### 4. Initialize Root Administrator
 Run the one-time root account generator:
 ```bash
-docker compose exec app pnpm kurulum
+docker compose exec app pnpm setup
 ```
 Save the printed temporary credentials in a secure password manager.
 

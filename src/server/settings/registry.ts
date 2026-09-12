@@ -4,16 +4,17 @@ import {
   NOTIFICATION_EVENTS,
   type NotificationEvent,
 } from "../notifications/events";
+import type { TranslationKey } from "@/shared/i18n";
 
-// Ayar kayıt defteri (§16.5). Her ayarın anahtarı, türü, varsayılanı, sınırları
-// ve Türkçe açıklaması burada tek yerde durur.
+
+
 //
-// Amaç işletimseldir: "üç iş günü cevapsızsa hatırlat" bugün üç, yarın bir
-// olabilir. Bunu değiştirmek için kod okumak, dosya bulmak ve sürüm çıkarmak
-// gerekmemeli. Defterdeki her ayar `/admin/settings` ekranında görünür.
+
+
+
 //
-// Buraya **her** sabit konmaz. Argon2 parametreleri gibi değiştirildiğinde
-// mevcut verinin anlamını bozan değerler kodda kalır; sınırı bu.
+
+
 
 export type SettingType =
   | "number"
@@ -25,69 +26,76 @@ export type SettingType =
 export interface SettingOption {
   value: string;
   label: string;
+  /** Optional message key used by the settings UI. */
+  labelKey?: TranslationKey | string;
 }
 
 export interface SettingDefinition {
   key: string;
-  /** Ekrandaki grup başlığı. */
+
   group: string;
   label: string;
   description: string;
+  /** Optional message keys; server validation keeps English fallbacks. */
+  labelKey?: TranslationKey | string;
+  descriptionKey?: TranslationKey | string;
   type: SettingType;
-  /** Kayıt yoksa kullanılan değer; metin olarak saklanır. */
+
   defaultValue: string;
-  /** Sayısal ayarlar için sınırlar. */
+
   min?: number;
   max?: number;
-  /** Ekranda değerin yanında gösterilen birim. */
+
   unit?: string;
-  /** Metin alanları için ipucu. */
+  unitKey?: TranslationKey | string;
+
   placeholder?: string;
-  /** Seçim alanlarında gösterilen seçenekler. */
+  placeholderKey?: TranslationKey | string;
+
   options?: readonly SettingOption[];
 }
 
 export const SETTING_KEYS = {
-  /** Kaç gün geriye faaliyet girilebilir (§5.6). */
+
   retroactiveEntryDays: "retroactive_entry_days",
-  /** Kayıttan sonra kaç dakika düzeltilebilir (§5.5). */
+
   editWindowMinutes: "edit_window_minutes",
-  /** Detay ekranında kaç saniye kalınca "okundu" sayılır (§10.2). */
+
   readDwellSeconds: "read_dwell_seconds",
-  /** Soranın üstü kaç iş günü sonra kapatabilir (§9.3). */
+
   supervisorTakeoverBusinessDays: "supervisor_takeover_business_days",
-  /** Kaç iş günü cevapsız kalınca hatırlatma gider (§12.2). */
+
   overdueAnswerBusinessDays: "overdue_answer_business_days",
-  /** Kaç iş günü onaylanmayan kayıt için onaylayıcıya hatırlatma gider (§5.4). */
+
   pendingApprovalBusinessDays: "pending_approval_business_days",
-  /** Günlük özet e-postasının saati, şirket saatiyle (§12.3). */
+
   dailyDigestHour: "daily_digest_hour",
-  /** Ek dosya sınırları (§15.4). */
+
   attachmentMaxMb: "attachment_max_mb",
   attachmentMaxCount: "attachment_max_count",
-  /** Yöneticiye katılım özeti; varsayılan kapalı (§12.1). */
+
   managerParticipationSummary: "manager_participation_summary",
-  /** Oturum ömrü (§15.3). */
+
   sessionHours: "session_hours",
-  /** "Beni hatırla" işaretlendiğinde oturum kaç gün sürer; 0 = özellik kapalı. */
+
   rememberMeDays: "remember_me_days",
-  /** Kilit süresi (§15.3). */
+
   lockoutMinutes: "lockout_minutes",
-  /** Hesap açılabilecek e-posta alan adları; boş liste kısıt yok demektir. */
+
   allowedEmailDomains: "allowed_email_domains",
-  /** Takip maddesi kaç iş günü hareketsiz kalınca "uzun süredir açık" sayılır (§11.2). */
+
   followUpStaleBusinessDays: "follow_up_stale_business_days",
-  /** Faaliyet metinlerinin uzunluk sınırları (Görev 11.6). */
+
   activityTitleMinChars: "activity_title_min_chars",
   activityTitleMaxChars: "activity_title_max_chars",
   activityDescriptionMinChars: "activity_description_min_chars",
   activityDescriptionMaxChars: "activity_description_max_chars",
-  /** Kişinin kendi girebileceği en uzun "faaliyet beklenmiyor" dönemi (Görev 11.8). */
+
   selfAbsenceMaxDays: "self_absence_max_days",
-  /** Skor sistemi (Görev 11.10, 11.11). Varsayılan **kapalı**. */
+
   scoringEnabled: "scoring_enabled",
   scoringDeclinePeriods: "scoring_decline_periods",
-  /** Temel skorun dört ağırlığı; üç profilde de toplamı 100 olmak zorunda. */
+
   scoringWeightRegularity: "scoring_weight_regularity",
   scoringWeightAcceptance: "scoring_weight_acceptance",
   scoringWeightApproval: "scoring_weight_approval",
@@ -95,43 +103,28 @@ export const SETTING_KEYS = {
   scoringAppreciationPoints: "scoring_appreciation_points",
   scoringRankingEnabled: "scoring_ranking_enabled",
   appreciationEnabled: "appreciation_enabled",
-  /** Zamanlanmış iş gecikme alarmları. */
+
   jobDelayAlertEnabled: "job_delay_alert_enabled",
   jobDelayAlertRepeatHours: "job_delay_alert_repeat_hours",
-  /** İlk başarılı yedekten sonra koşucu tarafından açılır. */
+
   backupMonitoringEnabled: "backup_monitoring_enabled",
-  /** Mesai bitiminden kaç dakika önce faaliyet hatırlatması gönderilir (§12.1). */
+
   noActivityReminderLeadMinutes: "no_activity_reminder_lead_minutes",
 } as const;
 
-/**
- * Veritabanı kolon genişlikleri — **ayarların aşamayacağı tavan**.
- *
- * `VarChar(150)` ve `VarChar(10000)` yerinde kalıyor; ayar bu tavanın
- * **içinde** hareket ediyor. Kolon genişliğini ayardan değiştirmek, her ayar
- * değişikliğini bir veritabanı geçişine dönüştürürdü.
- */
+
 export const ACTIVITY_TITLE_COLUMN_MAX = 150;
 export const ACTIVITY_DESCRIPTION_COLUMN_MAX = 10_000;
 
-/**
- * Birbirine bağlı ayar çiftleri (Görev 11.6).
- *
- * Her ayar tek başına doğrulanıyordu: türü, alt ve üst sınırı. Metin uzunluk
- * sınırları **ilk bağımlı çift**: "en az" değeri "en çok"tan büyük olursa
- * hiçbir metin kabul edilmez ve kullanıcı formu hiç dolduramaz — her iki
- * değer de kendi sınırları içinde olduğu hâlde.
- *
- * Aynı mekanizma skor ağırlıklarının toplamını zorlamak için de kullanılacak
- * (Görev 11.10).
- */
+
 export interface SettingPairRule {
-  /** Küçük olması gereken ayar. */
+
   min: string;
-  /** Büyük ya da eşit olması gereken ayar. */
+
   max: string;
-  /** Kural bozulduğunda gösterilecek mesaj. */
+
   message: string;
+  messageKey: string;
 }
 
 export const SETTING_PAIR_RULES: SettingPairRule[] = [
@@ -139,33 +132,28 @@ export const SETTING_PAIR_RULES: SettingPairRule[] = [
     min: SETTING_KEYS.activityTitleMinChars,
     max: SETTING_KEYS.activityTitleMaxChars,
     message:
-      "Başlık için \u201cen az\u201d değeri \u201cen çok\u201dtan büyük olamaz.",
+      "The minimum character count for title cannot exceed the maximum.",
+    messageKey: "errors.settings.pairTitleInvalid",
   },
   {
     min: SETTING_KEYS.activityDescriptionMinChars,
     max: SETTING_KEYS.activityDescriptionMaxChars,
     message:
-      "Açıklama için \u201cen az\u201d değeri \u201cen çok\u201dtan büyük olamaz.",
+      "The minimum character count for description cannot exceed the maximum.",
+    messageKey: "errors.settings.pairDescriptionInvalid",
   },
 ];
 
 /**
- * Toplamı sabit olmak zorunda olan ayar kümeleri (Görev 11.10,
- * denetim 23.08.2026 bulgu 8).
+ * Setting sets whose sum must remain constant (Task 11.10, audit 23.08.2026 finding 8).
  *
- * Temel skorun tavanı **her profilde 100**; kişiden kişiye değişen bir tavan
- * kıyaslanabilirliği bitirirdi. Takdir katkısı bu temel toplamın dışındadır.
- * Üç profil üç ayrı denklemdir ve üçü birden
- * doğrulanır: tek tek geçerli dört sayı, bir profilde 110 edebilir.
- *
- * Onaya tabi olmayan profilin düzenlilik ağırlığı ayrı bir ayar değil,
- * "düzenlilik + kabul oranı" toplamıdır (tasarım satır 686) — bu yüzden onun
- * denklemi çalışan profiliyle aynı sayılara dayanır.
+ * Base score cap is 100 for every profile. Appreciation contribution is outside this base total.
  */
 export interface SettingSumRule {
   keys: string[];
   total: number;
   message: string;
+  messageKey: string;
 }
 
 export const SETTING_SUM_RULES: SettingSumRule[] = [
@@ -177,7 +165,8 @@ export const SETTING_SUM_RULES: SettingSumRule[] = [
     ],
     total: 100,
     message:
-      "Onaya tabi çalışan profilinde ağırlıklar toplamı 100 olmalı: düzenli raporlama + kabul oranı + takip disiplini.",
+      "Sum of weights for employee profile requiring approval must equal 100: regularity + acceptance + follow-up.",
+    messageKey: "errors.settings.sumEmployeeInvalid",
   },
   {
     keys: [
@@ -187,260 +176,261 @@ export const SETTING_SUM_RULES: SettingSumRule[] = [
     ],
     total: 100,
     message:
-      "Yönetici profilinde ağırlıklar toplamı 100 olmalı: düzenli raporlama + onay süresi + takip disiplini.",
+      "Sum of weights for manager profile must equal 100: regularity + approval duration + follow-up.",
+    messageKey: "errors.settings.sumManagerInvalid",
   },
 ];
 
 const STATIC_SETTING_DEFINITIONS: SettingDefinition[] = [
   {
     key: SETTING_KEYS.scoringEnabled,
-    group: "Skor",
-    label: "Skor sistemi açık",
+    group: "Score",
+    label: "Enable scoring",
     description:
-      "Kapalıyken skorlar hiçbir ekranda görünmez. Açıldığında kullanıcılar kendi skorlarını, yöneticiler ekip skorlarını görür.",
+      "When disabled, scores are hidden throughout the application. When enabled, users can view their own scores and managers can view team scores.",
     type: "boolean",
     defaultValue: "false",
   },
   {
     key: SETTING_KEYS.scoringDeclinePeriods,
-    group: "Skor",
-    label: "Düşüş işareti eşiği",
+    group: "Score",
+    label: "Decline warning threshold",
     description:
-      "Kaç dönem üst üste düşüşte kişinin yanında uyarı gösterileceğini belirler. Daha küçük değer erken, daha büyük değer daha uzun eğilim bekler.",
+      "Number of consecutive declining periods before a warning appears beside a person. Smaller values warn earlier; larger values require a longer trend.",
     type: "number",
     defaultValue: "3",
     min: 2,
     max: 12,
-    unit: "dönem",
+    unit: "periods",
   },
   {
     key: SETTING_KEYS.scoringWeightRegularity,
-    group: "Skor",
-    label: "Düzenli raporlama ağırlığı",
+    group: "Score",
+    label: "Reporting regularity weight",
     description:
-      "Düzenli raporlama bölümünün puandaki payını belirler. Onaya tabi olmayan çalışanlarda kabul oranının payı da bu bölüme eklenir.",
+      "Share of the score assigned to reporting regularity. For employees whose activities do not require approval, the acceptance-rate share is added to this section.",
     type: "number",
     defaultValue: "60",
     min: 0,
     max: 100,
-    unit: "puan",
+    unit: "points",
   },
   {
     key: SETTING_KEYS.scoringWeightAcceptance,
-    group: "Skor",
-    label: "Kabul oranı ağırlığı",
+    group: "Score",
+    label: "Acceptance rate weight",
     description:
-      "Onaylanan kayıtların payının puandaki ağırlığını belirler. Yalnız onaya tabi çalışanlarda kullanılır.",
+      "Weight assigned to the share of approved records. Used only for employees whose activities require approval.",
     type: "number",
     defaultValue: "30",
     min: 0,
     max: 100,
-    unit: "puan",
+    unit: "points",
   },
   {
     key: SETTING_KEYS.scoringWeightApproval,
-    group: "Skor",
-    label: "Onay süresi ağırlığı",
+    group: "Score",
+    label: "Approval time weight",
     description:
-      "Yöneticinin kayıtları zamanında karara bağlamasının puandaki ağırlığını belirler. Ret de karar sayılır.",
+      "Weight assigned to a manager deciding records on time. Rejections count as decisions too.",
     type: "number",
     defaultValue: "30",
     min: 0,
     max: 100,
-    unit: "puan",
+    unit: "points",
   },
   {
     key: SETTING_KEYS.scoringWeightFollowUp,
-    group: "Skor",
-    label: "Takip disiplini ağırlığı",
+    group: "Score",
+    label: "Follow-up discipline weight",
     description:
-      "Sorulara cevap verme ve takip maddelerini tamamlama bölümünün puandaki payını belirler. Üç profilde de aynıdır.",
+      "Share of the score assigned to answering questions and completing follow-up items. The same value applies to all three profiles.",
     type: "number",
     defaultValue: "10",
     min: 0,
     max: 100,
-    unit: "puan",
+    unit: "points",
   },
   {
     key: SETTING_KEYS.scoringAppreciationPoints,
-    group: "Skor",
-    label: "Takdir başına puan",
+    group: "Score",
+    label: "Points per appreciation",
     description:
-      "Onaylanmış faaliyetlere verilen her geçerli takdirin genel puana ekleyeceği puanı belirler. 0 yazılırsa takdir verilebilir ama puana katkı yapmaz.",
+      "Points added to the overall score for each valid appreciation given to an approved activity. Appreciations can still be given when this is 0, but they add no points.",
     type: "number",
     defaultValue: "1",
     min: 0,
     max: 10,
-    unit: "puan",
+    unit: "points",
   },
   {
     key: SETTING_KEYS.scoringRankingEnabled,
-    group: "Skor",
-    label: "Sıralama sekmesi açık",
+    group: "Score",
+    label: "Enable ranking tab",
     description:
-      "Açıksa ekip skorları ekranında skora göre sıralama seçilebilir. Kapalıyken liste alfabetik gösterilir; genel şirket sıralaması yine gösterilmez.",
+      "When enabled, the team scores screen offers sorting by score. When disabled, the list is alphabetical; there is never a company-wide ranking.",
     type: "boolean",
     defaultValue: "false",
   },
   {
     key: SETTING_KEYS.appreciationEnabled,
-    group: "Skor",
-    label: "Takdir sistemi açık",
+    group: "Score",
+    label: "Enable appreciations",
     description:
-      "Açıksa yetkili kullanıcılar faaliyetlere takdir verebilir. Takdir sayısı, ayarlanan puan kadar genel skora katkı yapar ve faaliyetin yanında ayrıca gösterilir.",
+      "When enabled, authorized users can appreciate activities. Each appreciation contributes the configured number of points to the overall score and is shown beside the activity.",
     type: "boolean",
     defaultValue: "false",
   },
   {
     key: SETTING_KEYS.selfAbsenceMaxDays,
-    group: "İzin ve faaliyet dışı günler",
-    label: "Kişinin girebileceği en uzun dönem",
+    group: "Leave and no-activity days",
+    label: "Maximum self-entered leave period",
     description:
-      "Kişinin kendisi için tek seferde girebileceği en uzun izin veya faaliyet dışı gün dönemini belirler. Daha uzun dönemi yönetici girebilir.",
+      "Maximum leave or no-activity period a person can enter for themselves at once. A manager can enter a longer period.",
     type: "number",
     defaultValue: "30",
     min: 1,
     max: 365,
-    unit: "gün",
+    unit: "days",
   },
   {
     key: SETTING_KEYS.activityTitleMinChars,
-    group: "Faaliyet girişi",
-    label: "Başlık en az",
+    group: "Activity entry",
+    label: "Minimum title length",
     description:
-      "Başlığın kabul edilmesi için gereken en az karakter sayısıdır. Varsayılan 1, boş başlıkları engeller ve kısa başlıklara izin verir.",
+      "Minimum number of characters required for a title. The default of 1 prevents empty titles while allowing short titles.",
     type: "number",
     defaultValue: "1",
     min: 1,
     max: 100,
-    unit: "karakter",
+    unit: "characters",
   },
   {
     key: SETTING_KEYS.activityTitleMaxChars,
-    group: "Faaliyet girişi",
-    label: "Başlık en çok",
+    group: "Activity entry",
+    label: "Maximum title length",
     description:
-      "Başlık için izin verilen en fazla karakter sayısıdır. Üst sınır veritabanındaki 150 karakterlik alanı aşamaz.",
+      "Maximum number of characters allowed in a title. The limit cannot exceed the database column's 150-character capacity.",
     type: "number",
     defaultValue: "150",
     min: 10,
     max: ACTIVITY_TITLE_COLUMN_MAX,
-    unit: "karakter",
+    unit: "characters",
   },
   {
     key: SETTING_KEYS.activityDescriptionMinChars,
-    group: "Faaliyet girişi",
-    label: "Açıklama en az",
+    group: "Activity entry",
+    label: "Minimum description length",
     description:
-      "Açıklamanın kabul edilmesi için gereken en az karakter sayısıdır. Varsayılan 1, açıklamanın boş bırakılmasını engeller.",
+      "Minimum number of characters required for a description. The default of 1 prevents an empty description.",
     type: "number",
     defaultValue: "1",
     min: 1,
     max: 1000,
-    unit: "karakter",
+    unit: "characters",
   },
   {
     key: SETTING_KEYS.activityDescriptionMaxChars,
-    group: "Faaliyet girişi",
-    label: "Açıklama en çok",
+    group: "Activity entry",
+    label: "Maximum description length",
     description:
-      "Açıklama için izin verilen en fazla karakter sayısıdır. Üst sınır veritabanındaki 10.000 karakterlik alanı aşamaz.",
+      "Maximum number of characters allowed in a description. The limit cannot exceed the database column's 10,000-character capacity.",
     type: "number",
     defaultValue: "10000",
     min: 100,
     max: ACTIVITY_DESCRIPTION_COLUMN_MAX,
-    unit: "karakter",
+    unit: "characters",
   },
   {
     key: SETTING_KEYS.retroactiveEntryDays,
-    group: "Faaliyet girişi",
-    label: "Geçmişe dönük giriş",
+    group: "Activity entry",
+    label: "Backdated entry window",
     description:
-      "Kullanıcının bugünden geriye doğru kaç gün için faaliyet girebileceğini belirler. Daha eski tarihler için giriş yapılamaz.",
+      "Number of days into the past for which a user can enter an activity. Older dates are not accepted.",
     type: "number",
     defaultValue: "1",
     min: 0,
     max: 90,
-    unit: "gün",
+    unit: "days",
   },
   {
     key: SETTING_KEYS.editWindowMinutes,
-    group: "Faaliyet girişi",
-    label: "Düzeltme penceresi",
+    group: "Activity entry",
+    label: "Revision window",
     description:
-      "Kayıt oluşturulduktan sonra kaç dakika düzeltilebileceğini belirler. Kayıt okunduğunda süre dolmamış olsa bile düzenleme kapanır.",
+      "Number of minutes during which a record can be revised after creation. Revision closes as soon as the record is read, even if time remains.",
     type: "number",
     defaultValue: "15",
     min: 0,
     max: 1440,
-    unit: "dakika",
+    unit: "minutes",
   },
   {
     key: SETTING_KEYS.readDwellSeconds,
-    group: "Faaliyet girişi",
-    label: "Okundu sayma süresi",
+    group: "Activity entry",
+    label: "Read dwell time",
     description:
-      "Detay ekranı en az kaç saniye açık kalırsa kaydın okundu sayılacağını belirler. Listeyi hızlıca geçmek okundu sayılmaz.",
+      "Number of seconds the detail screen must remain open before a record is marked read. Quickly passing through a list does not count.",
     type: "number",
     defaultValue: "2",
     min: 1,
     max: 60,
-    unit: "saniye",
+    unit: "seconds",
   },
   {
     key: SETTING_KEYS.pendingApprovalBusinessDays,
-    group: "Onay akışı",
-    label: "Onay hatırlatması",
+    group: "Approval flow",
+    label: "Approval reminder",
     description:
-      "Onay bekleyen kaydın kaç iş günü sonra hatırlatılacağını belirler. Hafta sonu ve resmî tatiller sayılmaz; bu süre skor hesabındaki onay süresini de etkiler.",
+      "Number of business days before a pending approval reminder is sent. Weekends and public holidays are excluded; this also affects the approval-time score.",
     type: "number",
     defaultValue: "2",
     min: 1,
     max: 30,
-    unit: "iş günü",
+    unit: "business days",
   },
   {
     key: SETTING_KEYS.followUpStaleBusinessDays,
-    group: "Takip maddeleri",
-    label: "Hareketsizlik eşiği",
+    group: "Follow-up items",
+    label: "Follow-up inactivity threshold",
     description:
-      "Takip maddesinin kaç iş günü hareketsiz kaldığında uyarılacağını belirler. Aynı süre, takip disiplini skorunda maddenin ele alınıp alınmadığını da belirler.",
+      "Number of business days of inactivity before a follow-up item is flagged. The same period determines whether the item was handled on time for scoring.",
     type: "number",
     defaultValue: "5",
     min: 1,
     max: 60,
-    unit: "iş günü",
+    unit: "business days",
   },
   {
     key: SETTING_KEYS.supervisorTakeoverBusinessDays,
-    group: "Soru–cevap",
-    label: "Üstün devreye girmesi",
+    group: "Questions and answers",
+    label: "Supervisor takeover window",
     description:
-      "Soru sahibi kaç iş günü işlem yapmazsa yöneticisinin konuşmayı kapatabileceğini belirler. Bu süre yalnız konuşmayı kapatma yetkisini etkiler.",
+      "Number of business days of inactivity before the supervisor can close a conversation. This affects only the permission to close the conversation.",
     type: "number",
     defaultValue: "10",
     min: 1,
     max: 60,
-    unit: "iş günü",
+    unit: "business days",
   },
   {
     key: SETTING_KEYS.overdueAnswerBusinessDays,
-    group: "Soru–cevap",
-    label: "Cevapsızlık hatırlatması",
+    group: "Questions and answers",
+    label: "No-activity reminder",
     description:
-      "Cevaplanmayan sorunun kaç iş günü sonra hatırlatılacağını belirler. Aynı süre, takip disiplini skorunda cevabın zamanında sayılıp sayılmadığını da etkiler.",
+      "Number of business days before a reminder is sent for an unanswered question. The same period determines whether the answer was on time for scoring.",
     type: "number",
     defaultValue: "3",
     min: 1,
     max: 30,
-    unit: "iş günü",
+    unit: "business days",
   },
   {
     key: SETTING_KEYS.dailyDigestHour,
-    group: "Bildirimler",
-    label: "Günlük özet saati",
+    group: "Notifications",
+    label: "Daily digest hour",
     description:
-      "Günlük özet seçen kullanıcılara e-postanın gönderileceği saattir. Saat şirketin yerel saatine göre uygulanır.",
+      "Hour at which the daily digest is sent to users who selected it. The hour uses the company's local time.",
     type: "time",
     defaultValue: "18",
     min: 0,
@@ -449,31 +439,31 @@ const STATIC_SETTING_DEFINITIONS: SettingDefinition[] = [
   },
   {
     key: SETTING_KEYS.noActivityReminderLeadMinutes,
-    group: "Bildirimler",
-    label: "Mesai öncesi faaliyet hatırlatma süresi",
+    group: "Notifications",
+    label: "No-activity reminder lead time",
     description:
-      "Mesai bitiminden kaç dakika önce “bugün faaliyet girmediniz” hatırlatması gönderileceğini belirler. 0 girilirse hatırlatma mesai bitiminde gönderilir.",
+      "Number of minutes before the end of working hours when the no-activity reminder is sent. With 0, the reminder is sent at the end of working hours.",
     type: "number",
     defaultValue: "60",
     min: 0,
     max: 180,
-    unit: "dakika",
+    unit: "minutes",
   },
   {
     key: SETTING_KEYS.managerParticipationSummary,
-    group: "Bildirimler",
-    label: "Yöneticiye katılım özeti",
+    group: "Notifications",
+    label: "Manager participation digest",
     description:
-      "Açılırsa yöneticilere, ekipte o gün kaç kişinin faaliyet yazdığını gösteren özet gönderilir. Kapalıyken bu özet gönderilmez.",
+      "When enabled, managers receive a digest showing how many people on their team entered an activity that day. When disabled, this digest is not sent.",
     type: "boolean",
     defaultValue: "false",
   },
   {
     key: SETTING_KEYS.attachmentMaxMb,
-    group: "Dosya ekleri",
-    label: "Azami dosya boyutu",
+    group: "File attachments",
+    label: "Maximum file size",
     description:
-      "Tek bir ek dosyanın en fazla kaç MB olabileceğini belirler. Daha büyük dosyalar yüklenemez.",
+      "Maximum size of one attachment in MB. Larger files cannot be uploaded.",
     type: "number",
     defaultValue: "25",
     min: 1,
@@ -482,93 +472,121 @@ const STATIC_SETTING_DEFINITIONS: SettingDefinition[] = [
   },
   {
     key: SETTING_KEYS.attachmentMaxCount,
-    group: "Dosya ekleri",
-    label: "Azami ek sayısı",
+    group: "File attachments",
+    label: "Maximum attachment count",
     description:
-      "Bir faaliyete en fazla kaç dosya eklenebileceğini belirler. Sayı aşıldığında yeni dosya eklenemez.",
+      "Maximum number of files that can be attached to an activity. Additional files are rejected after this limit.",
     type: "number",
     defaultValue: "5",
     min: 1,
     max: 20,
-    unit: "adet",
+    unit: "files",
   },
   {
     key: SETTING_KEYS.allowedEmailDomains,
-    group: "Kullanıcı hesapları",
-    label: "İzinli e-posta alan adları",
+    group: "User accounts",
+    label: "Allowed email domains",
     description:
-      "Yeni hesaplarda ve adres değişikliklerinde kabul edilecek alan adlarını virgülle yazın. Boş bırakılırsa kısıt uygulanmaz; mevcut hesaplar etkilenmez.",
+      "Enter the domains accepted for new accounts and address changes, separated by commas. Leave blank for no restriction; existing accounts are unaffected.",
     type: "domains",
     defaultValue: "",
     placeholder: "example.com, example.org",
   },
   {
     key: SETTING_KEYS.rememberMeDays,
-    group: "Oturum ve güvenlik",
-    label: "“Beni hatırla” süresi",
+    group: "Sessions and security",
+    label: "Remember-me duration",
     description:
-      "Girişte “Beni hatırla” seçildiğinde oturumun kaç gün açık kalacağını belirler. 0 yazılırsa bu seçenek giriş ekranında gösterilmez.",
+      "How many days a session remains active when Remember me is selected at sign-in. With 0, this option is hidden on the sign-in screen.",
     type: "number",
     defaultValue: "30",
     min: 0,
     max: 90,
-    unit: "gün",
+    unit: "days",
   },
   {
     key: SETTING_KEYS.sessionHours,
-    group: "Oturum ve güvenlik",
-    label: "Oturum ömrü",
+    group: "Sessions and security",
+    label: "Session lifetime",
     description:
-      "Giriş yapılan oturumun kaç saat sonra sona ereceğini belirler. Süre dolunca kullanıcıdan yeniden parola istenir.",
+      "How many hours after sign-in a session expires. The user must enter their password again after expiration.",
     type: "number",
     defaultValue: "12",
     min: 1,
     max: 168,
-    unit: "saat",
+    unit: "hours",
   },
   {
     key: SETTING_KEYS.lockoutMinutes,
-    group: "Oturum ve güvenlik",
-    label: "Hesap kilidi süresi",
+    group: "Sessions and security",
+    label: "Account lockout duration",
     description:
-      "Arka arkaya on yanlış parola denemesinden sonra hesabın kaç dakika kilitleneceğini belirler. Parola sıfırlama bağlantısı kilidi beklemeden kaldırır.",
+      "How many minutes an account is locked after ten consecutive incorrect passwords. A password-reset link clears the lock without waiting.",
     type: "number",
     defaultValue: "15",
     min: 1,
     max: 1440,
-    unit: "dakika",
+    unit: "minutes",
   },
   {
     key: SETTING_KEYS.jobDelayAlertEnabled,
-    group: "Bildirimler",
-    label: "Gecikme uyarıları",
+    group: "Notifications",
+    label: "Delay alerts",
     description:
-      "Zamanlanmış işler beklenen sürede çalışmadığında sistem yöneticilerine uyarı gönderilip gönderilmeyeceğini belirler.",
+      "Whether system administrators receive an alert when a scheduled job does not run within its expected interval.",
     type: "boolean",
     defaultValue: "true",
   },
   {
     key: SETTING_KEYS.jobDelayAlertRepeatHours,
-    group: "Bildirimler",
-    label: "Gecikme uyarısı tekrarı",
+    group: "Notifications",
+    label: "Delay alert repeat interval",
     description:
-      "Aynı iş gecikmeye devam ederse uyarının kaç saatte bir yeniden gönderileceğini belirler. En az 1 saat seçilebilir.",
+      "How often an alert is repeated while the same job remains delayed. The minimum is 1 hour.",
     type: "number",
     defaultValue: "24",
     min: 1,
     max: 168,
-    unit: "saat",
+    unit: "hours",
   },
   {
     key: SETTING_KEYS.backupMonitoringEnabled,
-    group: "Bildirimler",
-    label: "Yedekleme izlemesi",
+    group: "Notifications",
+    label: "Backup monitoring",
     description:
-      "Yedek işi geciktiğinde uyarı gönderilmesini açar. İlk başarılı yedekten sonra sistem bunu kendiliğinden açar.",
+      "Enables alerts when the backup job is delayed. The system enables this automatically after the first successful backup.",
     type: "boolean",
     defaultValue: "false",
   },
 ];
+
+function settingDefinitionKey(
+  settingKey: string,
+  field: "label" | "description" | "placeholder",
+): string {
+  return `screens.settingsDefinitions.${settingKey}.${field}`;
+}
+
+function settingUnitKey(unit: string): string {
+  return `screens.settingsDefinitions.units.${unit}`;
+}
+
+/**
+ * Attach presentation keys without putting locale-specific behavior in the
+ * settings service. The English label/description remain useful for server
+ * logs and non-HTTP callers; the UI always prefers these keys.
+ */
+const LOCALIZED_STATIC_SETTING_DEFINITIONS = STATIC_SETTING_DEFINITIONS.map(
+  (definition) => ({
+    ...definition,
+    labelKey: settingDefinitionKey(definition.key, "label"),
+    descriptionKey: settingDefinitionKey(definition.key, "description"),
+    unitKey: definition.unit ? settingUnitKey(definition.unit) : undefined,
+    placeholderKey: definition.placeholder
+      ? settingDefinitionKey(definition.key, "placeholder")
+      : undefined,
+  }),
+);
 
 export const NOTIFICATION_SETTING_PREFIX = "notification_";
 
@@ -581,9 +599,21 @@ export function notificationChannelKey(event: NotificationEvent): string {
 }
 
 export const NOTIFICATION_CHANNEL_OPTIONS: readonly SettingOption[] = [
-  { value: "EMAIL", label: "E-posta" },
-  { value: "PUSH", label: "Tarayıcı bildirimi" },
-  { value: "BOTH", label: "E-posta ve tarayıcı bildirimi" },
+  {
+    value: "EMAIL",
+    label: "Email",
+    labelKey: "screens.settingsOptions.notificationChannels.EMAIL",
+  },
+  {
+    value: "PUSH",
+    label: "Browser notification",
+    labelKey: "screens.settingsOptions.notificationChannels.PUSH",
+  },
+  {
+    value: "BOTH",
+    label: "Email and browser notification",
+    labelKey: "screens.settingsOptions.notificationChannels.BOTH",
+  },
 ];
 
 const REQUIRED_NOTIFICATION_CHANNEL_OPTIONS: readonly SettingOption[] =
@@ -598,9 +628,11 @@ function notificationSettingDefinitions(): SettingDefinition[] {
       if (details.canDisable) {
         definitions.push({
           key: notificationEnabledKey(event),
-          group: "Bildirimler",
+          group: "Notifications",
           label: details.label,
           description: details.description,
+          labelKey: `screens.notificationEvents.${event}.label`,
+          descriptionKey: `screens.notificationEvents.${event}.description`,
           type: "boolean",
           defaultValue: "true",
         });
@@ -608,16 +640,20 @@ function notificationSettingDefinitions(): SettingDefinition[] {
 
       definitions.push({
         key: notificationChannelKey(event),
-        group: "Bildirimler",
-        label: `${details.label} kanalı`,
+        group: "Notifications",
+        label: `${details.label} channel`,
         description: details.canDisable
-          ? "Bu bildirimin hangi kanaldan gönderileceğini seçin."
-          : `${details.description} Bu bildirim kapatılamaz.`,
+          ? "Choose the channel used to send this notification."
+          : `${details.description} This notification cannot be disabled.`,
+        labelKey: `screens.notificationEvents.${event}.channelLabel`,
+        descriptionKey: details.canDisable
+          ? "screens.settingsDefinitions.notificationChannelDescription"
+          : "screens.settingsDefinitions.notificationRequiredChannelDescription",
         type: "select",
         defaultValue: details.defaultChannel,
-        // Parola bağlantısı taşıyan olaylar e-postasız bırakılamaz. "Push"
-        // seçeneği yeni hesapta ya da aboneliği olmayan kişide bağlantıyı
-        // ulaştırmaz; e-posta veya iki kanal zorunlu tutulur.
+        // Events carrying password links cannot be left without email. Push
+        // cannot deliver the link to a new account or an unsubscribed user,
+        // so email or both channels are required.
         options: details.canDisable
           ? NOTIFICATION_CHANNEL_OPTIONS
           : REQUIRED_NOTIFICATION_CHANNEL_OPTIONS,
@@ -629,23 +665,23 @@ function notificationSettingDefinitions(): SettingDefinition[] {
 }
 
 export const SETTING_DEFINITIONS: SettingDefinition[] = [
-  ...STATIC_SETTING_DEFINITIONS,
+  ...LOCALIZED_STATIC_SETTING_DEFINITIONS,
   ...notificationSettingDefinitions(),
 ];
 
 export const SETTING_GROUPS = [
-  "Faaliyet girişi",
-  // Onay akışı Sürüm 1'e alındı (19.08.2026); ayarları kendi başlığı altında.
-  "Onay akışı",
-  "Soru–cevap",
-  "Takip maddeleri",
-  // İzin girişi kişiye açıldı (Görev 11.8); sınırı burada duruyor.
-  "İzin ve faaliyet dışı günler",
-  "Bildirimler",
-  "Dosya ekleri",
-  "Kullanıcı hesapları",
-  "Skor",
-  "Oturum ve güvenlik",
+  "Activity entry",
+  // Approval flow is a Version 1 feature; keep its settings under their own group.
+  "Approval flow",
+  "Questions and answers",
+  "Follow-up items",
+  // Self-entered leave is supported; keep the group boundary explicit here.
+  "Leave and no-activity days",
+  "Notifications",
+  "File attachments",
+  "User accounts",
+  "Score",
+  "Sessions and security",
 ] as const;
 
 const BY_KEY = new Map(SETTING_DEFINITIONS.map((d) => [d.key, d]));
@@ -656,9 +692,14 @@ export function findSetting(key: string): SettingDefinition | undefined {
 
 export type SettingValidation =
   | { ok: true; value: string }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      messageKey?: string;
+      messageValues?: Record<string, string | number>;
+    };
 
-/** Girdiyi ayarın türüne ve sınırlarına göre doğrular. */
+/** Validates a setting value against its type and bounds. */
 export function validateSettingValue(
   definition: SettingDefinition,
   raw: string,
@@ -666,14 +707,26 @@ export function validateSettingValue(
   const trimmed = raw.trim();
 
   if (definition.type === "domains") {
-    const liste = parseDomainList(trimmed);
-    if (!liste.ok) return { ok: false, message: `${definition.label}: ${liste.message}` };
-    return { ok: true, value: formatDomainList(liste.domains) };
+    const list = parseDomainList(trimmed);
+    if (!list.ok) {
+      return {
+        ok: false,
+        message: `${definition.label}: ${list.message}`,
+        messageKey: "errors.emailDomains.invalidDomain",
+        messageValues: { domain: list.domain },
+      };
+    }
+    return { ok: true, value: formatDomainList(list.domains) };
   }
 
   if (definition.type === "boolean") {
     if (trimmed !== "true" && trimmed !== "false") {
-      return { ok: false, message: `${definition.label}: değer açık ya da kapalı olmalı.` };
+      return {
+        ok: false,
+        message: `${definition.label}: value must be true or false.`,
+        messageKey: "errors.settings.boolean",
+        messageValues: { label: definition.label },
+      };
     }
     return { ok: true, value: trimmed };
   }
@@ -681,29 +734,43 @@ export function validateSettingValue(
   if (definition.type === "select") {
     const options = definition.options ?? [];
     if (!options.some((option) => option.value === trimmed)) {
-      return { ok: false, message: `${definition.label}: geçerli bir seçenek seçin.` };
+      return {
+        ok: false,
+        message: `${definition.label}: choose a valid option.`,
+        messageKey: "errors.settings.option",
+        messageValues: { label: definition.label },
+      };
     }
     return { ok: true, value: trimmed };
   }
 
-  const sayi = Number(trimmed);
-  if (trimmed === "" || !Number.isFinite(sayi) || !Number.isInteger(sayi)) {
-    return { ok: false, message: `${definition.label}: tam sayı girilmeli.` };
-  }
-
-  if (definition.min !== undefined && sayi < definition.min) {
+  const count = Number(trimmed);
+  if (trimmed === "" || !Number.isFinite(count) || !Number.isInteger(count)) {
     return {
       ok: false,
-      message: `${definition.label}: en az ${definition.min} olabilir.`,
+      message: `${definition.label}: enter a whole number.`,
+      messageKey: "errors.settings.wholeNumber",
+      messageValues: { label: definition.label },
     };
   }
 
-  if (definition.max !== undefined && sayi > definition.max) {
+  if (definition.min !== undefined && count < definition.min) {
     return {
       ok: false,
-      message: `${definition.label}: en fazla ${definition.max} olabilir.`,
+      message: `${definition.label}: must be at least ${definition.min}.`,
+      messageKey: "errors.settings.minimum",
+      messageValues: { label: definition.label, count: definition.min },
     };
   }
 
-  return { ok: true, value: String(sayi) };
+  if (definition.max !== undefined && count > definition.max) {
+    return {
+      ok: false,
+      message: `${definition.label}: must be at most ${definition.max}.`,
+      messageKey: "errors.settings.maximum",
+      messageValues: { label: definition.label, count: definition.max },
+    };
+  }
+
+  return { ok: true, value: String(count) };
 }

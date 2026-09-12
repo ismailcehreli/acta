@@ -1,5 +1,5 @@
-// Form durumu ayrı dosyada: `"use server"` işaretli bir modül yalnız async
-// fonksiyon dışa aktarabilir.
+
+
 
 export interface AbsenceFormState {
   error: string | null;

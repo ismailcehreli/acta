@@ -14,13 +14,15 @@ import {
 import { readAllowedEmailDomains } from "@/server/settings/system-settings";
 import type { CreateUserInput } from "@/shared/schemas/user";
 
-// Kullanıcı ekleme (§4.6, §15.1). Kullanıcı ağaçta bir düğüme bağlıdır; pasif
-// birime aktif kullanıcı bağlanamaz — veritabanı kısıtıdır, burada
+import { ORG_TREE_LOCK_KEY } from "../org/locks";
+
+
+
 // tekrarlanmaz.
 //
-// "Bir birimde en fazla bir yönetici" kısıtı 20.08.2026'da kaldırıldı: bir
-// departmanda birden fazla müdür olabiliyor ve kayıt hepsinin onay kuyruğuna
-// düşüyor.
+
+
+
 
 export type CreateUserDb = Pick<
   PrismaClient,
@@ -32,8 +34,8 @@ export type CreateUserDb = Pick<
   | "$queryRaw"
   | "$executeRaw"
 > &
-  // Hoş geldiniz bildirimi **aynı işlemde** yazılıyor; kuyruk tablosuna
-  // erişimi olmayan çağıran o seçeneği kullanamaz.
+
+
   Partial<Pick<PrismaClient, "notificationQueue" | "pushSubscription">>;
 
 export type CreateUserErrorCode =
@@ -46,18 +48,24 @@ export type CreateUserErrorCode =
 
 export type CreateUserResult =
   | { ok: true; user: User }
-  | { ok: false; error: CreateUserErrorCode; message: string };
+  | {
+      ok: false;
+      error: CreateUserErrorCode;
+      message: string;
+      messageKey?: string;
+      messageValues?: Record<string, string | number>;
+    };
 
 const MESSAGES: Record<CreateUserErrorCode, string> = {
-  out_of_scope: "Bu birime kullanıcı ekleme yetkiniz yok.",
-  duplicate_email: "Bu e-posta adresi zaten kayıtlı.",
-  email_domain_not_allowed: "Bu e-posta alan adına hesap açılamaz.",
-  unit_not_found: "Seçilen birim bulunamadı.",
-  inactive_unit: "Pasif bir birime aktif kullanıcı bağlanamaz.",
-  unknown: "Kullanıcı eklenemedi.",
+  out_of_scope: "You do not have permission to add users to this unit.",
+  duplicate_email: "This email address is already registered.",
+  email_domain_not_allowed: "An account cannot be created for this email domain.",
+  unit_not_found: "The selected unit was not found.",
+  inactive_unit: "An active user cannot be assigned to an inactive unit.",
+  unknown: "The user could not be created.",
 };
 
-/** Kapsam ihlalini işlemden dışarı taşıyan iç hata. */
+
 class ScopeError extends Error {}
 
 function fail(error: CreateUserErrorCode) {
@@ -65,12 +73,12 @@ function fail(error: CreateUserErrorCode) {
 }
 
 function translateDatabaseError(error: unknown) {
-  // Tekillik önce sorulur ve **hata kodundan** okunur; metin aramak üretim
-  // derlemesinde yanlış dalı seçiyordu (bkz. `src/server/db-errors.ts`).
+
+
   if (isUniqueViolation(error)) {
-    // Geriye tek tekillik kısıtı kaldı: e-posta. "Birim başına tek yönetici"
-    // kısıtı 20.08.2026'da kaldırıldı — bir departmanda birden fazla müdür
-    // olabiliyor ve ikisi de onaylayabiliyor.
+
+
+    // Both managers can reach the same decision path concurrently.
     return fail("duplicate_email");
   }
 
@@ -83,9 +91,9 @@ function translateDatabaseError(error: unknown) {
 
 export async function createUser(
   db: CreateUserDb,
-  // İki alan **opsiyonel**: kurulum betiği ve örnek veri gibi çağıranlar
-  // skorlama ayrıntısını bilmek zorunda değil, varsayılanları geçerli
-  // (Görev 11.10, 11.11).
+
+
+
   input: Omit<
     CreateUserInput,
     "isScored" | "canAppreciate" | "canViewReports" | "canViewScoreReports"
@@ -96,33 +104,16 @@ export async function createUser(
         "isScored" | "canAppreciate" | "canViewReports" | "canViewScoreReports"
       >
     >,
-  /** İşlemi yapan sistem yöneticisi; kurulum betiğinde kimse yoktur (§15.2). */
+
   actorId: string | null = null,
   now: Date = new Date(),
-  /**
-   * Hoş geldiniz bildirimi hesapla **aynı işlemde** kuyruğa yazılsın mı?
-   *
-   * Müdürün açtığı hesapta parolayı kimse bilmez ve tek giriş yolu bu
-   * bağlantıdır; bildirim yazılamazsa hesabın da oluşmaması gerekir. Ayrı
-   * adımda yazıldığında kuyruk hatası hesabı yarım bırakıyordu: eylem hata
-   * veriyor ama kullanıcı kimsenin giremediği bir hesapla veritabanında
-   * kalıyordu (23.08.2026, ikinci denetim turu).
-   */
+
   options: {
     welcomeEmail?: boolean;
     secret?: string;
-    /** Yalnız ilk kurulum yolu tarafından kullanılır. */
+
     root?: boolean;
-    /**
-     * Bölüm müdürü adına ekleme: birimin aktörün **o anki** alt ağacında
-     * olduğu, kaydın açıldığı işlemin içinde doğrulanır.
-     *
-     * Kapsam dışarıda hesaplanıp buraya liste hâlinde verilseydi, arada ağaç
-     * değiştiğinde liste bayat kalırdı (23.08.2026, üçüncü denetim turu).
-     * Kontrol ile ekleme arasındaki pencere ayrıca **ağaç kilidiyle**
-     * kapatılıyor: birim taşıyan tetikleyiciler aynı danışma kilidini alır,
-     * dolayısıyla bu işlem sürerken taşıma bekler.
-     */
+
     managerScope?: { actorId: string };
   } = {},
 ): Promise<CreateUserResult> {
@@ -134,48 +125,48 @@ export async function createUser(
   if (!unit) return fail("unit_not_found");
   if (!unit.isActive) return fail("inactive_unit");
 
-  const izinliler = await readAllowedEmailDomains(db);
-  if (!isEmailDomainAllowed(input.email, izinliler)) {
+  const allowedDomains = await readAllowedEmailDomains(db);
+  if (!isEmailDomainAllowed(input.email, allowedDomains)) {
     return {
       ok: false as const,
       error: "email_domain_not_allowed" as const,
-      // Hangi alan adlarının kabul edildiği söylenir; yoksa kullanıcı
-      // deneme yanılmaya mecbur kalır.
-      message: `Hesap yalnız şu alan adlarıyla açılabilir: ${izinliler.join(", ")}`,
+      message: `Accounts may only be created for these domains: ${allowedDomains.join(", ")}`,
+      messageKey: "errors.user.emailDomainNotAllowedWithList",
+      messageValues: { domains: allowedDomains.join(", ") || "an allowed domain" },
     };
   }
 
   const passwordHash = await hashPassword(input.initialPassword);
 
   try {
-    // Kullanıcı ve parolası birlikte oluşur: parolasız kullanıcı giriş
-    // yapamayacağı için yarım kalmış kayıt kimseye yaramaz.
+    // Create the user and credential together: a user without a password
+    // cannot sign in and would leave an unusable partial record.
     const user = await db.$transaction(async (tx) => {
       if (options.managerScope) {
-        // Ağaç kilidi **kontrolden önce**: birim taşıyan tetikleyiciler aynı
-        // kilidi aldığı için, bu işlem bitene kadar taşıma bekler.
-        // `$executeRaw`: kilit çağrısı `void` döner ve `$queryRaw` onu
-        // çözemiyor.
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('faaliyet:org_agaci'))`;
+        // Acquire the tree lock **before the check**: triggers that move a
+        // unit use the same lock, so a move waits until this operation ends.
+        // `$executeRaw` is used because the lock statement returns `void` and
+        // `$queryRaw` cannot decode it.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${ORG_TREE_LOCK_KEY}))`;
 
-        const kapsamda = await tx.$queryRaw<{ var: boolean }[]>`
+        const inScope = await tx.$queryRaw<{ isInScope: boolean }[]>`
           SELECT EXISTS (
             WITH RECURSIVE subtree(id) AS (
-              SELECT aktor."orgUnitId"
-              FROM "User" aktor
-              WHERE aktor."id" = ${options.managerScope.actorId}
-                AND aktor."isActive"
-                AND aktor."isUnitManager"
+              SELECT actor."orgUnitId"
+              FROM "User" actor
+              WHERE actor."id" = ${options.managerScope.actorId}
+                AND actor."isActive"
+                AND actor."isUnitManager"
               UNION ALL
-              SELECT birim."id"
-              FROM "OrgUnit" birim
-              JOIN subtree ON birim."parentId" = subtree.id
+              SELECT unit."id"
+              FROM "OrgUnit" unit
+              JOIN subtree ON unit."parentId" = subtree.id
             )
             SELECT 1 FROM subtree WHERE subtree.id = ${input.orgUnitId}
-          ) AS "var"
+          ) AS "isInScope"
         `;
 
-        if (!kapsamda[0]?.var) throw new ScopeError();
+        if (!inScope[0]?.isInScope) throw new ScopeError();
       }
 
       const created = await tx.user.create({
@@ -221,7 +212,7 @@ export async function createUser(
         objectType: AUDIT_OBJECTS.user,
         objectId: created.id,
         action: AUDIT_ACTIONS.userCreated,
-        // Parola hiçbir biçimde kayda geçmez (§15.3).
+        // Passwords never enter the audit record (§15.3).
         detail: {
           email: created.email,
           isUnitManager: created.isUnitManager,

@@ -1,133 +1,143 @@
 import type { ScoreTrend, UserScore } from "@/server/scoring/read";
+import { getLocale } from "@/server/i18n/locale";
+import { getTranslations } from "@/server/i18n/server";
+import { formatNumber, formatPercentage } from "@/shared/format/locale";
 
-// Skor gösterimi (Görev 11.11).
+
 //
-// **Tek sayı tarama için, kırılım karar için.** Genel puanın temel bölümünü
-// ve takdir katkısını ayrı göstermek, puanın nasıl oluştuğunu anlaşılır kılar.
 
-function yuzde(pay: number, payda: number): string {
-  if (payda <= 0) return "—";
-  return `%${Math.round((pay / payda) * 100)}`;
-}
 
-export function ScoreCard({
+
+export async function ScoreCard({
   score,
   appreciations,
   trend,
   self = true,
 }: {
   score: UserScore;
-  /** Eski çağıranlar için geri dönüş değeri; yeni skor alanı önceliklidir. */
+  /** Backward-compatible value for older callers; the new score field is canonical. */
   appreciations: number | null;
-  /** Geçmiş dönemler ve düşüş işareti (Görev 11.11). */
+  /** Historical periods and the decline indicator (Task 11.11). */
   trend?: ScoreTrend;
-  /** Kart kişinin kendi ekranında mı gösteriliyor? */
+  /** Whether the card is shown on the person's own screen. */
   self?: boolean;
 }) {
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
   const appreciationCount = score.appreciationCount ?? appreciations ?? 0;
   const appreciationPoints = score.appreciationPoints ?? 0;
   const appreciationPointsPer = score.appreciationPointsPer ?? 0;
   const baseTotal = score.baseTotal ?? score.total - appreciationPoints;
-  const raporlamaFiili = self ? "kayıt girdiniz" : "kayıt girdi";
-  const kayitIyelik = self ? "kaydınızın" : "kaydın";
-  const tamamlamaFiili = self ? "tamamladınız" : "tamamladı";
-  const boyutlar = [
+  const reportingText = self
+    ? t("screens.scoring.selfReporting")
+    : t("screens.scoring.teamReporting");
+  const dimensions = [
     {
-      ad: "Düzenli raporlama",
-      puan: score.regularity,
-      tavan: score.weights.regularity,
-      aciklama:
+      name: t("screens.scoring.reportingRegularity"),
+      points: score.regularity,
+      maximum: score.weights.regularity,
+      description:
         score.expectedDays > 0
-          ? `${score.expectedDays} günün ${score.writtenDays}'inde ${raporlamaFiili} · ${yuzde(
-              score.writtenDays,
-              score.expectedDays,
-            )}`
-          : "Bu dönemde beklenen iş günü yok.",
-      ipucu:
-        "Bir günde kaç kayıt yazdığınız değil, kaç farklı günde kayıt yazdığınız ölçülür.",
+          ? t("screens.scoring.reportingRegularityDescription", {
+              expected: formatNumber(score.expectedDays, locale),
+              reporting: reportingText,
+              written: formatNumber(score.writtenDays, locale),
+              percentage: formatPercentage(
+                (score.writtenDays / score.expectedDays) * 100,
+                locale,
+              ),
+            })
+          : t("screens.scoring.noExpectedDays"),
+      hint: t("screens.scoring.distinctDays"),
     },
     score.acceptance !== null
       ? {
-          ad: "Kabul oranı",
-          puan: score.acceptance,
-          tavan: score.weights.acceptance,
-          aciklama: `${score.writtenCount} ${kayitIyelik} ${score.approvedCount} tanesi onaylandı.`,
-          ipucu:
-            "Reddedilen ve düzeltme istenen kayıtlar bu oranı düşürür.",
+          name: t("screens.scoring.acceptanceRate"),
+          points: score.acceptance,
+          maximum: score.weights.acceptance,
+          description: t("screens.scoring.acceptanceDescription", {
+            written: score.writtenCount,
+            approved: score.approvedCount,
+          }),
+          hint: t("screens.scoring.acceptanceHint"),
         }
       : null,
     score.approval !== null
       ? {
-          ad: "Onay süresi",
-          puan: score.approval,
-          tavan: score.weights.approval,
-          aciklama: `${score.decidedCount} kararın ${score.decidedOnTimeCount} tanesi zamanında verildi.`,
-          ipucu:
-            "Ret de karardır; burada ölçülen şey zamanında karar vermektir.",
+          name: t("screens.scoring.approvalTime"),
+          points: score.approval,
+          maximum: score.weights.approval,
+          description: t("screens.scoring.approvalDescription", {
+            decided: score.decidedCount,
+            onTime: score.decidedOnTimeCount,
+          }),
+          hint: t("screens.scoring.approvalHint"),
         }
       : null,
     {
-      ad: "Takip disiplini",
-      puan: score.followUp,
-      tavan: score.weights.followUp,
-      aciklama: `${score.followUpTotal} sorumluluktan ${score.followUpHandled} tanesini zamanında ${tamamlamaFiili}.`,
-      ipucu: "Sorulara cevap vermek ve takip maddelerini tamamlamak birlikte ölçülür.",
+      name: t("screens.scoring.followUpDiscipline"),
+      points: score.followUp,
+      maximum: score.weights.followUp,
+      description: t("screens.scoring.followUpDescription", {
+        total: score.followUpTotal,
+        handled: score.followUpHandled,
+      }),
+      hint: t("screens.scoring.followUpHint"),
     },
   ].filter(Boolean) as {
-    ad: string;
-    puan: number;
-    tavan: number;
-    aciklama: string;
-    ipucu: string;
+    name: string;
+    points: number;
+    maximum: number;
+    description: string;
+    hint: string;
   }[];
 
   return (
-    <div className="flex flex-col gap-4" data-test="skor-karti">
+    <div className="flex flex-col gap-4" data-test="score-card">
       <div className="flex items-baseline gap-3">
         <span className="mono text-[length:var(--text-3xl)] font-semibold text-ink">
           {score.total}
         </span>
         <span className="text-[length:var(--text-sm)] text-muted">
-          Genel puan · bu dönem
+          {t("screens.scoring.totalLabel")}
         </span>
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[length:var(--text-xs)] text-muted">
-        <span>Temel puan: {baseTotal} / 100</span>
+        <span>{t("screens.scoring.baseScore", { score: baseTotal })}</span>
         <span>
-          Takdir katkısı: +{appreciationPoints} puan
+          {t("screens.scoring.recognitionContribution", { points: appreciationPoints })}
           {appreciationCount > 0
-            ? ` · ${appreciationCount} takdir × ${appreciationPointsPer}`
+            ? ` · ${t("screens.scoring.recognitionCount", { count: appreciationCount, points: appreciationPointsPer })}`
             : ""}
         </span>
       </div>
 
       {appreciationPoints > 0 ? (
         <p className="text-[length:var(--text-xs)] text-muted">
-          Genel puan, temel puana verilen takdirlerin katkısı eklenerek hesaplanır;
-          bu nedenle 100’ü aşabilir.
+          {t("screens.scoring.recognitionExplanation")}
         </p>
       ) : null}
 
       <dl className="grid gap-3 sm:grid-cols-2">
-        {boyutlar.map((boyut) => (
+        {dimensions.map((dimension) => (
           <div
-            key={boyut.ad}
+            key={dimension.name}
             className="rounded-(--radius-sm) border border-line bg-inset/40 px-3.5 py-3"
           >
             <dt className="flex items-baseline justify-between gap-2">
               <span className="text-[length:var(--text-sm)] font-medium text-ink">
-                {boyut.ad}
+                {dimension.name}
               </span>
               <span className="mono text-[length:var(--text-sm)] text-ink">
-                {boyut.puan} / {boyut.tavan}
+                {dimension.points} / {dimension.maximum}
               </span>
             </dt>
             <dd className="mt-0.5 text-[length:var(--text-xs)] text-muted">
-              {boyut.aciklama}
+              {dimension.description}
             </dd>
             <dd className="mt-1 text-[length:var(--text-2xs)] leading-snug text-faint">
-              {boyut.ipucu}
+              {dimension.hint}
             </dd>
           </div>
         ))}
@@ -136,24 +146,23 @@ export function ScoreCard({
       {trend && trend.periods.length > 0 ? (
         <div className="rounded-(--radius-sm) border border-line px-3.5 py-3">
           <p className="text-[length:var(--text-sm)] font-medium text-ink">
-            Geçmiş dönemler
+            {t("screens.scoring.pastPeriods")}
           </p>
-          {/* Asıl sinyal sıralama değil **eğilim**: "7. sırada" bir şey
-              söylemez, "üç dönemdir düşüyor" söyler. */}
+          {/* The useful signal is the trend, not a rank that hides the direction of change. */}
           <ol className="mt-2 flex flex-wrap gap-3">
-            {trend.periods.map((donem) => (
+            {trend.periods.map((period) => (
               <li
-                key={donem.periodStart}
+                key={period.periodStart}
                 className="text-[length:var(--text-xs)] text-muted"
               >
-                <span className="mono text-ink">{donem.total}</span>{" "}
-                <span className="text-faint">{donem.periodStart.slice(0, 7)}</span>
+                <span className="mono text-ink">{period.total}</span>{" "}
+                <span className="text-faint">{period.periodStart.slice(0, 7)}</span>
               </li>
             ))}
           </ol>
           {trend.declining ? (
             <p className="mt-2 text-[length:var(--text-sm)] text-danger">
-              Skor üst üste birkaç dönemdir düşüyor.
+              {t("screens.scoring.declining")}
             </p>
           ) : null}
         </div>

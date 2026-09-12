@@ -1,5 +1,11 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { getTranslations } from "@/server/i18n/server";
+import {
+  LOCALE_LANGUAGE_TAGS,
+  type Locale,
+  type TranslateFunction,
+} from "@/shared/i18n";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,29 +35,67 @@ export interface ReportTabOption {
   hint: string;
 }
 
-const NUMBER_FORMAT = new Intl.NumberFormat("tr-TR");
-
-function formatNumber(value: number): string {
-  return NUMBER_FORMAT.format(value);
+function formatNumber(value: number, locale: Locale): string {
+  return new Intl.NumberFormat(LOCALE_LANGUAGE_TAGS[locale]).format(value);
 }
 
-function formatPercentage(value: number | null): string {
-  return value === null ? "—" : `%${formatNumber(value)}`;
+function formatPercentage(value: number | null, locale: Locale): string {
+  return value === null
+    ? "—"
+    : new Intl.NumberFormat(LOCALE_LANGUAGE_TAGS[locale], {
+        style: "percent",
+        maximumFractionDigits: 0,
+      }).format(value / 100);
 }
 
-function formatScore(value: number | null): string {
-  return value === null ? "—" : `${formatNumber(value)} / 100`;
+function formatScore(
+  value: number | null,
+  locale: Locale,
+  t: TranslateFunction,
+): string {
+  return value === null
+    ? "—"
+    : t("screens.reports.scoreValue", { value: formatNumber(value, locale) });
 }
 
-function formatDecimal(value: number): string {
-  return NUMBER_FORMAT.format(value);
+function formatDecimal(value: number, locale: Locale): string {
+  return formatNumber(value, locale);
 }
 
-function formatDuration(hours: number | null): string {
+function formatDuration(
+  hours: number | null,
+  locale: Locale,
+  t: TranslateFunction,
+): string {
   if (hours === null) return "—";
-  if (hours < 1) return `${formatNumber(Math.max(1, Math.round(hours * 60)))} dk`;
-  if (hours < 24) return `${formatDecimal(hours)} saat`;
-  return `${formatDecimal(hours / 24)} gün`;
+  if (hours < 1) {
+    return t("screens.reports.duration.minutes", {
+      count: formatNumber(Math.max(1, Math.round(hours * 60)), locale),
+    });
+  }
+  if (hours < 24) {
+    return t("screens.reports.duration.hours", {
+      count: formatDecimal(hours, locale),
+    });
+  }
+  return t("screens.reports.duration.days", {
+    count: formatDecimal(hours / 24, locale),
+  });
+}
+
+function notificationChannelLabel(
+  key: string,
+  t: TranslateFunction,
+): string {
+  return t(`screens.reports.notifications.channels.${key}`);
+}
+
+function notificationEventLabel(key: string, t: TranslateFunction): string {
+  return t(`screens.reports.notifications.events.${key}`);
+}
+
+function feedbackCategoryLabel(key: string, t: TranslateFunction): string {
+  return t(`screens.reports.feedback.categories.${key}`);
 }
 
 function reportHref(
@@ -59,8 +103,8 @@ function reportHref(
   period: ReportPeriod,
   unitId?: string,
 ): string {
-  const params = new URLSearchParams({ sekme: tab, donem: period });
-  if (unitId && tab !== "feedback") params.set("birim", unitId);
+  const params = new URLSearchParams({ tab, period });
+  if (unitId && tab !== "feedback") params.set("unit", unitId);
   return `/reports?${params.toString()}`;
 }
 
@@ -75,10 +119,10 @@ function formatUnitName(name: string, depth: number): ReactNode {
   );
 }
 
-function Meaning({ children }: { children: ReactNode }) {
+function Meaning({ children, t }: { children: ReactNode; t: TranslateFunction }) {
   return (
     <p className="border-s-2 border-primary-line ps-3 text-[length:var(--text-sm)] leading-[var(--leading-normal)] text-muted">
-      <span className="font-medium text-ink">Bu ne anlatır?</span> {children}
+      <span className="font-medium text-ink">{t("screens.reports.meaningTitle")}</span> {children}
     </p>
   );
 }
@@ -87,10 +131,16 @@ function Breakdown({
   title,
   description,
   items,
+  emptyTitle,
+  emptyDescription,
+  locale,
 }: {
   title: string;
   description: string;
   items: { label: string; count: number }[];
+  emptyTitle: string;
+  emptyDescription: string;
+  locale: Locale;
 }) {
   const max = Math.max(...items.map((item) => item.count), 0);
 
@@ -99,8 +149,8 @@ function Breakdown({
       <CardHeader title={title} description={description} />
       {items.length === 0 ? (
         <EmptyState
-          title="Bu aralıkta veri yok"
-          description="Seçtiğiniz dönem için gösterilecek kayıt bulunmuyor."
+          title={emptyTitle}
+          description={emptyDescription}
         />
       ) : (
         <CardBody className="flex flex-col gap-4">
@@ -108,7 +158,7 @@ function Breakdown({
             <div key={item.label}>
               <div className="flex items-center justify-between gap-3 text-[length:var(--text-sm)]">
                 <span className="min-w-0 truncate text-ink">{item.label}</span>
-                <span className="mono shrink-0 text-muted">{formatNumber(item.count)}</span>
+                <span className="mono shrink-0 text-muted">{formatNumber(item.count, locale)}</span>
               </div>
               <div
                 aria-hidden
@@ -127,56 +177,53 @@ function Breakdown({
   );
 }
 
-function ActivityReportView({ data }: { data: ActivityReport }) {
+async function ActivityReportView({ data, locale }: { data: ActivityReport; locale: Locale }) {
+  const t = await getTranslations(locale);
   return (
     <div className="flex flex-col gap-(--spacing-block)">
       <StatStrip>
-        <Stat label="Faaliyet" value={formatNumber(data.total)} />
-        <Stat label="Faaliyet yazan kişi" value={formatNumber(data.people)} />
-        <Stat label="Faaliyet günü" value={formatNumber(data.activityDays)} />
+        <Stat label={t("screens.reports.activities.total")} value={formatNumber(data.total, locale)} />
+        <Stat label={t("screens.reports.activities.people")} value={formatNumber(data.people, locale)} />
+        <Stat label={t("screens.reports.activities.days")} value={formatNumber(data.activityDays, locale)} />
         <Stat
-          label="Onay oranı"
-          value={formatPercentage(data.approvalRate)}
+          label={t("screens.reports.activities.approvalRate")}
+          value={formatPercentage(data.approvalRate, locale)}
           tone={data.approvalRate !== null && data.approvalRate < 70 ? "correction" : "primary"}
         />
       </StatStrip>
 
-      <Meaning>
-        Onay oranı, karar verilmiş faaliyetler içinde onaylananların payıdır.
-        Bekleyen faaliyetler bu orana dahil değildir; böylece yöneticinin
-        karar süresi ile içerik değerlendirmesi birbirine karışmaz.
-      </Meaning>
+      <Meaning t={t}>{t("screens.reports.activities.approvalMeaning")}</Meaning>
 
       <Card>
         <CardHeader
-          title="Karar bekleyenler"
-          description="İş akışının nerede yavaşladığını görmek için durumları ayırır."
+          title={t("screens.reports.activities.decisionStatus")}
+          description={t("screens.reports.activities.decisionDescription")}
         />
         <CardBody className="flex flex-wrap gap-x-8 gap-y-3 text-[length:var(--text-sm)]">
           <span className="flex items-center gap-2">
-            <Badge tone="success">Onaylanan</Badge>
-            <strong className="mono font-semibold">{formatNumber(data.approved)}</strong>
+            <Badge tone="success">{t("screens.reports.activities.approved")}</Badge>
+            <strong className="mono font-semibold">{formatNumber(data.approved, locale)}</strong>
           </span>
           <span className="flex items-center gap-2">
-            <Badge tone="waiting">Bekleyen</Badge>
-            <strong className="mono font-semibold">{formatNumber(data.pending)}</strong>
+            <Badge tone="waiting">{t("screens.reports.activities.pending")}</Badge>
+            <strong className="mono font-semibold">{formatNumber(data.pending, locale)}</strong>
           </span>
           <span className="flex items-center gap-2">
-            <Badge tone="correction">Düzeltme istenen</Badge>
-            <strong className="mono font-semibold">{formatNumber(data.changesRequested)}</strong>
+            <Badge tone="correction">{t("screens.reports.activities.changesRequested")}</Badge>
+            <strong className="mono font-semibold">{formatNumber(data.changesRequested, locale)}</strong>
           </span>
           <span className="flex items-center gap-2">
-            <Badge tone="danger">Uygun bulunmayan</Badge>
-            <strong className="mono font-semibold">{formatNumber(data.rejected)}</strong>
+            <Badge tone="danger">{t("screens.reports.activities.rejected")}</Badge>
+            <strong className="mono font-semibold">{formatNumber(data.rejected, locale)}</strong>
           </span>
           <span className="flex items-center gap-2">
-            <Badge tone="cancelled">İptal edilen</Badge>
-            <strong className="mono font-semibold">{formatNumber(data.cancelled)}</strong>
+            <Badge tone="cancelled">{t("screens.reports.activities.cancelled")}</Badge>
+            <strong className="mono font-semibold">{formatNumber(data.cancelled, locale)}</strong>
           </span>
           {data.pendingOlderThanSevenDays > 0 ? (
             <span className="flex items-center gap-2">
-              <Badge tone="danger">7 günden uzun bekleyen</Badge>
-              <strong className="mono font-semibold">{formatNumber(data.pendingOlderThanSevenDays)}</strong>
+              <Badge tone="danger">{t("screens.reports.activities.pendingLong")}</Badge>
+              <strong className="mono font-semibold">{formatNumber(data.pendingOlderThanSevenDays, locale)}</strong>
             </span>
           ) : null}
         </CardBody>
@@ -184,25 +231,25 @@ function ActivityReportView({ data }: { data: ActivityReport }) {
 
       <Card>
         <CardHeader
-          title="Birimlere göre faaliyet özeti"
-          description="Üst satırlar alt birimlerin toplamını da içerir; aynı faaliyet iki kez sayılmaz."
+          title={t("screens.reports.activities.byUnit")}
+          description={t("screens.reports.activities.byUnitDescription")}
         />
         {data.units.length === 0 ? (
           <EmptyState
-            title="Bu aralıkta faaliyet yok"
-            description="Seçtiğiniz dönem ve birim için henüz faaliyet bulunmuyor."
+            title={t("screens.reports.activities.noActivities")}
+            description={t("screens.reports.activities.noActivitiesDescription")}
           />
         ) : (
           <UnitSummaryTable
-            label="Birimlere göre faaliyet özeti"
+            label={t("screens.reports.activities.byUnit")}
             rows={data.units}
             columns={[
-              { key: "unit", header: "Birim", className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
-              { key: "activities", header: "Faaliyet", align: "right", className: "mono", render: (unit) => formatNumber(unit.activities) },
-              { key: "people", header: "Kişi", align: "right", className: "mono", render: (unit) => formatNumber(unit.people) },
-              { key: "approved", header: "Onaylanan", align: "right", className: "mono", render: (unit) => formatNumber(unit.approved) },
-              { key: "pending", header: "Bekleyen", align: "right", className: "mono", render: (unit) => formatNumber(unit.pending) },
-              { key: "approvalRate", header: "Onay oranı", align: "right", className: "mono", render: (unit) => formatPercentage(unit.approvalRate) },
+              { key: "unit", header: t("screens.reports.table.unit"), className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
+              { key: "activities", header: t("screens.reports.table.activities"), align: "right", className: "mono", render: (unit) => formatNumber(unit.activities, locale) },
+              { key: "people", header: t("screens.reports.table.people"), align: "right", className: "mono", render: (unit) => formatNumber(unit.people, locale) },
+              { key: "approved", header: t("screens.reports.table.approved"), align: "right", className: "mono", render: (unit) => formatNumber(unit.approved, locale) },
+              { key: "pending", header: t("screens.reports.table.pending"), align: "right", className: "mono", render: (unit) => formatNumber(unit.pending, locale) },
+              { key: "approvalRate", header: t("screens.reports.table.approvalRate"), align: "right", className: "mono", render: (unit) => formatPercentage(unit.approvalRate, locale) },
             ] satisfies readonly UnitSummaryColumn<(typeof data.units)[number]>[]}
           />
         )}
@@ -211,53 +258,49 @@ function ActivityReportView({ data }: { data: ActivityReport }) {
   );
 }
 
-function AbsenceReportView({ data }: { data: AbsenceReport }) {
+async function AbsenceReportView({ data, locale }: { data: AbsenceReport; locale: Locale }) {
+  const t = await getTranslations(locale);
   return (
     <div className="flex flex-col gap-(--spacing-block)">
       <StatStrip>
-        <Stat label="İzin talebi" value={formatNumber(data.periods)} />
-        <Stat label="İzin kullanan kişi" value={formatNumber(data.people)} />
-        <Stat label="Onaylanan gün" value={formatNumber(data.approvedDays)} tone="primary" />
-        <Stat label="Bekleyen gün" value={formatNumber(data.pendingDays)} tone={data.pendingDays > 0 ? "correction" : "neutral"} />
+        <Stat label={t("screens.reports.absence.requests")} value={formatNumber(data.periods, locale)} />
+        <Stat label={t("screens.reports.absence.people")} value={formatNumber(data.people, locale)} />
+        <Stat label={t("screens.reports.absence.approvedDays")} value={formatNumber(data.approvedDays, locale)} tone="primary" />
+        <Stat label={t("screens.reports.absence.pendingDays")} value={formatNumber(data.pendingDays, locale)} tone={data.pendingDays > 0 ? "correction" : "neutral"} />
       </StatStrip>
 
-      <Meaning>
-        Onaylanan gün sayısı planlanan izin kullanımını, bekleyen gün sayısı
-        yöneticinin hâlâ karar vermesi gereken iş yükünü gösterir. İzin
-        talepleri raporda gün hesabını bozmayacak şekilde seçilen dönemle
-        kesiştiği günler üzerinden sayılır.
-      </Meaning>
+      <Meaning t={t}>{t("screens.reports.absence.meaning")}</Meaning>
 
       <Card>
         <CardHeader
-          title="İzin taleplerinin durumu"
-          description="Bekleyen talepler karar verilmesi gereken, reddedilenler ise planlamaya dahil olmayan taleplerdir."
+          title={t("screens.reports.absence.status")}
+          description={t("screens.reports.absence.statusDescription")}
         />
         <CardBody className="flex flex-wrap gap-x-8 gap-y-3 text-[length:var(--text-sm)]">
-          <span className="flex items-center gap-2"><Badge tone="success">Onaylanan</Badge><strong className="mono">{formatNumber(data.approved)}</strong></span>
-          <span className="flex items-center gap-2"><Badge tone="waiting">Bekleyen</Badge><strong className="mono">{formatNumber(data.pending)}</strong></span>
-          <span className="flex items-center gap-2"><Badge tone="danger">Reddedilen</Badge><strong className="mono">{formatNumber(data.rejected)}</strong></span>
-          <span className="flex items-center gap-2"><Badge tone="cancelled">İptal edilen</Badge><strong className="mono">{formatNumber(data.cancelled)}</strong></span>
+          <span className="flex items-center gap-2"><Badge tone="success">{t("screens.reports.activities.approved")}</Badge><strong className="mono">{formatNumber(data.approved, locale)}</strong></span>
+          <span className="flex items-center gap-2"><Badge tone="waiting">{t("screens.reports.activities.pending")}</Badge><strong className="mono">{formatNumber(data.pending, locale)}</strong></span>
+          <span className="flex items-center gap-2"><Badge tone="danger">{t("screens.reports.activities.rejected")}</Badge><strong className="mono">{formatNumber(data.rejected, locale)}</strong></span>
+          <span className="flex items-center gap-2"><Badge tone="cancelled">{t("screens.reports.activities.cancelled")}</Badge><strong className="mono">{formatNumber(data.cancelled, locale)}</strong></span>
         </CardBody>
       </Card>
 
       <Card>
         <CardHeader
-          title="Birimlere göre izin özeti"
-          description="Kişi sayısı, aynı kişinin birden fazla izin dönemi olsa da bir kez sayılır."
+          title={t("screens.reports.absence.byUnit")}
+          description={t("screens.reports.absence.byUnitDescription")}
         />
         {data.units.length === 0 ? (
-          <EmptyState title="Bu aralıkta izin kaydı yok" description="Seçtiğiniz dönem ve birim için izin talebi bulunmuyor." />
+          <EmptyState title={t("screens.reports.absence.noRecords")} description={t("screens.reports.absence.noRecordsDescription")} />
         ) : (
           <UnitSummaryTable
-            label="Birimlere göre izin özeti"
+            label={t("screens.reports.absence.byUnit")}
             rows={data.units}
             columns={[
-              { key: "unit", header: "Birim", className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
-              { key: "people", header: "Kişi", align: "right", className: "mono", render: (unit) => formatNumber(unit.people) },
-              { key: "periods", header: "Talep", align: "right", className: "mono", render: (unit) => formatNumber(unit.periods) },
-              { key: "approvedDays", header: "Onaylanan gün", align: "right", className: "mono", render: (unit) => formatNumber(unit.approvedDays) },
-              { key: "pending", header: "Bekleyen talep", align: "right", className: "mono", render: (unit) => formatNumber(unit.pending) },
+              { key: "unit", header: t("screens.reports.table.unit"), className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
+              { key: "people", header: t("screens.reports.table.people"), align: "right", className: "mono", render: (unit) => formatNumber(unit.people, locale) },
+              { key: "periods", header: t("screens.reports.absence.requestsColumn"), align: "right", className: "mono", render: (unit) => formatNumber(unit.periods, locale) },
+              { key: "approvedDays", header: t("screens.reports.table.approvedDays"), align: "right", className: "mono", render: (unit) => formatNumber(unit.approvedDays, locale) },
+              { key: "pending", header: t("screens.reports.absence.pendingRequests"), align: "right", className: "mono", render: (unit) => formatNumber(unit.pending, locale) },
             ] satisfies readonly UnitSummaryColumn<(typeof data.units)[number]>[]}
           />
         )}
@@ -266,52 +309,61 @@ function AbsenceReportView({ data }: { data: AbsenceReport }) {
   );
 }
 
-function NotificationsReportView({ data }: { data: NotificationsReport }) {
+async function NotificationsReportView({ data, locale }: { data: NotificationsReport; locale: Locale }) {
+  const t = await getTranslations(locale);
   return (
     <div className="flex flex-col gap-(--spacing-block)">
       <StatStrip>
-        <Stat label="Bildirim" value={formatNumber(data.total)} />
-        <Stat label="Başarı oranı" value={formatPercentage(data.successRate)} tone={data.successRate !== null && data.successRate < 90 ? "correction" : "primary"} />
-        <Stat label="Gönderilen" value={formatNumber(data.sent)} tone="primary" />
-        <Stat label="Başarısız" value={formatNumber(data.failed)} tone={data.failed > 0 ? "correction" : "neutral"} />
+        <Stat label={t("screens.reports.notifications.total")} value={formatNumber(data.total, locale)} />
+        <Stat label={t("screens.reports.notifications.successRate")} value={formatPercentage(data.successRate, locale)} tone={data.successRate !== null && data.successRate < 90 ? "correction" : "primary"} />
+        <Stat label={t("screens.reports.notifications.submitted")} value={formatNumber(data.sent, locale)} tone="primary" />
+        <Stat label={t("screens.reports.notifications.failed")} value={formatNumber(data.failed, locale)} tone={data.failed > 0 ? "correction" : "neutral"} />
       </StatStrip>
 
-      <Meaning>
-        Başarı oranı, gönderim denemesi sonuçlanan bildirimler içinde başarıyla
-        gönderilenlerin oranıdır. Bekleyenler henüz başarısız sayılmaz; bu
-        rapor bildirim metnini veya kişisel içeriği göstermez.
-      </Meaning>
+      <Meaning t={t}>{t("screens.reports.notifications.meaning")}</Meaning>
 
       <div className="grid gap-(--spacing-block) lg:grid-cols-2">
         <Breakdown
-          title="Kanala göre dağılım"
-          description="Bildirimlerin e-posta ve tarayıcı kanallarındaki dağılımı."
-          items={data.byChannel}
+          title={t("screens.reports.notifications.byChannel")}
+          description={t("screens.reports.notifications.byChannelDescription")}
+          items={data.byChannel.map((item) => ({
+            label: notificationChannelLabel(item.key, t),
+            count: item.count,
+          }))}
+          emptyTitle={t("screens.reports.noDataTitle")}
+          emptyDescription={t("screens.reports.noDataDescription")}
+          locale={locale}
         />
         <Breakdown
-          title="Olaylara göre dağılım"
-          description="En çok bildirim üreten iş akışlarını görmenizi sağlar."
-          items={data.byEvent}
+          title={t("screens.reports.notifications.byEvent")}
+          description={t("screens.reports.notifications.byEventDescription")}
+          items={data.byEvent.map((item) => ({
+            label: notificationEventLabel(item.key, t),
+            count: item.count,
+          }))}
+          emptyTitle={t("screens.reports.noDataTitle")}
+          emptyDescription={t("screens.reports.noDataDescription")}
+          locale={locale}
         />
       </div>
 
       <Card>
         <CardHeader
-          title="Birimlere göre bildirim özeti"
-          description="Kuyruktaki bildirim sayıları kişi bağlı olduğu birime göre gruplanır."
+          title={t("screens.reports.notifications.byUnit")}
+          description={t("screens.reports.notifications.byUnitDescription")}
         />
         {data.units.length === 0 ? (
-          <EmptyState title="Bu aralıkta bildirim yok" description="Seçtiğiniz dönem ve birim için bildirim üretilmemiş." />
+          <EmptyState title={t("screens.reports.notifications.noRecords")} description={t("screens.reports.notifications.noRecordsDescription")} />
         ) : (
           <UnitSummaryTable
-            label="Birimlere göre bildirim özeti"
+            label={t("screens.reports.notifications.byUnit")}
             rows={data.units}
             columns={[
-              { key: "unit", header: "Birim", className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
-              { key: "total", header: "Toplam", align: "right", className: "mono", render: (unit) => formatNumber(unit.total) },
-              { key: "sent", header: "Gönderilen", align: "right", className: "mono", render: (unit) => formatNumber(unit.sent) },
-              { key: "pending", header: "Bekleyen", align: "right", className: "mono", render: (unit) => formatNumber(unit.pending) },
-              { key: "failed", header: "Başarısız", align: "right", className: "mono", render: (unit) => formatNumber(unit.failed) },
+              { key: "unit", header: t("screens.reports.table.unit"), className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
+              { key: "total", header: t("screens.reports.table.total"), align: "right", className: "mono", render: (unit) => formatNumber(unit.total, locale) },
+              { key: "sent", header: t("screens.reports.table.submitted"), align: "right", className: "mono", render: (unit) => formatNumber(unit.sent, locale) },
+              { key: "pending", header: t("screens.reports.table.pending"), align: "right", className: "mono", render: (unit) => formatNumber(unit.pending, locale) },
+              { key: "failed", header: t("screens.reports.table.failed"), align: "right", className: "mono", render: (unit) => formatNumber(unit.failed, locale) },
             ] satisfies readonly UnitSummaryColumn<(typeof data.units)[number]>[]}
           />
         )}
@@ -320,55 +372,51 @@ function NotificationsReportView({ data }: { data: NotificationsReport }) {
   );
 }
 
-function ScoresReportView({ data }: { data: ScoresReport }) {
+async function ScoresReportView({ data, locale }: { data: ScoresReport; locale: Locale }) {
+  const t = await getTranslations(locale);
   return (
     <div className="flex flex-col gap-(--spacing-block)">
       <StatStrip>
-        <Stat label="Karne kaydı" value={formatNumber(data.periods)} />
-        <Stat label="Puanlanan kişi" value={formatNumber(data.people)} />
-        <Stat label="Ortalama genel puan" value={formatScore(data.averageTotal)} tone="primary" />
-        <Stat label="Takdir puanı" value={`+${formatNumber(data.appreciationPoints)}`} tone={data.appreciationPoints > 0 ? "primary" : "neutral"} />
+        <Stat label={t("screens.reports.scores.scorecards")} value={formatNumber(data.periods, locale)} />
+        <Stat label={t("screens.reports.scores.people")} value={formatNumber(data.people, locale)} />
+        <Stat label={t("screens.reports.scores.average")} value={formatScore(data.averageTotal, locale, t)} tone="primary" />
+        <Stat label={t("screens.reports.scores.appreciationPoints")} value={`+${formatNumber(data.appreciationPoints, locale)}`} tone={data.appreciationPoints > 0 ? "primary" : "neutral"} />
       </StatStrip>
 
-      <Meaning>
-        Genel puan, dönem karne kayıtlarının ortalamasıdır. Düzenli raporlama,
-        kabul veya onay süresi ve takip disiplini üç temel bölüm olarak ayrı
-        gösterilir; takdir puanı ise ayrıca eklenen katkıyı anlatır. Bu rapor
-        yalnız kapanmış dönemleri kullanır.
-      </Meaning>
+      <Meaning t={t}>{t("screens.reports.scores.meaning")}</Meaning>
 
       <Card>
         <CardHeader
-          title="Puan bölümleri"
-          description="Bir bölümün boş olması, o dönemde o ölçümün kişi için geçerli olmadığı anlamına gelir."
+          title={t("screens.reports.scores.sections")}
+          description={t("screens.reports.scores.sectionsDescription")}
         />
         <CardBody className="flex flex-wrap gap-x-8 gap-y-3 text-[length:var(--text-sm)]">
-          <span>Düzenli raporlama: <strong className="mono">{formatScore(data.averageRegularity)}</strong></span>
-          <span>Kabul oranı: <strong className="mono">{formatScore(data.averageAcceptance)}</strong></span>
-          <span>Onay süresi: <strong className="mono">{formatScore(data.averageApproval)}</strong></span>
-          <span>Takip disiplini: <strong className="mono">{formatScore(data.averageFollowUp)}</strong></span>
-          <span>Takdir sayısı: <strong className="mono">{formatNumber(data.appreciationCount)}</strong></span>
+          <span>{t("screens.reports.scores.regularity")} <strong className="mono">{formatScore(data.averageRegularity, locale, t)}</strong></span>
+          <span>{t("screens.reports.scores.acceptance")} <strong className="mono">{formatScore(data.averageAcceptance, locale, t)}</strong></span>
+          <span>{t("screens.reports.scores.approval")} <strong className="mono">{formatScore(data.averageApproval, locale, t)}</strong></span>
+          <span>{t("screens.reports.scores.followUp")} <strong className="mono">{formatScore(data.averageFollowUp, locale, t)}</strong></span>
+          <span>{t("screens.reports.scores.appreciations")} <strong className="mono">{formatNumber(data.appreciationCount, locale)}</strong></span>
         </CardBody>
       </Card>
 
       <Card>
         <CardHeader
-          title="Birimlere göre skor özeti"
-          description="Üst satırlar alt birimlerin karne kayıtlarını da içerir."
+          title={t("screens.reports.scores.byUnit")}
+          description={t("screens.reports.scores.byUnitDescription")}
         />
         {data.units.length === 0 ? (
-          <EmptyState title="Kapanmış skor dönemi yok" description="Seçtiğiniz aralıkta raporlanacak donmuş dönem bulunmuyor." />
+          <EmptyState title={t("screens.reports.scores.noRecords")} description={t("screens.reports.scores.noRecordsDescription")} />
         ) : (
           <UnitSummaryTable
-            label="Birimlere göre skor özeti"
+            label={t("screens.reports.scores.byUnit")}
             rows={data.units}
             columns={[
-              { key: "unit", header: "Birim", className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
-              { key: "periods", header: "Karne", align: "right", className: "mono", render: (unit) => formatNumber(unit.periods) },
-              { key: "people", header: "Kişi", align: "right", className: "mono", render: (unit) => formatNumber(unit.people) },
-              { key: "averageTotal", header: "Ort. puan", align: "right", className: "mono", render: (unit) => formatScore(unit.averageTotal) },
-              { key: "appreciationCount", header: "Takdir", align: "right", className: "mono", render: (unit) => formatNumber(unit.appreciationCount) },
-              { key: "appreciationPoints", header: "Takdir puanı", align: "right", className: "mono", render: (unit) => `+${formatNumber(unit.appreciationPoints)}` },
+              { key: "unit", header: t("screens.reports.table.unit"), className: "font-medium", render: (unit) => formatUnitName(unit.name, unit.depth) },
+              { key: "periods", header: t("screens.reports.scores.scorecardsColumn"), align: "right", className: "mono", render: (unit) => formatNumber(unit.periods, locale) },
+              { key: "people", header: t("screens.reports.table.people"), align: "right", className: "mono", render: (unit) => formatNumber(unit.people, locale) },
+              { key: "averageTotal", header: t("screens.reports.scores.averageScore"), align: "right", className: "mono", render: (unit) => formatScore(unit.averageTotal, locale, t) },
+              { key: "appreciationCount", header: t("screens.reports.table.appreciations"), align: "right", className: "mono", render: (unit) => formatNumber(unit.appreciationCount, locale) },
+              { key: "appreciationPoints", header: t("screens.reports.table.appreciationPoints"), align: "right", className: "mono", render: (unit) => `+${formatNumber(unit.appreciationPoints, locale)}` },
             ] satisfies readonly UnitSummaryColumn<(typeof data.units)[number]>[]}
           />
         )}
@@ -377,37 +425,39 @@ function ScoresReportView({ data }: { data: ScoresReport }) {
   );
 }
 
-function FeedbackReportView({ data }: { data: FeedbackReport }) {
+async function FeedbackReportView({ data, locale }: { data: FeedbackReport; locale: Locale }) {
+  const t = await getTranslations(locale);
   return (
     <div className="flex flex-col gap-(--spacing-block)">
       <StatStrip>
-        <Stat label="Geri bildirim" value={formatNumber(data.total)} />
-        <Stat label="Yeni" value={formatNumber(data.newCount)} tone={data.newCount > 0 ? "primary" : "neutral"} />
-        <Stat label="İncelemede" value={formatNumber(data.inReview)} tone={data.inReview > 0 ? "correction" : "neutral"} />
-        <Stat label="Çözülen" value={formatNumber(data.resolved)} tone="primary" />
+        <Stat label={t("screens.reports.feedback.total")} value={formatNumber(data.total, locale)} />
+        <Stat label={t("screens.reports.feedback.new")} value={formatNumber(data.newCount, locale)} tone={data.newCount > 0 ? "primary" : "neutral"} />
+        <Stat label={t("screens.reports.feedback.inReview")} value={formatNumber(data.inReview, locale)} tone={data.inReview > 0 ? "correction" : "neutral"} />
+        <Stat label={t("screens.reports.feedback.resolved")} value={formatNumber(data.resolved, locale)} tone="primary" />
       </StatStrip>
 
-      <Meaning>
-        Yeni ve incelemedeki geri bildirimler yöneticinin ele alması gereken
-        iş yükünü, ilk okuma ve çözüm süreleri ise kullanıcıya ne kadar hızlı
-        dönüş yapıldığını gösterir. İçerik rapora dahil edilmez; detaylar
-        yalnız geri bildirim yönetimi ekranında yetkili yöneticilere açıktır.
-      </Meaning>
+      <Meaning t={t}>{t("screens.reports.feedback.meaning")}</Meaning>
 
       <div className="grid gap-(--spacing-block) lg:grid-cols-2">
         <Breakdown
-          title="Türlere göre dağılım"
-          description="Hata, öneri, eleştiri ve soru kayıtlarının sayısı."
-          items={data.byCategory}
+          title={t("screens.reports.feedback.byType")}
+          description={t("screens.reports.feedback.byTypeDescription")}
+          items={data.byCategory.map((item) => ({
+            label: feedbackCategoryLabel(item.key, t),
+            count: item.count,
+          }))}
+          emptyTitle={t("screens.reports.noDataTitle")}
+          emptyDescription={t("screens.reports.noDataDescription")}
+          locale={locale}
         />
         <Card>
           <CardHeader
-            title="Yanıt süresi"
-            description="Kullanıcının bekleme deneyimini takip etmek için ortalamalar."
+            title={t("screens.reports.feedback.responseTime")}
+            description={t("screens.reports.feedback.responseTimeDescription")}
           />
           <CardBody className="grid grid-cols-2 gap-6 sm:max-w-lg">
-            <Stat label="İlk okuma" value={formatDuration(data.averageFirstReadHours)} />
-            <Stat label="Çözüm" value={formatDuration(data.averageResolutionHours)} />
+            <Stat label={t("screens.reports.feedback.firstRead")} value={formatDuration(data.averageFirstReadHours, locale, t)} />
+            <Stat label={t("screens.reports.feedback.resolution")} value={formatDuration(data.averageResolutionHours, locale, t)} />
           </CardBody>
         </Card>
       </div>
@@ -415,51 +465,56 @@ function FeedbackReportView({ data }: { data: FeedbackReport }) {
   );
 }
 
-function ReportDataView({ data }: { data: ReportView["data"] }) {
+function ReportDataView({ data, locale }: { data: ReportView["data"]; locale: Locale }) {
   switch (data.tab) {
     case "absence":
-      return <AbsenceReportView data={data} />;
+      return <AbsenceReportView data={data} locale={locale} />;
     case "notifications":
-      return <NotificationsReportView data={data} />;
+      return <NotificationsReportView data={data} locale={locale} />;
     case "scores":
-      return <ScoresReportView data={data} />;
+      return <ScoresReportView data={data} locale={locale} />;
     case "feedback":
-      return <FeedbackReportView data={data} />;
+      return <FeedbackReportView data={data} locale={locale} />;
     case "activities":
     default:
-      return <ActivityReportView data={data} />;
+      return <ActivityReportView data={data} locale={locale} />;
   }
 }
 
-function ReportFilters({
+async function ReportFilters({
   report,
   period,
   tab,
+  locale,
   selectedUnitId,
 }: {
   report: ReportView;
   period: ReportPeriod;
   tab: ReportTab;
+  locale: Locale;
   selectedUnitId?: string;
 }) {
+  const t = await getTranslations(locale);
   return (
     <Card className="bg-raised">
       <CardBody>
         <form method="get" className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <input type="hidden" name="sekme" value={tab} />
+          <input type="hidden" name="tab" value={tab} />
           <label className="flex min-w-0 flex-1 flex-col gap-1.5 sm:max-w-xs">
-            <span className="text-[length:var(--text-sm)] font-medium text-ink">Dönem</span>
-            <Select name="donem" defaultValue={period}>
+            <span className="text-[length:var(--text-sm)] font-medium text-ink">{t("screens.reports.period")}</span>
+            <Select name="period" defaultValue={period}>
               {REPORT_PERIODS.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
+                <option key={item.value} value={item.value}>
+                  {t("screens.reports.periods." + item.value)}
+                </option>
               ))}
             </Select>
           </label>
           {tab !== "feedback" ? (
             <label className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <span className="text-[length:var(--text-sm)] font-medium text-ink">Birim kapsamı</span>
-              <Select name="birim" defaultValue={selectedUnitId ?? ""}>
-                <option value="">{report.scope.rootOrgUnitName} ve alt birimleri</option>
+              <span className="text-[length:var(--text-sm)] font-medium text-ink">{t("screens.reports.unitScope")}</span>
+              <Select name="unit" defaultValue={selectedUnitId ?? ""}>
+                <option value="">{t("screens.reports.rootAndChildren", { unit: report.scope.rootOrgUnitName })}</option>
                 {report.scope.units.map((unit) => (
                   <option key={unit.id} value={unit.id}>
                     {`${"· ".repeat(Math.min(unit.depth, 6))}${unit.name}`}
@@ -468,19 +523,22 @@ function ReportFilters({
               </Select>
             </label>
           ) : null}
-          <Button type="submit" size="sm">Uygula</Button>
+          <Button type="submit" size="sm">{t("screens.reports.apply")}</Button>
           {selectedUnitId || period !== "month" ? (
             <Link href={reportHref(tab, "month")} className="inline-flex h-8 items-center px-2.5 text-[length:var(--text-xs)] text-muted hover:text-ink">
-              Temizle
+              {t("screens.reports.clear")}
             </Link>
           ) : null}
         </form>
         <p className="mt-3 text-[length:var(--text-xs)] text-muted">
-          Rapor aralığı: <span className="font-medium text-ink">{report.range.label}</span>
+          {t("screens.reports.reportRange")}{" "}
+          <span className="font-medium text-ink">
+            {t("screens.reports.periods." + report.range.period)}
+          </span>
           {tab === "feedback" ? (
-            <> · Bu özet sistem yöneticileri için tüm sistem verisini gösterir.</>
+            <> · {t("screens.reports.feedbackScope")}</>
           ) : (
-            <> · Kapsam: <span className="font-medium text-ink">{report.selectedScope.rootOrgUnitName}</span> ve alt birimleri</>
+            <> · {t("screens.reports.scopePrefix")} <span className="font-medium text-ink">{report.selectedScope.rootOrgUnitName}</span> {t("screens.reports.childUnits")}</>
           )}
         </p>
       </CardBody>
@@ -493,12 +551,14 @@ export function ReportsView({
   tabs,
   tab,
   period,
+  locale,
   selectedUnitId,
 }: {
   report: ReportView;
   tabs: ReportTabOption[];
   tab: ReportTab;
   period: ReportPeriod;
+  locale: Locale;
   selectedUnitId?: string;
 }) {
   const activeHref = reportHref(tab, period, selectedUnitId);
@@ -518,27 +578,28 @@ export function ReportsView({
         report={report}
         period={period}
         tab={tab}
+        locale={locale}
         selectedUnitId={selectedUnitId}
       />
 
-      <ReportDataView data={report.data} />
+      <ReportDataView data={report.data} locale={locale} />
     </>
   );
 }
 
-export function ReportPageFrame({
+export async function ReportPageFrame({
   children,
   report,
 }: {
   children: ReactNode;
   report: ReportView;
 }) {
+  const t = await getTranslations();
   return (
-    <Page isaret="raporlar">
+    <Page marker="reports">
       {children}
       <p className="text-[length:var(--text-xs)] text-faint">
-        Bu ekran karar vermeyi kolaylaştıran toplu göstergeler sunar. Kayıt
-        metinleri ve kişisel bildirim içerikleri raporlama kapsamına alınmaz.
+        {t("screens.reports.frameNote")}
       </p>
       <span className="sr-only">{report.selectedScope.rootOrgUnitName}</span>
     </Page>

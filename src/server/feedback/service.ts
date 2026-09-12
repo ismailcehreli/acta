@@ -49,7 +49,7 @@ export type FeedbackCreateInput = {
   title: string;
   description: string;
   sourcePath?: string | null;
-  /** Eski kayıtlarla uyumluluk için tutulur; yeni kayıtlar sistem yöneticilerine açıktır. */
+
   adminsOnly?: boolean;
 };
 
@@ -180,7 +180,7 @@ export async function createFeedback(
     return {
       ok: false,
       error: "invalid",
-      message: "Başlık ve açıklama geçerli uzunlukta olmalı; HTML kullanılamaz.",
+      message: "The title and description must have valid lengths; HTML is not allowed.",
     };
   }
 
@@ -239,7 +239,7 @@ export async function listManageableFeedback(
   return rows.map(toView);
 }
 
-/** Yönetici ana ekranında gösterilecek yeni geri bildirim sayısı. */
+
 export async function countManageableFeedback(
   db: Pick<PrismaClient, "feedback" | "user">,
   actorId: string,
@@ -260,7 +260,7 @@ export async function markFeedbackRead(
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   return db.$transaction(async (tx) => {
     const row = await manageableFeedback(tx, actorId, feedbackId);
-    if (!row) return { ok: false as const, message: "Geri bildirim bulunamadı." };
+    if (!row) return { ok: false as const, message: "Feedback not found." };
     if (row.readAt) return { ok: true as const };
 
     await tx.feedback.update({
@@ -280,7 +280,7 @@ export async function archiveFeedback(
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   return db.$transaction(async (tx) => {
     const existing = await manageableFeedback(tx, actorId, feedbackId);
-    if (!existing) return { ok: false as const, message: "Geri bildirim bulunamadı." };
+    if (!existing) return { ok: false as const, message: "Feedback not found." };
 
     await tx.feedback.update({
       where: { id: feedbackId },
@@ -313,7 +313,7 @@ export async function updateFeedback(
     return {
       ok: false,
       error: "invalid",
-      message: "Yanıt boş olmamalı, 5000 karakteri geçmemeli ve HTML içermemeli.",
+      message: "A reply must not be empty, exceed 5,000 characters, or contain HTML.",
     };
   }
 
@@ -323,12 +323,12 @@ export async function updateFeedback(
       return {
         ok: false as const,
         error: "not_found" as const,
-        message: "Geri bildirim bulunamadı.",
+        message: "Feedback not found.",
       };
     }
 
-    const inceleme = input.status !== "NEW";
-    const cozuldu = input.status === "RESOLVED";
+    const isInReview = input.status !== "NEW";
+    const isResolved = input.status === "RESOLVED";
     const nextResponse = response === undefined ? existing.response : response;
     const statusChanged = existing.status !== input.status;
     const responseChanged = existing.response !== nextResponse;
@@ -339,10 +339,10 @@ export async function updateFeedback(
         ...(response === undefined ? {} : { response }),
         readAt: existing.readAt ?? now,
         readById: existing.readBy ? undefined : actorId,
-        reviewedAt: inceleme ? existing.reviewedAt ?? now : existing.reviewedAt,
-        reviewedById: inceleme ? (existing.reviewedBy ? undefined : actorId) : undefined,
-        resolvedAt: cozuldu ? existing.resolvedAt ?? now : null,
-        resolvedById: cozuldu
+        reviewedAt: isInReview ? existing.reviewedAt ?? now : existing.reviewedAt,
+        reviewedById: isInReview ? (existing.reviewedBy ? undefined : actorId) : undefined,
+        resolvedAt: isResolved ? existing.resolvedAt ?? now : null,
+        resolvedById: isResolved
           ? existing.resolvedBy
             ? undefined
             : actorId
@@ -383,23 +383,23 @@ export async function updateFeedback(
 export function feedbackCategoryLabel(category: FeedbackCategory): string {
   switch (category) {
     case "BUG":
-      return "Hata";
+      return "Bug report";
     case "SUGGESTION":
-      return "Öneri";
+      return "Suggestion";
     case "CRITIQUE":
-      return "Eleştiri";
+      return "Criticism";
     case "QUESTION":
-      return "Soru";
+      return "Question";
   }
 }
 
 export function feedbackStatusLabel(status: FeedbackStatus): string {
   switch (status) {
     case "NEW":
-      return "Yeni";
+      return "New";
     case "IN_REVIEW":
-      return "İnceleniyor";
+      return "In review";
     case "RESOLVED":
-      return "Çözüldü";
+      return "Resolved";
   }
 }

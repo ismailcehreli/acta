@@ -1,19 +1,18 @@
-// Süzgeçleri koruyan adres üretici (Görev 11.3).
+// URL builder that preserves filters (Task 11.3).
 //
-// Listeleyen her sayfada aynı iş yapılıyor: sayfalama, sayfa boyu ve
-// daraltma bağlantıları kullanıcının **mevcut seçimini taşımalı.** Her
-// sayfada elle yazıldığında biri unutuluyordu — arama sayfasında sayfalama
-// yalnız arama kelimesini taşıyordu ve süzgeç uygulayıp ikinci sayfaya geçen
-// kullanıcı bütün daraltmasını kaybediyordu.
+// Every listing page needs the same behavior: pagination, page size, and filter
+// links must preserve the user's **current selection**. Hand-writing each URL
+// caused one value to be forgotten; the search page once preserved only the
+// query, so moving to page two lost every filter.
 //
-// Boş değer bir seçim değildir ve yazılmaz: adres çubuğunu `durum=` gibi
-// anlamsız parçalarla doldurmak, paylaşılan bağlantıyı okunmaz yapar.
+// An empty value is not a selection and is omitted. This keeps shared links
+// readable instead of filling the address bar with fragments such as `status=`.
 
 /**
- * @param path      Sayfanın yolu (`/activities`).
- * @param current   Mevcut seçim; boş ve tanımsız değerler atılır.
- * @param extra     Bu bağlantıya özel eklemeler; aynı adı ezer.
- * @param drop      Bilerek düşürülecek parametreler ("daraltmayı kaldır").
+ * @param path      Page path (`/activities`).
+ * @param current   Current selection; empty and undefined values are removed.
+ * @param extra     Link-specific additions; duplicate names override current values.
+ * @param drop      Parameters intentionally removed ("clear filter").
  */
 export function buildQueryAddress(
   path: string,
@@ -21,14 +20,14 @@ export function buildQueryAddress(
   extra: Record<string, string> = {},
   drop: string[] = [],
 ): string {
-  const sorgu = new URLSearchParams();
+  const query = new URLSearchParams();
 
-  for (const [ad, deger] of Object.entries({ ...current, ...extra })) {
-    if (deger === undefined || deger === "") continue;
-    if (drop.includes(ad)) continue;
-    sorgu.set(ad, deger);
+  for (const [name, value] of Object.entries({ ...current, ...extra })) {
+    if (value === undefined || value === "") continue;
+    if (drop.includes(name)) continue;
+    query.set(name, value);
   }
 
-  const metin = sorgu.toString();
-  return metin === "" ? path : `${path}?${metin}`;
+  const text = query.toString();
+  return text === "" ? path : `${path}?${text}`;
 }

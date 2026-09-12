@@ -1,27 +1,27 @@
-// Baş harf rozetinin rengi (Görev 11.5).
+// Initials-badge color (Task 11.5).
 //
-// Renk **kimlikten türetilir ve değişmez**: aynı kişi her ekranda aynı renkte
-// görünmeli, yoksa göz rengi bir işaret olarak kullanamaz. Rastgele ya da
-// sıraya bağlı renk, aynı kişiyi listede bir türlü, profilde başka türlü
-// gösterirdi.
+// Color is **derived from identity and stable**: the same person must have the
+// same color everywhere, or color cannot serve as a visual cue. Random or
+// order-based colors would show the same person differently in a list and
+// profile.
 //
-// Paletteki her ton koyu zeminde açık metinle en az 4.5:1 kontrast verecek
-// şekilde seçildi (WCAG AA); ton sayısı bilerek küçük — altı renk ayırt
-// edilebilir, on iki renk birbirine karışır.
+// Each palette tone provides at least 4.5:1 contrast with light text on a dark
+// background (WCAG AA). The palette is intentionally small: six colors remain
+// distinguishable while twelve begin to blur together.
 
 export const AVATAR_TONE_COUNT = 6;
 
 /**
- * Kimlikten kararlı bir ton numarası (0–5).
+ * Returns a stable tone number derived from identity (0–5).
  *
- * Basit bir toplama karması yetiyor: burada güvenlik değil **kararlılık**
- * aranıyor ve kimlikler UUID olduğu için dağılım zaten düzgün.
+ * A simple additive hash is enough: this needs **stability**, not security, and
+ * UUID identities already distribute well.
  */
 export function avatarToneIndex(id: string): number {
-  let toplam = 0;
+  let total = 0;
   for (let i = 0; i < id.length; i += 1) {
-    toplam = (toplam + id.charCodeAt(i)) % (AVATAR_TONE_COUNT * 997);
+    total = (total + id.charCodeAt(i)) % (AVATAR_TONE_COUNT * 997);
   }
 
-  return toplam % AVATAR_TONE_COUNT;
+  return total % AVATAR_TONE_COUNT;
 }

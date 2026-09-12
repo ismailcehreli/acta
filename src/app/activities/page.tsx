@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { getLocale } from "@/server/i18n/locale";
+import { getLocalizedMetadata, getTranslations } from "@/server/i18n/server";
 import {
   countOwnActivities,
   listOwnActivities,
@@ -16,7 +18,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader, EmptyState } from "@/components/ui/card";
 import { Page, PageHeader } from "@/components/ui/page";
 import { Pagination } from "@/components/ui/pagination";
-import { DONEM_SECENEKLERI, FilterBar } from "@/components/filters/filter-bar";
+import { FilterBar } from "@/components/filters/filter-bar";
 import { buildQueryAddress } from "@/shared/filters/query-address";
 import { resolvePageSize } from "@/server/preferences/page-size";
 import { RecordItem, RecordList } from "@/components/ui/table";
@@ -24,70 +26,53 @@ import { ApprovalBadge } from "@/components/activities/approval-badge";
 import { formatDay } from "@/shared/format/date-time";
 import { describeActivityDates } from "@/shared/format/activity-dates";
 
-// Kendi faaliyetlerim (§5, §13). Kapsam akışı ana ekrandadır; burada yalnız
-// kişinin kendi yazdıkları listelenir — düzeltme ve iptal buradan yapılır.
+export async function generateMetadata() {
+  return getLocalizedMetadata("screens.activitiesPage.pageTitle");
+}
 
-export const metadata = { title: "Faaliyetlerim" };
-
-/** Adres çubuğundaki dönem; tanınmayan değer "tümü" sayılır. */
 function parsePeriod(value: string | undefined): OwnActivityFilters["period"] {
   return value === "today" || value === "week" || value === "all" ? value : "all";
 }
 
-// Kendi arşivinde varsayılan dönem **tümü**dür: kişi burada geçmişini arar,
-// kapsam akışında ise günceli izler. İki ekranın varsayılanı bilerek farklı.
-const DURUMLAR: Record<string, NonNullable<OwnActivityFilters["status"]>> = {
-  onay: "PENDING_APPROVAL",
-  duzeltme: "CHANGES_REQUESTED",
-  reddedilen: "REJECTED",
-  iptal: "CANCELLED",
-};
-
-const BILGI: Record<string, string> = {
-  eklendi: "Faaliyet kaydedildi.",
-  iptal: "Faaliyet iptal edildi. Kayıt silinmez; gerekçesiyle birlikte görünür.",
-  duzeltildi: "Faaliyet düzeltildi; revizyon kaydı tutuldu.",
+const STATUS_FILTERS: Record<string, NonNullable<OwnActivityFilters["status"]>> = {
+  approval: "PENDING_APPROVAL",
+  changesRequested: "CHANGES_REQUESTED",
+  rejected: "REJECTED",
+  cancelled: "CANCELLED",
 };
 
 export default async function ActivitiesPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    kayit?: string;
-    sayfa?: string;
-    boyut?: string;
+    record?: string;
+    page?: string;
+    pageSize?: string;
     period?: string;
-    durum?: string;
+    status?: string;
     targetOrgUnitId?: string;
   }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const locale = await getLocale();
+  const t = await getTranslations(locale);
   const params = await searchParams;
-  const { kayit } = params;
   const viewer = { id: user.id, isSystemAdmin: user.isSystemAdmin };
+  const requested = Number.parseInt(params.page ?? "1", 10);
+  const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
+  const pageSize = await resolvePageSize(params.pageSize);
 
-  // Sayfa numarası adres çubuğundan gelir; doğrulanmadan sorguya girmez.
-  const istenen = Number.parseInt(params.sayfa ?? "1", 10);
-  const sayfa = Number.isFinite(istenen) && istenen > 0 ? istenen : 1;
-
-  // Sayfa boyu tercihi: adres çubuğu → çerez → varsayılan. Kendi arşivi
-  // durağan olduğu için numaralı sayfalama burada güvenli.
-  const SAYFA_BOYU = await resolvePageSize(params.boyut);
-
-  // Süzgeçler adres çubuğundan gelir ve **doğrulanmadan** sorguya girmez:
-  // tanınmayan bir değer süzgeci sessizce düşürür, hataya çevirmez — eski
-  // bir bağlantı bozuk sayfa açmasın (Görev 11.3).
   const filters: OwnActivityFilters = {
     period: parsePeriod(params.period),
     now: new Date(),
-    status: params.durum ? DURUMLAR[params.durum] : undefined,
-    openQuestions: params.durum === "soru" || undefined,
+    status: params.status ? STATUS_FILTERS[params.status] : undefined,
+    openQuestions: params.status === "questions" || undefined,
     targetOrgUnitId: params.targetOrgUnitId || undefined,
   };
 
-  const [toplam, subordinates, departments] = await Promise.all([
+  const [total, subordinates, departments] = await Promise.all([
     countOwnActivities(prisma, viewer, filters),
     subordinateUserIds(prisma, user.id),
     prisma.orgUnit.findMany({
@@ -97,63 +82,68 @@ export default async function ActivitiesPage({
     }),
   ]);
 
-  const sayfaSayisi = Math.max(1, Math.ceil(toplam / SAYFA_BOYU));
-  // Var olmayan sayfaya gidilirse son sayfa gösterilir: boş bir ekran yerine
-  // kullanıcının aradığı yerin sonu.
-  const gecerliSayfa = Math.min(sayfa, sayfaSayisi);
-
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, pageCount);
   const activities = await listOwnActivities(prisma, viewer, filters, {
-    limit: SAYFA_BOYU,
-    skip: (gecerliSayfa - 1) * SAYFA_BOYU,
+    limit: pageSize,
+    skip: (currentPage - 1) * pageSize,
   });
 
-  /** Süzgeçleri koruyan adres; sayfalama ve boy seçimi bunu kullanır. */
-  const adres = (ek: Record<string, string> = {}) =>
+  const address = (attachment: Record<string, string> = {}) =>
     buildQueryAddress(
       "/activities",
       {
         period: params.period,
-        durum: params.durum,
+        status: params.status,
         targetOrgUnitId: params.targetOrgUnitId,
-        boyut: String(SAYFA_BOYU),
+        pageSize: String(pageSize),
       },
-      ek,
+      attachment,
     );
 
-  const suzgecliMi =
+  const isFiltered =
     (params.period ?? "all") !== "all" ||
-    Boolean(params.durum) ||
+    Boolean(params.status) ||
     Boolean(params.targetOrgUnitId);
+  const recordInfo =
+    params.record === "added"
+      ? t("activities.activityRecorded")
+      : params.record === "cancelled"
+        ? t("activities.activityCancelled")
+        : params.record === "revised"
+          ? t("activities.activityRevised")
+          : t("activities.operationCompleted");
 
   return (
-    <AppShell
-      user={await toShellUser(user, subordinates)}
-    >
-      <Page isaret="faaliyetlerim">
+    <AppShell user={await toShellUser(user, subordinates)}>
+      <Page marker="my-activities">
         <PageHeader
-          title="Faaliyetlerim"
-          description="Yazdığınız kayıtlar. Bir kaydı, düzeltme süresi dolmadan ve onu henüz kimse okumadan düzeltebilirsiniz."
-          breadcrumbs={[{ label: "Ana ekran", href: "/" }, { label: "Faaliyetlerim" }]}
+          title={t("screens.activitiesPage.pageTitle")}
+          description={t("screens.activitiesPage.pageDescription")}
+          breadcrumbs={[
+            { label: t("screens.activitiesPage.dashboard"), href: "/" },
+            { label: t("screens.activitiesPage.pageTitle") },
+          ]}
           action={
             <ButtonLink href="/activities/new" variant="primary">
-              Yeni faaliyet
+              {t("screens.activitiesPage.newActivity")}
             </ButtonLink>
           }
         />
 
-        {kayit ? (
-          <div id="faaliyet-bilgi" role="status">
-            <Alert tone="success">{BILGI[kayit] ?? "İşlem tamamlandı."}</Alert>
+        {params.record ? (
+          <div id="activity-info" role="status">
+            <Alert tone="success">{recordInfo}</Alert>
           </div>
         ) : null}
 
         <Card>
           <CardHeader
-            title="Kayıt defteri"
-            description="Yazdığınız faaliyetler, yeniden eskiye."
+            title={t("screens.activitiesPage.recordLog")}
+            description={t("screens.activitiesPage.recordLogDescription")}
             action={
               <span className="mono text-[length:var(--text-sm)] text-muted">
-                {toplam} kayıt
+                {t("screens.activitiesPage.recordCount", { count: total })}
               </span>
             }
           />
@@ -161,65 +151,65 @@ export default async function ActivitiesPage({
           <FilterBar
             action="/activities"
             clearHref="/activities"
-            filtered={suzgecliMi}
-            pageSize={SAYFA_BOYU}
+            filtered={isFiltered}
+            pageSize={pageSize}
             fields={[
               {
                 name: "period",
-                label: "Dönem",
+                label: t("screens.activitiesPage.period"),
                 value: params.period ?? "all",
                 width: "w-32",
-                options: [{ value: "all", label: "Tümü" }, ...DONEM_SECENEKLERI.filter((o) => o.value !== "all")],
+                options: [
+                  { value: "all", label: t("screens.activitiesPage.all") },
+                  { value: "today", label: t("dashboard.periodToday") },
+                  { value: "week", label: t("dashboard.periodWeek") },
+                ],
               },
               {
-                name: "durum",
-                label: "Durum",
-                value: params.durum ?? "",
-                width: "w-44",
+                name: "status",
+                label: t("screens.activitiesPage.status"),
+                value: params.status ?? "",
+                width: "w-52",
                 options: [
-                  { value: "", label: "Hepsi" },
-                  { value: "onay", label: "Onay bekleyen" },
-                  { value: "duzeltme", label: "Düzeltme istenen" },
-                  { value: "reddedilen", label: "Uygun bulunmayan" },
-                  { value: "iptal", label: "İptal edilen" },
-                  { value: "soru", label: "Cevap bekleyen faaliyet" },
+                  { value: "", label: t("screens.activitiesPage.everyone") },
+                  { value: "approval", label: t("screens.activitiesPage.awaitingApproval") },
+                  { value: "changesRequested", label: t("screens.activitiesPage.changesRequested") },
+                  { value: "rejected", label: t("screens.activitiesPage.rejected") },
+                  { value: "cancelled", label: t("screens.activitiesPage.cancelled") },
+                  { value: "questions", label: t("screens.activitiesPage.awaitingAnswers") },
                 ],
               },
               {
                 name: "targetOrgUnitId",
-                label: "İlgili departman",
+                label: t("screens.activitiesPage.relatedDepartment"),
                 value: params.targetOrgUnitId ?? "",
                 width: "w-52",
                 options: [
-                  { value: "", label: "Hepsi" },
-                  ...departments.map((u) => ({ value: u.id, label: u.name })),
+                  { value: "", label: t("screens.activitiesPage.everyone") },
+                  ...departments.map((unit) => ({ value: unit.id, label: unit.name })),
                 ],
               },
             ]}
           />
 
           {activities.length === 0 ? (
-            // Boşluğun sebebi ayrılır: hiç kayıt yazmamış olmakla, süzgecin
-            // listeyi boşaltması aynı şey değil. İlkinde eylem çağrısı
-            // doğru, ikincisinde kullanıcıyı yeni kayıt yazmaya davet etmek
-            // yanlış yönlendirme olurdu (Görev 11.3).
-            suzgecliMi ? (
+            isFiltered ? (
               <EmptyState
-                title="Süzgece uyan kayıt yok."
-                description="Süzgeci temizleyerek bütün kayıtlarınızı görebilirsiniz."
+                title={t("screens.activitiesPage.noFilterMatch")}
+                description={t("screens.activitiesPage.clearFilterDescription")}
                 action={
                   <ButtonLink href="/activities" variant="secondary" size="sm">
-                    Süzgeci temizle
+                    {t("screens.activitiesPage.clearFilter")}
                   </ButtonLink>
                 }
               />
             ) : (
               <EmptyState
-                title="Henüz faaliyet yazmadınız."
-                description="Günlük işinizi kısa bir kayıtla bırakın; üst kademeler ne yapıldığını buradan görür."
+                title={t("screens.activitiesPage.noActivities")}
+                description={t("screens.activitiesPage.noActivitiesDescription")}
                 action={
                   <ButtonLink href="/activities/new" variant="primary" size="sm">
-                    İlk faaliyeti yaz
+                    {t("screens.activitiesPage.writeFirst")}
                   </ButtonLink>
                 }
               />
@@ -227,13 +217,13 @@ export default async function ActivitiesPage({
           ) : (
             <RecordList>
               {activities.map((activity) => {
-                const iptal = activity.approvalStatus === "CANCELLED";
+                const cancelled = activity.approvalStatus === "CANCELLED";
 
                 return (
-                  // Uçtan uca testler görsele değil bu işarete bakar.
                   <RecordItem
                     key={activity.id}
-                    data-test="faaliyet-satiri"
+                    data-test="activity-record"
+                    data-unit={activity.authorOrgUnitName}
                     className="transition-colors duration-(--duration-fast) hover:bg-surface-hover sm:px-5"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
@@ -243,12 +233,12 @@ export default async function ActivitiesPage({
                             #{activity.activityNo}
                           </span>
                           <time className="mono shrink-0 text-[length:var(--text-xs)] text-faint">
-                            {formatDay(activity.activityDate)}
+                            {formatDay(activity.activityDate, locale)}
                           </time>
                           <Link
                             href={`/activities/${activity.id}`}
                             className={
-                              iptal
+                              cancelled
                                 ? "min-w-0 text-[length:var(--text-base)] font-medium text-faint line-through hover:underline"
                                 : "min-w-0 text-[length:var(--text-base)] font-medium text-ink hover:text-primary hover:underline"
                             }
@@ -261,7 +251,9 @@ export default async function ActivitiesPage({
                           <ApprovalBadge status={activity.approvalStatus} />
                           {activity.currentRevisionNo > 1 ? (
                             <span className="mono">
-                              {activity.currentRevisionNo}. revizyon
+                              {t("screens.activitiesPage.revisionCount", {
+                                count: activity.currentRevisionNo,
+                              })}
                             </span>
                           ) : null}
                           {activity.targetDepartmentNames.length > 0 ? (
@@ -269,31 +261,38 @@ export default async function ActivitiesPage({
                               {activity.targetDepartmentNames.join(" · ")}
                             </span>
                           ) : null}
-                          {/* Kaydın yazıldığı an: faaliyetin gününden ayrıdır.
-                              Geçmişe dönük yazılmış kayıtta ikisi ayrışır. */}
                           <time
                             dateTime={activity.createdAt.toISOString()}
                             className="mono text-faint"
                           >
-                            {describeActivityDates({
-                              ...activity,
-                              revisionNo: activity.currentRevisionNo,
-                            }).created}
+                            {describeActivityDates(
+                              {
+                                ...activity,
+                                revisionNo: activity.currentRevisionNo,
+                              },
+                              locale,
+                              {
+                                saved: t("common.saved"),
+                                lastEdited: t("activities.lastEdited"),
+                              },
+                            ).created}
                           </time>
                         </div>
 
-                        {iptal && activity.cancellationReason ? (
+                        {cancelled && activity.cancellationReason ? (
                           <p className="prose-measure mt-2 border-s-[3px] border-cancelled-line ps-3 text-[length:var(--text-sm)] text-muted">
-                            <span className="font-medium text-ink">İptal gerekçesi:</span>{" "}
+                            <span className="font-medium text-ink">
+                              {t("screens.activitiesPage.cancellationReason")}
+                            </span>{" "}
                             {activity.cancellationReason}
                           </p>
                         ) : null}
                       </div>
 
-                      {iptal || !activity.canEdit ? null : (
+                      {cancelled || !activity.canEdit ? null : (
                         <div className="flex shrink-0 flex-wrap gap-2">
                           <ButtonLink href={`/activities/${activity.id}/edit`} size="sm">
-                            Düzelt
+                            {t("screens.activitiesPage.revise")}
                           </ButtonLink>
                           {activity.approvalStatus === "APPROVED" ? (
                             <ButtonLink
@@ -301,7 +300,7 @@ export default async function ActivitiesPage({
                               variant="danger"
                               size="sm"
                             >
-                              İptal et
+                              {t("screens.activitiesPage.cancel")}
                             </ButtonLink>
                           ) : null}
                         </div>
@@ -314,16 +313,18 @@ export default async function ActivitiesPage({
           )}
 
           <Pagination
-            page={gecerliSayfa}
-            pageCount={sayfaSayisi}
-            hrefFor={(hedef) =>
-              hedef === 1 ? adres() : adres({ sayfa: String(hedef) })
+            page={currentPage}
+            pageCount={pageCount}
+            hrefFor={(targetPage) =>
+              targetPage === 1 ? address() : address({ page: String(targetPage) })
             }
             totalLabel={
-              toplam > SAYFA_BOYU
-                ? `${(gecerliSayfa - 1) * SAYFA_BOYU + 1}–${
-                    (gecerliSayfa - 1) * SAYFA_BOYU + activities.length
-                  } / ${toplam} kayıt`
+              total > pageSize
+                ? t("screens.activitiesPage.totalRange", {
+                    start: (currentPage - 1) * pageSize + 1,
+                    end: (currentPage - 1) * pageSize + activities.length,
+                    total,
+                  })
                 : undefined
             }
           />
