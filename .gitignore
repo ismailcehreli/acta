@@ -1,9 +1,9 @@
-# Bağımlılıklar
+# Dependencies
 node_modules/
 .pnp/
 .pnp.js
 
-# Derleme çıktıları
+# Build output
 dist/
 build/
 .next/
@@ -11,36 +11,36 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 
-# Test çıktıları
+# Test output
 coverage/
 test-results/
 playwright-report/
 
-# Ortam değişkenleri ve sırlar
+# Environment variables and secrets
 .env
 .env.*
 !.env.example
 /certificate/
 
-# Şirket içi veri — depoya girmez
+# Company data — never commit
 *.xlsx
 *.xls
 *.docx
 /veri/
 /uploads/
 
-# Editör ve işletim sistemi
+# Editor and operating system
 .DS_Store
 .vscode/
 .idea/
 *.swp
 
-# Loglar
+# Logs
 *.log
 npm-debug.log*
 storage/
 
-# Yedekler depoya girmez (şifreli olsalar da).
+# Backups are never committed, even when encrypted.
 /yedek
 /storage
 /.faaliyet-backup.lock

@@ -1,22 +1,22 @@
 name: acta
 
-# Kurulum bileşenleri (§17.2). Ters vekil sunucu ve sertifika, kurulum
-# kılavuzuyla birlikte Görev 6.2'de eklenecek.
+# Infrastructure components (§17.2). The reverse proxy and certificates are
+# managed outside this stack.
 #
-# Dış yüzey (§15.5): hiçbir servis makinenin tüm arayüzlerine açılmaz.
-# Veritabanı portları ve uygulama portu yalnızca 127.0.0.1'e bağlanır; sistem
-# dışarıya ters vekil üzerinden, yalnız HTTPS ile açılacaktır. Parolaların
-# varsayılanı yoktur: `.env` doldurulmadan yığın ayağa kalkmaz.
-# (Denetim 17.08.2026, bulgu 2.)
+# Public exposure (§15.5): no service binds to every host interface.
+# Database and application ports bind only to 127.0.0.1; public access must go
+# through a reverse proxy over HTTPS. Passwords have no defaults, so the stack
+# cannot start until `.env` is populated.
+# (Audit 2026-08-17, finding 2.)
 
 services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER tanımlanmalı}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD tanımlanmalı}
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB tanımlanmalı}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
       TZ: Europe/Istanbul
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -28,9 +28,10 @@ services:
       timeout: 5s
       retries: 12
 
-  # Testlerin karşı koştuğu ayrı sunucu; iki veritabanı barındırır
-  # (faaliyet_test → Vitest, faaliyet_e2e → Playwright). Verisi tmpfs'te durur,
-  # kapanınca silinir. Üretimde çalışmaması için ayrı profildedir:
+  # Separate server used by the tests; it hosts two databases
+  # (faaliyet_test → Vitest, faaliyet_e2e → Playwright). Its data lives in tmpfs
+  # and is removed on shutdown. It uses a separate profile so it cannot run in
+  # production:
   #   docker compose --profile test up -d test-postgres
   test-postgres:
     image: postgres:17-alpine
@@ -57,12 +58,12 @@ services:
       timeout: 5s
       retries: 12
 
-  # Veritabanı geçişleri uygulama açılışında değil, ayrı ve tek seferlik bir
-  # adımda koşar. Gerekçe: açılışta koşan geçiş, aynı anda açılan iki kopyada
-  # yarışa girer, uzun süren geçiş sağlık kontrolünü düşürür ve başarısız geçiş
-  # yeniden başlatma döngüsüne dönüşür. Burada app ve worker bu adımın başarıyla
-  # bitmesini bekler; geçiş başarısızsa uygulama hiç açılmaz.
-  # Elle çalıştırmak için: docker compose run --rm migrate
+  # Database migrations run in a separate one-shot step, not during application
+  # startup. Startup migrations race when two copies launch at once, can fail
+  # health checks when they take a long time, and can create restart loops after
+  # a failure. The app and worker wait for this step to succeed; otherwise the
+  # application never starts.
+  # Run manually with: docker compose run --rm migrate
   migrate:
     build: .
     image: acta:local
@@ -80,31 +81,33 @@ services:
     build: .
     image: acta:local
     restart: unless-stopped
-    # Süreç doğrudan başlatılır; araya paket yöneticisi girerse kapanma sinyali
-    # (SIGTERM) uygulamaya ulaşmaz ve konteyner zorla öldürülür.
+    # Start the process directly; inserting a package manager would prevent the
+    # shutdown signal (SIGTERM) from reaching the application and force-kill the
+    # container.
     command: ["node_modules/.bin/next", "start"]
     init: true
     environment:
       NODE_ENV: production
       TZ: Europe/Istanbul
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      # Okuma bileti (§10.2) bu anahtarla imzalanır; varsayılanı yoktur.
-      APP_SECRET: ${APP_SECRET:?APP_SECRET tanımlanmalı}
+      # Read tickets (§10.2) are signed with this secret; it has no default.
+      APP_SECRET: ${APP_SECRET:?APP_SECRET must be set}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       ATTACHMENT_STORAGE_DIR: /veri/ekler
-      # Profil resimleri de diskte durur ve **kalıcı olmak zorunda**: değişken
-      # tanımlı değilken konteynerin içine (`/app/storage/avatars`) yazılıyor,
-      # her `docker compose up --build` sonrası bütün resimler kayboluyordu.
-      # Veritabanındaki `avatarExtension` kalır, dosya gider: her profil resmi
-      # 404 (Denetim 23.08.2026, bulgu 5).
+      # Profile pictures also live on disk and **must be persistent**. Before
+      # this variable was configured, they were written inside the container at
+      # `/app/storage/avatars`, so every `docker compose up --build` removed
+      # them. The database retained `avatarExtension`, but the files disappeared
+      # and every profile returned 404 (Audit 2026-08-23, finding 5).
       AVATAR_STORAGE_DIR: /veri/avatarlar
     volumes:
-      # Ekler kalıcı birimde durur. Konteyner içinde kalsalardı her güncellemede
-      # silinirlerdi — veritabanındaki kayıt kalır, dosya kaybolurdu (§15.4).
+      # Attachments live on a persistent volume. If they stayed in the container,
+      # every update would remove the files while leaving database records
+      # behind (§15.4).
       - attachment-data:/veri/ekler
-      # Avatarlar **ayrı birimde**: ek dosyalarıyla aynı birimi paylaşsalardı
-      # yedek/geri yükleme ikisini ayıramaz, birini geri yüklemek diğerini de
-      # geri alırdı.
+      # Avatars use a **separate volume**. Sharing it with attachments would make
+      # backup/restore unable to separate them; restoring one would restore the
+      # other as well.
       - avatar-data:/veri/avatarlar
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"
@@ -124,8 +127,8 @@ services:
       NODE_ENV: production
       TZ: Europe/Istanbul
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      # İşleyici SMTP parolasını çözmek için aynı anahtara ihtiyaç duyar.
-      APP_SECRET: ${APP_SECRET:?APP_SECRET tanımlanmalı}
+      # The worker needs the same secret to decrypt the SMTP password.
+      APP_SECRET: ${APP_SECRET:?APP_SECRET must be set}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       ATTACHMENT_STORAGE_DIR: /veri/ekler
     volumes:

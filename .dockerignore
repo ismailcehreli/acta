@@ -5,13 +5,13 @@ node_modules
 .env.*
 !.env.example
 docs
-# Tasarım, çalışma ve araç notları üretim imajına alınmaz.
+# Design, work, and tool notes are excluded from the production image.
 DESIGN-*/
 *.md
 AGENTS.md
 CLAUDE.md
-# Test kodu üretim imajına girmez: gereksiz yüzey ve gereksiz boyut.
-# Tip kontrolü `pnpm typecheck` ile ayrıca yapılır.
+# Test code is excluded from the production image to reduce its surface and
+# size. Type checking runs separately with `pnpm typecheck`.
 e2e
 tests
 vitest.config.ts
